@@ -294,23 +294,19 @@ export function getProceduralTextureAtlas(): ProceduralAtlasData {
     }
   }
 
-  // 11: INTERIOR_WALL (Classic Nordic damask wallpaper + raised panel wainscoting)
+  // 11: INTERIOR_WALL (Crisp 1:1 Nordic damask wallpaper with delicate vertical stripe & frieze trim;
+  //     wainscoting and dado rails are built as dedicated 3D geometry so upper wall tiers never stretch or repeat mid-wall)
   for (let y = 0; y < TILE_RES; y++) {
     for (let x = 0; x < TILE_RES; x++) {
-      const stripe = Math.floor(x / 32) % 2 === 0 ? 248 : 241;
-      let v = stripe;
-      if (y >= 176 && y < 186) {
-        // Dado chair-rail molding
-        v = y < 180 ? 255 : 196;
-      } else if (y >= 186) {
-        const px = x % 64;
-        const py = y - 186;
-        const inFrame = px >= 8 && px <= 56 && py >= 8 && py <= 58;
-        const onFrameEdge =
-          (px === 8 || px === 56 || py === 8 || py === 58) && inFrame;
-        v = onFrameEdge ? 192 : inFrame ? 244 : 230;
+      const stripe = Math.floor(x / 32) % 2 === 0 ? 248 : 239;
+      const motif =
+        Math.sin((x / 32) * Math.PI * 2) * Math.cos((y / 48) * Math.PI * 2) * 5;
+      let v = stripe + motif;
+      if (y < 14 || y >= TILE_RES - 14) {
+        // Subtle painted frieze band at top and bottom of wallpaper panel
+        v = y < 4 || y >= TILE_RES - 4 ? 204 : 254;
       }
-      setTilePixel(data, TexId.INTERIOR_WALL, x, y, v, v, v, 255);
+      setTilePixel(data, TexId.INTERIOR_WALL, x, y, v, v - 1, v - 3, 255);
     }
   }
 

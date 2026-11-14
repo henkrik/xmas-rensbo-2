@@ -22,7 +22,7 @@ export type Mat4 = Float32Array;
 export const MAIN_HOUSE_WALL_HEIGHT = 34;
 export const MAIN_HOUSE_ROOF_PEAK_ADD = 16;
 export const MAIN_HOUSE_ROOF_WALK_HEIGHT = 36;
-export const INDOOR_WALL_HEIGHT = 22;
+export const INDOOR_WALL_HEIGHT = 2 * TILE_SIZE; // 32 (2 tiles high)
 
 export function vec3(x: number, y: number, z: number): Vec3 {
   return { x, y, z };
@@ -460,9 +460,14 @@ export function computeUnobstructedCameraDistance(
       furthestPoint.x - originX,
       furthestPoint.y - originZ
     );
+    // Keep a small wall clearance buffer when an obstacle was hit so the camera near-plane never clips the wall
+    const paddedHorizontalDist =
+      furthestValidIndex < CAMERA_LOS_POINTS - 1
+        ? Math.max(0, horizontalDist - 4.0)
+        : horizontalDist;
     unobstructedDistance = Math.min(
       maxDistance,
-      Math.max(0, horizontalDist / cosPitch)
+      Math.max(0, paddedHorizontalDist / cosPitch)
     );
   }
 
@@ -598,12 +603,14 @@ export function updateCamera3D(
   let eyeY = cam.target.y + backY * effectiveDistance;
   let eyeZ = cam.target.z + backZ * effectiveDistance;
 
-  // Ensure camera stays above the sloped outdoor ground
+  // Ensure camera stays above the sloped outdoor ground, or underneath the indoor ceiling
   if (isOutdoor) {
     const groundAtEye = getTerrainHeight(eyeX, eyeZ, 'level-outside');
     if (eyeY < groundAtEye + 8) {
       eyeY = groundAtEye + 8;
     }
+  } else {
+    eyeY = Math.min(eyeY, INDOOR_WALL_HEIGHT - 3.2);
   }
 
   cam.eye = { x: eyeX, y: eyeY, z: eyeZ };

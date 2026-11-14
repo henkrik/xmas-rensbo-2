@@ -34,6 +34,7 @@ import {
   getPlayerElevation,
   getTerrainHeight,
   getTerrainNormal,
+  INDOOR_WALL_HEIGHT,
   projectWorldToScreen,
   updateCamera3D,
 } from '../src/rendering/math3d';
@@ -2480,5 +2481,37 @@ Tanja -> Alex
     input.cameraYaw = -Math.PI / 2;
     updateCamera3D(cam, state, input, 0.016, 256 / 224);
     expect(cam.distance).toBeCloseTo(52, 0);
+  });
+
+  it('builds 2-tile-high indoor walls with ceilings and keeps indoor camera under the ceiling', () => {
+    expect(INDOOR_WALL_HEIGHT).toBe(2 * TILE_SIZE);
+
+    for (const levelId of [
+      'level-basement',
+      'level-upstairs',
+      'level-people',
+    ] as const) {
+      const state = createGameState({
+        initialLevelId: levelId,
+        showIntroDialogue: false,
+      });
+      const mesh = getStaticLevelMesh(levelId, state.map);
+      expect(mesh.vertexCount).toBeGreaterThan(0);
+
+      let maxY = -Infinity;
+      for (let i = 0; i < mesh.vertexCount; i++) {
+        const y = mesh.vertices[i * FLOATS_PER_VERTEX + 1];
+        if (y > maxY) maxY = y;
+      }
+      expect(maxY).toBeGreaterThanOrEqual(INDOOR_WALL_HEIGHT);
+
+      if (levelId !== 'level-people') {
+        const cam = createCamera3D();
+        const input = createEmptyInput();
+        input.cameraPitch = 1.1;
+        updateCamera3D(cam, state, input, 0.016, 256 / 224);
+        expect(cam.eye.y).toBeLessThan(INDOOR_WALL_HEIGHT);
+      }
+    }
   });
 });

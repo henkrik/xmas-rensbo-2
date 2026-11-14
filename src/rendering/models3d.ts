@@ -1075,15 +1075,268 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
 }
 
 // ============================================================================
-// Helper for Indoor Levels: Floor Tiles & Cutaway 3D Architectural Walls
+// Helper for Indoor Levels: 2-Tile-High Architectural Walls, Doorways, Windows & Ceilings
 // ============================================================================
+
+type WallOverrideKind =
+  | 'door-left'
+  | 'door-right'
+  | 'window-south'
+  | 'window-north'
+  | 'window-north-transparent';
+
+interface IndoorWallOptions {
+  wallHeight?: number;
+  wallOverrides?: Map<string, WallOverrideKind>;
+  /** Floor coordinates that act as doorway openings and should have a 3D frame + upper header built above them. */
+  openableDoorCoords?: ReadonlyArray<readonly [number, number]>;
+}
+
+function tileKey(col: number, row: number): string {
+  return `${col},${row}`;
+}
+
+function addStandardWallTile3D(
+  mb: MeshBuilder,
+  cx: number,
+  cz: number,
+  ts: number,
+  wallHeight: number,
+  trimAdjacentWidth = 0
+): void {
+  const wainscotH = 10.6;
+  const trimW = Math.max(4, ts + 0.3 - trimAdjacentWidth);
+
+  // 1. Dark walnut baseboard plinth (y = 0..1.8)
+  mb.addBox(cx, 0, cz, trimW, 1.8, ts + 0.35, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
+
+  // 2. Cream raised-panel wainscoting tier (y = 1.8..10.6)
+  mb.addBox(cx, 1.8, cz, ts, wainscotH - 1.8, ts, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.45);
+  // Subtle recessed panel reliefs on North & South faces
+  mb.addBox(cx, 3.0, cz, ts * 0.72, 6.2, ts + 0.28, rgb(242, 236, 224), TexId.SOLID, 0.25);
+  mb.addBox(cx, 3.0, cz, ts + 0.28, 6.2, ts * 0.72, rgb(242, 236, 224), TexId.SOLID, 0.25);
+
+  // 3. Projecting oak dado chair-rail molding (y = 10.6..11.8)
+  mb.addBox(cx, 10.6, cz, trimW, 1.2, ts + 0.45, rgb(146, 98, 56), TexId.WOOD_GRAIN, 0.35);
+
+  // 4. Two stacked 1:1 unstretched Nordic wallpaper tiers (y = 11.8..21.0 & 21.0..30.2)
+  const midStart = 11.8;
+  const midTop = wallHeight - 1.8;
+  const midHeight = Math.max(4, midTop - midStart);
+  const lowerTierH = midHeight * 0.5;
+  const upperTierH = midHeight - lowerTierH;
+  mb.addBox(cx, midStart, cz, ts, lowerTierH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
+  mb.addBox(cx, midStart + lowerTierH, cz, ts, upperTierH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
+
+  // 5. Routed walnut ceiling crown molding (y = 30.2..wallHeight)
+  mb.addBeveledBox(cx, midTop, cz, trimW + 0.1, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+}
+
+function addWindowWallTile3D(
+  mb: MeshBuilder,
+  cx: number,
+  cz: number,
+  ts: number,
+  wallHeight: number,
+  kind: 'window-south' | 'window-north' | 'window-north-transparent'
+): void {
+  const sillY = 7.4;
+  const headerY = 25.4;
+
+  // Lower wall below the window (baseboard + short wainscoting + oak window sill)
+  mb.addBox(cx, 0, cz, ts + 0.25, 1.6, ts + 0.3, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
+  mb.addBox(cx, 1.6, cz, ts, sillY - 1.6, ts, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.45);
+  mb.addBeveledBox(cx, sillY, cz, ts + 0.2, 1.2, ts + 1.4, 0.3, rgb(138, 92, 52), TexId.WOOD_GRAIN, 0.45);
+
+  // Upper wall lintel above the window + crown molding
+  mb.addBox(cx, headerY, cz, ts, wallHeight - headerY - 1.8, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
+  mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.25, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+
+  // Side wooden window mullions & top transom bar
+  const openH = headerY - (sillY + 1.2);
+  mb.addBox(cx - ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.4);
+  mb.addBox(cx + ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.4);
+  mb.addBox(cx, sillY + 1.2 + openH * 0.55, cz, ts - 1.6, 1.1, 3.6, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.3);
+
+  if (kind !== 'window-north-transparent') {
+    // Warm frosted casement window pane so interiors stay cozy at night
+    mb.addBox(cx, sillY + 1.2, cz, ts - 2.6, openH - 0.2, 2.2, rgb(252, 232, 158), TexId.WINDOW_GLOW, 0.35);
+  }
+}
+
+function addDoorWallLintelTile3D(
+  mb: MeshBuilder,
+  col: number,
+  row: number,
+  ts: number,
+  wallHeight: number,
+  side: 'door-left' | 'door-right'
+): void {
+  const cx = col * ts + ts * 0.5;
+  const cz = row * ts + ts * 0.5;
+  const doorHeight = 24.4;
+
+  // Floor threshold beneath the door leaf so there is never a black gap when close to the doorway
+  mb.addQuad(
+    [col * ts, 0, (row + 1) * ts],
+    [(col + 1) * ts, 0, (row + 1) * ts],
+    [(col + 1) * ts, 0, row * ts],
+    [col * ts, 0, row * ts],
+    [0, 1, 0],
+    rgb(142, 98, 58),
+    TexId.WOOD_GRAIN,
+    0
+  );
+
+  // Outer door casing jamb + carved oak architrave header bar
+  const jambX = side === 'door-left' ? col * ts + 1.1 : (col + 1) * ts - 1.1;
+  mb.addBox(jambX, 0, cz, 2.2, doorHeight, ts * 0.85, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+  mb.addBeveledBox(cx, doorHeight, cz, ts, 1.4, ts + 0.5, 0.25, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+
+  // Upper wall lintel (y = doorHeight + 1.4 .. wallHeight - 1.8) + crown molding
+  const lintelY = doorHeight + 1.4;
+  const lintelH = Math.max(1.5, wallHeight - 1.8 - lintelY);
+  mb.addBox(cx, lintelY, cz, ts, lintelH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
+  mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.2, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+}
+
+/**
+ * Builds the 3D recessed jambs, molded lintel architrave, and upper wall header
+ * above an openable floor doorway tile (making room in the wall for the 24-unit-tall door).
+ */
+function addDoorwayFrameAndHeader3D(
+  mb: MeshBuilder,
+  col: number,
+  row: number,
+  ts: number,
+  wallHeight = INDOOR_WALL_HEIGHT
+): void {
+  const cx = col * ts + ts * 0.5;
+  const cz = row * ts + ts * 0.5;
+  const doorHeight = 24.4;
+
+  // Left & right carved oak jamb posts flanking the 13.6-wide doorway opening
+  mb.addBox(col * ts + 0.9, 0, cz, 1.8, doorHeight, ts * 0.92, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+  mb.addBox((col + 1) * ts - 0.9, 0, cz, 1.8, doorHeight, ts * 0.92, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+
+  // Header architrave beam above the door leaf
+  mb.addBeveledBox(cx, doorHeight, cz, ts, 1.4, ts + 0.5, 0.25, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+
+  // Upper wallpapered wall header connecting cleanly to adjacent 2-tile-high walls
+  const lintelY = doorHeight + 1.4;
+  const lintelH = Math.max(1.5, wallHeight - 1.8 - lintelY);
+  mb.addBox(cx, lintelY, cz, ts, lintelH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
+  mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.2, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+}
+
+function addLockedDoubleDoor3D(mb: MeshBuilder, cx: number, cz: number, ts: number): void {
+  const leafW = ts - 2.6;
+  const leafH = 24.0;
+  for (const offsetX of [-ts * 0.5 + 0.9, ts * 0.5 - 0.9]) {
+    const lx = cx + offsetX;
+    // Tall paneled door slab recessed cleanly inside the 2-tile doorway
+    mb.addBeveledBox(lx, 0, cz, leafW, leafH, 3.8, 0.4, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
+    // Lower and upper raised door panels on both faces
+    mb.addBox(lx, 2.4, cz, leafW * 0.68, 7.2, 4.4, rgb(146, 86, 46), TexId.WOOD_GRAIN, 0.3);
+    mb.addBox(lx, 12.2, cz, leafW * 0.68, 9.2, 4.4, rgb(146, 86, 46), TexId.WOOD_GRAIN, 0.3);
+  }
+  // Brass double doorknobs on both sides
+  for (const dz of [-2.4, 2.4]) {
+    mb.addSphere(cx - 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
+    mb.addSphere(cx + 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
+  }
+}
+
+function addCeilingChandelier3D(mb: MeshBuilder, cx: number, cz: number, ceilingY = INDOOR_WALL_HEIGHT): void {
+  // Brass ceiling canopy & chain rod
+  mb.addCylinder(cx, ceilingY - 1.0, cz, 2.2, 1.0, 1.0, 10, rgb(212, 174, 74), TexId.SOLID, 0.35);
+  mb.addCylinder(cx, ceilingY - 4.2, cz, 0.45, 0.45, 3.4, 8, rgb(196, 158, 66), TexId.SOLID, 0.3);
+  // Warm radial ring & 4 glowing frosted globes
+  mb.addTorus(cx, ceilingY - 4.3, cz, 3.6, 0.45, 12, 6, 'y', rgb(224, 182, 74), TexId.SOLID, 0.35);
+  for (let i = 0; i < 4; i++) {
+    const ang = (i * Math.PI) / 2;
+    const gx = cx + Math.cos(ang) * 3.6;
+    const gz = cz + Math.sin(ang) * 3.6;
+    mb.addSphere(gx, ceilingY - 4.9, gz, 1.1, 1.25, 1.1, 6, 8, rgb(255, 240, 168), TexId.SOLID, 0.25);
+  }
+}
+
+function addIndoorCeiling3D(
+  mb: MeshBuilder,
+  map: TileMap,
+  options?: {
+    skipRect?: { minCol: number; maxCol: number; minRow: number; maxRow: number };
+    chandeliers?: ReadonlyArray<readonly [number, number]>;
+    ceilingY?: number;
+  }
+): void {
+  const ts = map.tileSize;
+  const ceilingY = options?.ceilingY ?? INDOOR_WALL_HEIGHT;
+  const skip = options?.skipRect;
+
+  for (let r = 0; r < map.rows; r++) {
+    for (let c = 0; c < map.cols; c++) {
+      const tile = map.tiles[r][c];
+      if (tile === TileType.VoidBlack || tile === TileType.InteriorWall) continue;
+      if (skip && c >= skip.minCol && c <= skip.maxCol && r >= skip.minRow && r <= skip.maxRow) {
+        continue;
+      }
+
+      // Downward-facing warm coffered plaster ceiling quad at y = ceilingY
+      mb.addQuad(
+        [c * ts, ceilingY, r * ts],
+        [(c + 1) * ts, ceilingY, r * ts],
+        [(c + 1) * ts, ceilingY, (r + 1) * ts],
+        [c * ts, ceilingY, (r + 1) * ts],
+        [0, -1, 0],
+        rgb(240, 232, 218),
+        TexId.SOLID,
+        0
+      );
+
+      // Exposed oak timber rafters every 3 columns for rich Wind Waker HD ceiling depth
+      if (c % 3 === 0) {
+        const bx = c * ts + ts * 0.5;
+        const bz = r * ts + ts * 0.5;
+        mb.addBox(bx, ceilingY - 1.2, bz, 2.2, 1.2, ts, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.35);
+      }
+    }
+  }
+
+  // Sculpted stairwell ceiling trim around floor/ceiling openings
+  if (skip) {
+    const x0 = skip.minCol * ts;
+    const x1 = (skip.maxCol + 1) * ts;
+    const z0 = skip.minRow * ts;
+    const z1 = (skip.maxRow + 1) * ts;
+    const w = x1 - x0;
+    const d = z1 - z0;
+    mb.addBox((x0 + x1) * 0.5, ceilingY - 1.6, z0 + 0.6, w, 1.6, 1.2, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+    mb.addBox((x0 + x1) * 0.5, ceilingY - 1.6, z1 - 0.6, w, 1.6, 1.2, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+    mb.addBox(x0 + 0.6, ceilingY - 1.6, (z0 + z1) * 0.5, 1.2, 1.6, d, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+    mb.addBox(x1 - 0.6, ceilingY - 1.6, (z0 + z1) * 0.5, 1.2, 1.6, d, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+  }
+
+  for (const [col, row] of options?.chandeliers ?? []) {
+    addCeilingChandelier3D(mb, col * ts, row * ts, ceilingY);
+  }
+}
 
 function addIndoorTilesAndWalls(
   mb: MeshBuilder,
   map: TileMap,
-  wallHeight = INDOOR_WALL_HEIGHT
+  options?: IndoorWallOptions
 ): void {
   const ts = map.tileSize;
+  const wallHeight = options?.wallHeight ?? INDOOR_WALL_HEIGHT;
+  const overrides = options?.wallOverrides;
+
+  const openableSet = new Set<string>();
+  for (const [dc, dr] of options?.openableDoorCoords ?? []) {
+    openableSet.add(tileKey(dc, dr));
+    addDoorwayFrameAndHeader3D(mb, dc, dr, ts, wallHeight);
+  }
+
   for (let r = 0; r < map.rows; r++) {
     for (let c = 0; c < map.cols; c++) {
       const tile = map.tiles[r][c];
@@ -1093,14 +1346,22 @@ function addIndoorTilesAndWalls(
       const cz = r * ts + ts * 0.5;
 
       if (tile === TileType.InteriorWall) {
-        const southTile = r + 1 < map.rows ? map.tiles[r + 1][c] : TileType.VoidBlack;
-        const h = southTile === TileType.VoidBlack ? 9.2 : wallHeight;
-        // Baseboard plinth
-        mb.addBox(cx, 0, cz, ts + 0.3, 1.6, ts + 0.3, rgb(116, 76, 46), TexId.WOOD_GRAIN, 0.4);
-        // Main wallpapered & wainscoted wall
-        mb.addBox(cx, 1.4, cz, ts, h - 1.4, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.65);
-        // Routed walnut cutaway top cap
-        mb.addBeveledBox(cx, h, cz, ts + 0.5, 1.4, ts + 0.5, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+        const override = overrides?.get(tileKey(c, r));
+        if (override === 'door-left' || override === 'door-right') {
+          addDoorWallLintelTile3D(mb, c, r, ts, wallHeight, override);
+        } else if (
+          override === 'window-south' ||
+          override === 'window-north' ||
+          override === 'window-north-transparent'
+        ) {
+          addWindowWallTile3D(mb, cx, cz, ts, wallHeight, override);
+        } else {
+          // Slight trim pullback if an openable door sits directly to the East or West so moldings don't overhang the door leaf
+          const leftDoor = openableSet.has(tileKey(c - 1, r)) || overrides?.has(tileKey(c - 1, r));
+          const rightDoor = openableSet.has(tileKey(c + 1, r)) || overrides?.has(tileKey(c + 1, r));
+          const trimPullback = leftDoor || rightDoor ? 0.5 : 0;
+          addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback);
+        }
       } else {
         let floorColor = rgb(198, 146, 92);
         let floorTex: number = TexId.WOOD_FLOOR;
@@ -1170,32 +1431,89 @@ function addTuftedCouch3D(
 export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
   const mb = new MeshBuilder();
   const ts = map.tileSize; // 16
-  addIndoorTilesAndWalls(mb, map, 16);
 
-  // 1. High-Fi Library Bookshelf on north wall (cols 7..12, row 7 => x: 112..208, z: 112..128)
-  mb.addBeveledBox(10 * ts, 0, 7.5 * ts, 6 * ts, 16.5, 12.5, 0.8, rgb(128, 78, 40), TexId.BOOKSHELF, 0.75);
-  // Decorative crown molding & brass globe on top of the bookcase
-  mb.addBeveledBox(10 * ts, 16.2, 7.5 * ts, 6 * ts + 2, 1.5, 14, 0.4, rgb(98, 58, 28), TexId.WOOD_GRAIN, 0.55);
-  mb.addSphere(8.2 * ts, 19.8, 7.5 * ts, 2.2, 2.2, 2.2, 8, 12, rgb(76, 158, 198), TexId.SOLID, 0.45);
+  const wallOverrides = new Map<string, WallOverrideKind>([
+    // Locked North Door (cols 15..16, row 12)
+    [tileKey(15, 12), 'door-left'],
+    [tileKey(16, 12), 'door-right'],
+    // Locked Front Door (cols 15..16, row 20)
+    [tileKey(15, 20), 'door-left'],
+    [tileKey(16, 20), 'door-right'],
+    // Extra Big South Windows (row 20, cols 7..12)
+    [tileKey(7, 20), 'window-south'],
+    [tileKey(8, 20), 'window-south'],
+    [tileKey(9, 20), 'window-south'],
+    [tileKey(10, 20), 'window-south'],
+    [tileKey(11, 20), 'window-south'],
+    [tileKey(12, 20), 'window-south'],
+  ]);
+
+  addIndoorTilesAndWalls(mb, map, {
+    wallHeight: INDOOR_WALL_HEIGHT,
+    wallOverrides,
+    openableDoorCoords: [[20, 12]], // Bathroom door
+  });
+
+  // Aesthetic Coffered Ceiling + Rafters + Chandeliers (leave stairwell at cols 18..21, rows 15..18 open)
+  addIndoorCeiling3D(mb, map, {
+    skipRect: { minCol: 18, maxCol: 21, minRow: 15, maxRow: 18 },
+    chandeliers: [
+      [9.5, 9.5],
+      [9.5, 16.5],
+      [16.0, 16.0],
+      [20.5, 9.5],
+    ],
+  });
+
+  // 1. Two-Tier Floor-to-Ceiling Library Bookshelf on north wall (cols 7..12, row 7 => z: 120)
+  {
+    const bx = 10 * ts;
+    const bz = 7.55 * ts;
+    // Plinth & lower bookshelf tier (1:1 unstretched TexId.BOOKSHELF)
+    mb.addBox(bx, 0, bz, 6 * ts, 1.5, 13.5, rgb(88, 52, 26), TexId.WOOD_GRAIN, 0.45);
+    mb.addBeveledBox(bx, 1.5, bz, 6 * ts, 12.5, 12.8, 0.5, rgb(128, 78, 40), TexId.BOOKSHELF, 0.65);
+    // Waist molding ledge + brass rolling-ladder rail
+    mb.addBeveledBox(bx, 14.0, bz, 6 * ts + 1.5, 1.2, 14.2, 0.35, rgb(98, 58, 28), TexId.WOOD_GRAIN, 0.45);
+    // Upper bookshelf tier (second 1:1 unstretched TexId.BOOKSHELF) + ceiling crown
+    mb.addBeveledBox(bx, 15.2, bz, 6 * ts, 12.2, 12.2, 0.5, rgb(128, 78, 40), TexId.BOOKSHELF, 0.65);
+    mb.addBeveledBox(bx, 27.4, bz, 6 * ts + 2, 1.6, 14.0, 0.4, rgb(92, 54, 26), TexId.WOOD_GRAIN, 0.5);
+    // Brass globe on mid shelf & rolling oak ladder on east end
+    mb.addSphere(8.2 * ts, 16.8, bz + 4.5, 1.8, 1.8, 1.8, 8, 12, rgb(76, 158, 198), TexId.SOLID, 0.4);
+    mb.addOrientedBox(12.2 * ts, 11.5, bz + 7.2, 1.1, 22, 1.2, 0, -0.14, rgb(156, 102, 54), TexId.WOOD_GRAIN, 0.4);
+  }
 
   // 2. Stacked Birch & Oak Firewood Rack (col 12, rows 8..9 => x: 192..208, z: 128..160)
-  mb.addBeveledBox(12.5 * ts, 0, 9 * ts, 14, 11.5, 2 * ts, 0.7, rgb(148, 92, 48), TexId.LOG_WALL, 0.65);
+  mb.addBeveledBox(12.5 * ts, 0, 9 * ts, 14, 14.5, 2 * ts, 0.7, rgb(148, 92, 48), TexId.LOG_WALL, 0.65);
   for (let i = 0; i < 4; i++) {
-    mb.addCylinder(12.5 * ts, 11.5, 8.3 * ts + i * 6.5, 2.2, 2.2, 2.5, 10, rgb(238, 234, 226), TexId.BIRCH_BARK, 0.4);
+    mb.addCylinder(12.5 * ts, 14.5, 8.3 * ts + i * 6.5, 2.2, 2.2, 2.5, 10, rgb(238, 234, 226), TexId.BIRCH_BARK, 0.4);
   }
 
   // 3. Tufted Library Couch on west wall (col 7, rows 9..11 => x: 112..128, z: 144..192)
   addTuftedCouch3D(mb, 7.55 * ts, 10.5 * ts, 15, 3 * ts - 2, 'east', rgb(172, 154, 134), rgb(186, 56, 56));
 
-  // 4. Grand Brick & Stone Fireplace (cols 11..12, rows 11..12 => x: 176..208, z: 176..208)
-  mb.addBeveledBox(12 * ts, 0, 12 * ts, 2 * ts + 1, 1.8, 2 * ts + 2, 0.4, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.55);
-  mb.addBox(12 * ts, 1.8, 12 * ts, 2 * ts, 17.2, 2 * ts, rgb(186, 62, 48), TexId.BRICK_RED, 0.8);
-  // Carved oak mantelpiece shelf + holiday greenery garland & candles
-  mb.addBeveledBox(12 * ts, 18.5, 12 * ts, 2 * ts + 4, 2.4, 2 * ts + 4, 0.6, rgb(108, 68, 38), TexId.WOOD_GRAIN, 0.65);
-  mb.addTorus(11 * ts - 0.5, 18.2, 12 * ts, 6.5, 1.2, 12, 8, 'x', rgb(36, 124, 54), TexId.PINE_FOLIAGE, 0.4);
-  // Dark firebox & glowing ember logs
-  mb.addBox(11 * ts - 0.4, 1.8, 12 * ts, 1.6, 10.5, 17, rgb(24, 18, 18), TexId.SOLID, 0);
-  mb.addSphere(11.3 * ts, 2.6, 12 * ts, 2.5, 1.4, 6.5, 6, 10, rgb(255, 92, 28), TexId.SOLID, 0.3);
+  // 4. Grand Floor-to-Ceiling Brick & Stone Fireplace (cols 11..12, rows 11..12)
+  {
+    const fx = 12 * ts;
+    const fz = 12 * ts;
+    mb.addBeveledBox(fx, 0, fz, 2 * ts + 1.5, 2.0, 2 * ts + 2.5, 0.4, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.55);
+    // Lower brick firebox tier (unstretched 1:1 brick tier)
+    mb.addBox(fx, 2.0, fz, 2 * ts, 14.2, 2 * ts, rgb(186, 62, 48), TexId.BRICK_RED, 0.7);
+    // Carved oak mantelpiece shelf + holiday pine garland & candles
+    mb.addBeveledBox(fx, 16.2, fz, 2 * ts + 4, 2.2, 2 * ts + 4, 0.5, rgb(108, 68, 38), TexId.WOOD_GRAIN, 0.6);
+    mb.addTorus(11 * ts - 0.5, 15.8, fz, 6.5, 1.2, 12, 8, 'x', rgb(36, 124, 54), TexId.PINE_FOLIAGE, 0.4);
+    mb.addCylinder(11 * ts + 1, 18.4, fz - 10, 0.8, 0.8, 3.2, 8, rgb(248, 214, 92), TexId.SOLID, 0.3);
+    mb.addCylinder(11 * ts + 1, 18.4, fz + 10, 0.8, 0.8, 3.2, 8, rgb(248, 214, 92), TexId.SOLID, 0.3);
+    // Upper tapered brick chimney breast reaching the ceiling (unstretched 1:1 brick tier)
+    mb.addBox(fx + 2, 18.4, fz, 2 * ts - 4, 11.8, 2 * ts - 4, rgb(186, 62, 48), TexId.BRICK_RED, 0.65);
+    // Framed gilded overmantel mirror on west chimney face
+    mb.addBox(11 * ts + 1.2, 20.6, fz, 1.8, 7.2, 14, rgb(212, 174, 72), TexId.SOLID, 0.35);
+    mb.addBox(11 * ts + 0.9, 21.4, fz, 1.6, 5.6, 11.2, rgb(196, 224, 242), TexId.WINDOW_GLOW, 0.25);
+    // Top stone crown corbel flush with y = 32 ceiling
+    mb.addBeveledBox(fx + 2, 30.2, fz, 2 * ts - 2, 1.8, 2 * ts - 2, 0.35, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.45);
+    // Dark firebox & glowing ember logs
+    mb.addBox(11 * ts - 0.4, 2.0, fz, 1.6, 10.5, 17, rgb(24, 18, 18), TexId.SOLID, 0);
+    mb.addSphere(11.3 * ts, 2.8, fz, 2.5, 1.4, 6.5, 6, 10, rgb(255, 92, 28), TexId.SOLID, 0.3);
+  }
 
   // 5. Basement Living Room Couch (cols 8..10, row 14 => x: 128..176, z: 224..240)
   addTuftedCouch3D(mb, 9.5 * ts, 14.5 * ts, 3 * ts - 2, 15, 'south', rgb(172, 154, 134), rgb(64, 128, 178));
@@ -1216,35 +1534,33 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
     }
   }
 
-  // 7. Extra Big South Windows (row 20, cols 7..9 & 10..12 => z: 320..336)
-  mb.addBox(8.5 * ts, 2.5, 20.2 * ts, 2.6 * ts, 8.5, 2.2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
-  mb.addBox(11.5 * ts, 2.5, 20.2 * ts, 2.6 * ts, 8.5, 2.2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
-
-  // 8. Hallway Coat Rack with Hanging Coat, Scarf & Top Hat (col 14, rows 17..18)
+  // 7. Hallway Coat Rack with Hanging Coat, Scarf & Top Hat (col 14, rows 17..18)
   mb.addShadowDisc(14.5 * ts, 0, 18 * ts, 5, 5, 0.28);
-  mb.addCylinder(14.5 * ts, 0, 18 * ts, 4.0, 0.9, 14.5, 10, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.6);
-  mb.addSphere(14.5 * ts, 10.2, 18 * ts, 3.6, 4.2, 3.6, 8, 10, rgb(186, 48, 48), TexId.FABRIC, 0.55);
-  mb.addCylinder(14.5 * ts, 14.2, 18 * ts, 2.4, 2.6, 2.8, 10, rgb(34, 36, 44), TexId.SOLID, 0.5);
+  mb.addCylinder(14.5 * ts, 0, 18 * ts, 4.0, 0.9, 15.5, 10, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.6);
+  mb.addSphere(14.5 * ts, 10.8, 18 * ts, 3.6, 4.4, 3.6, 8, 10, rgb(186, 48, 48), TexId.FABRIC, 0.55);
+  mb.addCylinder(14.5 * ts, 15.2, 18 * ts, 2.4, 2.6, 2.8, 10, rgb(34, 36, 44), TexId.SOLID, 0.5);
 
-  // 9. Locked North Door (cols 15..16, row 12) & Locked Front Door (cols 15..16, row 20)
-  mb.addBeveledBox(16 * ts, 0, 12.5 * ts, 2 * ts, 15.5, 6, 0.6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
-  mb.addBeveledBox(16 * ts, 0, 20.5 * ts, 2 * ts, 11.2, 6, 0.6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
+  // 8. Locked Double Doors recessed cleanly inside wall openings (cols 15..16, row 12 & row 20)
+  addLockedDoubleDoor3D(mb, 16 * ts, 12.5 * ts, ts);
+  addLockedDoubleDoor3D(mb, 16 * ts, 20.5 * ts, ts);
 
-  // 10. High-Fi Basement Staircase with Balusters & Newel Posts (cols 18..21, rows 15..18)
-  for (let s = 0; s < 8; s++) {
-    const sx = 18 * ts + s * 8 + 4;
-    const sh = (s + 1) * 1.65;
-    mb.addBeveledBox(sx, 0, 17 * ts, 8.2, sh, 4 * ts - 4, 0.35, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.55);
-    // Turned balusters along the south edge of the stairs
-    mb.addCylinder(sx, sh, 18.8 * ts, 0.6, 0.5, 5.5, 8, rgb(242, 238, 230), TexId.SOLID, 0.35);
+  // 9. High-Fi Basement Staircase rising up to the ceiling stairwell opening (cols 18..21, rows 15..18)
+  for (let s = 0; s < 12; s++) {
+    const sx = 18 * ts + s * 5.2 + 2.6;
+    const sh = (s + 1) * 1.95;
+    mb.addBeveledBox(sx, 0, 17 * ts, 5.4, sh, 4 * ts - 4, 0.3, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.5);
+    mb.addCylinder(sx, sh, 18.8 * ts, 0.55, 0.45, 6.2, 8, rgb(242, 238, 230), TexId.SOLID, 0.3);
   }
-  mb.addOrientedBox(20 * ts, 11.5, 18.8 * ts, 4 * ts, 1.3, 1.5, 0, 0.22, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.5);
+  mb.addOrientedBox(20 * ts, 18.2, 18.8 * ts, 4.1 * ts, 1.3, 1.5, 0, 0.34, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.5);
 
-  // 11. High-Fi Bathroom Vanity Sink, Mirror & Sculpted Porcelain Toilet (cols 18..22, rows 7..12)
+  // 10. High-Fi Bathroom Vanity Sink, Beveled Wall Mirror, Light Bar & Porcelain Toilet (cols 18..22, rows 7..12)
   mb.addBeveledBox(19.5 * ts, 0, 10 * ts, 13.5, 7.8, 23, 0.6, rgb(242, 246, 252), TexId.SOLID, 0.65);
   mb.addTorus(19.6 * ts, 8.0, 10 * ts, 3.8, 0.9, 12, 8, 'y', rgb(252, 254, 255), TexId.SOLID, 0.4);
-  // Chrome faucet
   mb.addCylinder(19.2 * ts, 8.0, 10 * ts, 0.5, 0.5, 2.6, 8, rgb(210, 220, 232), TexId.SOLID, 0.3);
+  // Wall mirror & sconce bar mounted cleanly on the 2-tile-high West bathroom wall
+  mb.addBeveledBox(19.04 * ts, 11.2, 10 * ts, 1.4, 11.2, 17, 0.3, rgb(112, 72, 40), TexId.WOOD_GRAIN, 0.4);
+  mb.addBox(19.08 * ts, 12.2, 10 * ts, 1.4, 9.2, 14.5, rgb(206, 232, 248), TexId.WINDOW_GLOW, 0.25);
+  mb.addBox(19.12 * ts, 23.4, 10 * ts, 2.0, 1.4, 12, rgb(255, 236, 152), TexId.SOLID, 0.3);
   // Sculpted Porcelain Toilet (col 21, row 9)
   mb.addBeveledBox(21.75 * ts, 4.5, 9.5 * ts, 5.2, 6.8, 9.5, 0.7, rgb(246, 250, 255), TexId.SOLID, 0.65);
   mb.addCylinder(21.3 * ts, 0, 9.5 * ts, 3.6, 4.8, 5.2, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
@@ -1260,11 +1576,75 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
 export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
   const mb = new MeshBuilder();
   const ts = map.tileSize; // 16
-  addIndoorTilesAndWalls(mb, map, 16);
 
-  // 1. Dining Room China Hutch Cupboard (col 2, rows 6..7 => x: 40, z: 112)
-  mb.addBeveledBox(2.5 * ts, 0, 7 * ts, 14.5, 7.5, 2 * ts, 0.6, rgb(134, 82, 42), TexId.WOOD_GRAIN, 0.7);
-  mb.addBeveledBox(2.4 * ts, 7.5, 7 * ts, 11.5, 8.2, 2 * ts - 2, 0.5, rgb(148, 94, 50), TexId.BOOKSHELF, 0.7);
+  const wallOverrides = new Map<string, WallOverrideKind>([
+    // Kitchen north windows (row 4, cols 9..14) — transparent between mullions so Rosanna Santa cutscene is visible outside
+    [tileKey(9, 4), 'window-north-transparent'],
+    [tileKey(10, 4), 'window-north-transparent'],
+    [tileKey(11, 4), 'window-north-transparent'],
+    [tileKey(12, 4), 'window-north-transparent'],
+    [tileKey(13, 4), 'window-north-transparent'],
+    [tileKey(14, 4), 'window-north-transparent'],
+    // Bedroom north window (row 4, cols 24..25)
+    [tileKey(24, 4), 'window-north'],
+    [tileKey(25, 4), 'window-north'],
+    // Office south window (row 18, cols 21..23)
+    [tileKey(21, 18), 'window-south'],
+    [tileKey(22, 18), 'window-south'],
+    [tileKey(23, 18), 'window-south'],
+    // Table room south windows (row 21, cols 10..13)
+    [tileKey(10, 21), 'window-south'],
+    [tileKey(11, 21), 'window-south'],
+    [tileKey(12, 21), 'window-south'],
+    [tileKey(13, 21), 'window-south'],
+  ]);
+
+  addIndoorTilesAndWalls(mb, map, {
+    wallHeight: INDOOR_WALL_HEIGHT,
+    wallOverrides,
+    openableDoorCoords: [
+      [18, 10], // Shower door
+      [24, 10], // Bedroom door
+      [21, 13], // Office door
+      [11, 15], // Table Room door
+    ],
+  });
+
+  // Aesthetic Coffered Ceiling + Rafters + Chandeliers (leave stairwell at cols 15..18, rows 14..18 open)
+  addIndoorCeiling3D(mb, map, {
+    skipRect: { minCol: 15, maxCol: 18, minRow: 14, maxRow: 18 },
+    chandeliers: [
+      [5.0, 7.5],
+      [11.5, 7.0],
+      [5.5, 14.0],
+      [12.0, 18.0],
+      [25.0, 7.0],
+      [22.0, 16.5],
+    ],
+  });
+
+  // Snowy Moonlit Exterior Terrace outside Kitchen North Windows (cols 7..16, rows 1..3)
+  // so looking out the kitchen windows reveals a snowy winter night for the Rosanna Santa cutscene
+  for (let c = 7; c <= 16; c++) {
+    mb.addQuad(
+      [c * ts, -1, 3.8 * ts],
+      [(c + 1) * ts, -1, 3.8 * ts],
+      [(c + 1) * ts, -1, 1.2 * ts],
+      [c * ts, -1, 1.2 * ts],
+      [0, 1, 0],
+      rgb(228, 240, 252),
+      TexId.SNOW,
+      0
+    );
+  }
+  mb.addCone(8.2 * ts, -1, 1.8 * ts, 7.5, 22, 10, rgb(32, 82, 50), TexId.PINE_FOLIAGE, 0.55);
+  mb.addCone(14.5 * ts, -1, 1.8 * ts, 8.0, 24, 10, rgb(36, 90, 54), TexId.PINE_FOLIAGE, 0.55);
+
+  // 1. Tall Dining Room China Hutch Cupboard (col 2, rows 6..7 => x: 40, z: 112)
+  mb.addBeveledBox(2.5 * ts, 0, 7 * ts, 14.5, 8.8, 2 * ts, 0.6, rgb(134, 82, 42), TexId.WOOD_GRAIN, 0.65);
+  mb.addBeveledBox(2.45 * ts, 8.8, 7 * ts, 13.5, 1.2, 2 * ts + 0.5, 0.3, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.45);
+  mb.addBeveledBox(2.35 * ts, 10.0, 7 * ts, 10.5, 14.5, 2 * ts - 2, 0.5, rgb(148, 94, 50), TexId.BOOKSHELF, 0.65);
+  mb.addBeveledBox(2.35 * ts, 24.5, 7 * ts, 11.8, 1.8, 2 * ts - 0.5, 0.4, rgb(104, 62, 32), TexId.WOOD_GRAIN, 0.5);
 
   // 2. Festive Long Dining Table with Candelabrum, Plates, Goblets & 6 High-Back Chairs (cols 4..5, rows 6..9)
   {
@@ -1279,10 +1659,8 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
 
     // 6 Porcelain dinner plates & High-back chairs flanking the table
     for (const rowOff of [-18, 0, 18]) {
-      // Plates on table
       mb.addCylinder(tx - 8, 7.1, tz + rowOff, 3.2, 3.4, 0.5, 12, rgb(250, 252, 255), TexId.SOLID, 0.3);
       mb.addCylinder(tx + 8, 7.1, tz + rowOff, 3.2, 3.4, 0.5, 12, rgb(250, 252, 255), TexId.SOLID, 0.3);
-      // Chairs with backrests tucked next to table
       mb.addBeveledBox(tx - 15.5, 0, tz + rowOff, 4.5, 4.5, 6.5, 0.4, rgb(124, 74, 38), TexId.WOOD_GRAIN, 0.5);
       mb.addBeveledBox(tx - 17.2, 4.5, tz + rowOff, 1.4, 5.5, 6.5, 0.3, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.5);
       mb.addBeveledBox(tx + 15.5, 0, tz + rowOff, 4.5, 4.5, 6.5, 0.4, rgb(124, 74, 38), TexId.WOOD_GRAIN, 0.5);
@@ -1290,14 +1668,13 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
     }
   }
 
-  // 3. Kitchen Island with Fruit Bowl, Stove/Sink Counter & Candlelit Altar
+  // 3. Kitchen Island, Upper Kitchen Cabinets, Stainless Range Hood & Candlelit Altar
   {
     const ix = 11 * ts;
     const iz = 7 * ts;
     mb.addShadowDisc(ix, 0, iz, 17, 17, 0.32);
     mb.addBeveledBox(ix, 0, iz, 2 * ts - 2, 8.0, 2 * ts - 2, 0.5, rgb(236, 232, 224), TexId.SOLID, 0.7);
     mb.addBeveledBox(ix, 7.8, iz, 2 * ts + 1, 1.6, 2 * ts + 1, 0.5, rgb(168, 114, 66), TexId.WOOD_GRAIN, 0.6);
-    // Ceramic fruit bowl with apples & oranges on the island
     mb.addCylinder(ix, 9.4, iz, 3.2, 4.6, 1.8, 12, rgb(248, 250, 255), TexId.SOLID, 0.4);
     mb.addSphere(ix - 1.2, 11.2, iz, 1.5, 1.4, 1.5, 6, 8, rgb(220, 42, 42), TexId.SOLID, 0.3);
     mb.addSphere(ix + 1.4, 11.2, iz + 0.8, 1.4, 1.4, 1.4, 6, 8, rgb(245, 148, 38), TexId.SOLID, 0.3);
@@ -1307,8 +1684,13 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
     mb.addBox(15.5 * ts, 8.6, 6 * ts, 11, 0.4, 18, rgb(32, 36, 44), TexId.SOLID, 0.35);
     mb.addTorus(15.5 * ts, 8.9, 5.7 * ts, 2.2, 0.35, 10, 6, 'y', rgb(238, 64, 48), TexId.SOLID, 0.2);
     mb.addTorus(15.5 * ts, 8.9, 6.4 * ts, 2.2, 0.35, 10, 6, 'y', rgb(238, 64, 48), TexId.SOLID, 0.2);
-    // Stainless sink & gooseneck faucet
     mb.addCylinder(15.8 * ts, 8.6, 8 * ts, 0.5, 0.5, 3.2, 8, rgb(210, 220, 232), TexId.SOLID, 0.3);
+
+    // Kitchen Tile Backsplash + Stainless Range Hood over Stove + Upper Wall Cabinets
+    mb.addBox(15.92 * ts, 8.8, 7 * ts, 1.4, 9.2, 4 * ts - 2, rgb(228, 240, 246), TexId.BATHROOM_TILE, 0.3);
+    mb.addBeveledBox(15.5 * ts, 18.2, 6 * ts, 12.5, 2.8, 18, 0.4, rgb(186, 196, 212), TexId.SOLID, 0.45);
+    mb.addBox(15.7 * ts, 21.0, 6 * ts, 7.2, 11.0, 8.5, rgb(174, 184, 200), TexId.SOLID, 0.4);
+    mb.addBeveledBox(15.65 * ts, 18.2, 8 * ts, 10.5, 10.8, 2 * ts - 2, 0.4, rgb(164, 112, 66), TexId.WOOD_GRAIN, 0.55);
 
     // Kitchen Altar / Shrine (cols 10..11, row 10)
     mb.addBeveledBox(11 * ts, 0, 10.5 * ts, 2 * ts - 2, 9.5, 14, 0.6, rgb(142, 42, 46), TexId.WOOD_GRAIN, 0.7);
@@ -1332,17 +1714,15 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
     const tx = 3 * ts; // 48
     const tz = 15.5 * ts; // 248
     mb.addShadowDisc(tx, 0, tz, 16, 16, 0.38);
-    // Velvet tree skirt with gold border ring
     mb.addCylinder(tx, 0.2, tz, 14.2, 13.5, 0.9, 16, rgb(198, 36, 42), TexId.FABRIC, 0.4);
     mb.addTorus(tx, 0.6, tz, 13.8, 0.6, 16, 8, 'y', rgb(250, 212, 72), TexId.SOLID, 0.3);
-    // Trunk
-    mb.addCylinder(tx, 0.9, tz, 3.0, 2.0, 9, 12, rgb(96, 58, 32), TexId.WOOD_GRAIN, 0.6);
-    // 5 lush evergreen bough tiers
-    mb.addCone(tx, 5.5, tz, 13.5, 10.5, 16, rgb(24, 104, 46), TexId.PINE_FOLIAGE, 0.75);
-    mb.addCone(tx, 11.2, tz, 11.4, 9.8, 16, rgb(32, 122, 54), TexId.PINE_FOLIAGE, 0.75);
-    mb.addCone(tx, 16.5, tz, 9.0, 9.0, 16, rgb(40, 138, 64), TexId.PINE_FOLIAGE, 0.75);
-    mb.addCone(tx, 21.5, tz, 6.6, 8.0, 16, rgb(48, 154, 72), TexId.PINE_FOLIAGE, 0.75);
-    mb.addCone(tx, 26.0, tz, 4.2, 6.8, 16, rgb(58, 168, 82), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCylinder(tx, 0.9, tz, 3.0, 2.0, 8, 12, rgb(96, 58, 32), TexId.WOOD_GRAIN, 0.6);
+    // 5 lush evergreen bough tiers proportioned gracefully under the y = 32 ceiling
+    mb.addCone(tx, 5.0, tz, 13.5, 9.2, 16, rgb(24, 104, 46), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(tx, 10.0, tz, 11.4, 8.5, 16, rgb(32, 122, 54), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(tx, 14.6, tz, 9.0, 7.8, 16, rgb(40, 138, 64), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(tx, 19.0, tz, 6.6, 7.0, 16, rgb(48, 154, 72), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(tx, 22.8, tz, 4.2, 5.8, 16, rgb(58, 168, 82), TexId.PINE_FOLIAGE, 0.75);
 
     const ornamentPalette: Color4[] = [
       rgb(242, 42, 48),
@@ -1354,7 +1734,7 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
       const ang = (i / 18) * Math.PI * 2 * 2.0;
       const tNorm = i / 18;
       const rad = 11.8 * (1 - tNorm * 0.68);
-      const oy = 7.2 + tNorm * 19.5;
+      const oy = 6.5 + tNorm * 16.5;
       mb.addSphere(
         tx + Math.cos(ang) * rad,
         oy,
@@ -1370,10 +1750,10 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
       );
     }
 
-    // Glowing Golden Star Topper + Halo Ring
-    mb.addSphere(tx, 33.6, tz, 3.0, 3.0, 1.5, 8, 12, rgb(255, 236, 82), TexId.SOLID, 0.55);
-    mb.addOrientedBox(tx, 33.6, tz, 5.8, 5.8, 1.5, 0, Math.PI * 0.25, rgb(255, 242, 104), TexId.SOLID, 0.5);
-    mb.addTorus(tx, 33.6, tz, 4.2, 0.45, 14, 6, 'z', rgb(255, 245, 140), TexId.SOLID, 0.25);
+    // Glowing Golden Star Topper + Halo Ring beneath the ceiling
+    mb.addSphere(tx, 28.8, tz, 2.6, 2.6, 1.4, 8, 12, rgb(255, 236, 82), TexId.SOLID, 0.55);
+    mb.addOrientedBox(tx, 28.8, tz, 5.2, 5.2, 1.4, 0, Math.PI * 0.25, rgb(255, 242, 104), TexId.SOLID, 0.5);
+    mb.addTorus(tx, 28.8, tz, 3.6, 0.4, 14, 6, 'z', rgb(255, 245, 140), TexId.SOLID, 0.25);
 
     // Pile of Festive Presents with 3D Bow Loops under the Tree
     for (const [gx, gz, gw, gh, gc] of [
@@ -1388,42 +1768,47 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
     }
   }
 
-  // 6. Table Room Second Table & Chairs (cols 11..12, rows 17..18 => x: 192, z: 288)
+  // 6. Table Room Second Table (cols 11..12, rows 17..18 => x: 192, z: 288)
   mb.addShadowDisc(12 * ts, 0, 18 * ts, 16, 16, 0.32);
   mb.addBeveledBox(12 * ts, 0, 18 * ts, 2 * ts - 2, 6.8, 2 * ts - 2, 0.6, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.7);
 
-  // 7. Shower Sink & Porcelain Toilet (col 17, rows 7..8 & col 19, row 8)
+  // 7. Shower Sink, Beveled Wall Mirror, Light Bar & Porcelain Toilet (col 17, rows 7..8 & col 19, row 8)
   mb.addBeveledBox(17.5 * ts, 0, 8 * ts, 13.5, 7.8, 22, 0.6, rgb(242, 246, 252), TexId.SOLID, 0.65);
+  mb.addBeveledBox(17.04 * ts, 11.2, 8 * ts, 1.4, 11.2, 17, 0.3, rgb(112, 72, 40), TexId.WOOD_GRAIN, 0.4);
+  mb.addBox(17.08 * ts, 12.2, 8 * ts, 1.4, 9.2, 14.5, rgb(206, 232, 248), TexId.WINDOW_GLOW, 0.25);
+  mb.addBox(17.12 * ts, 23.4, 8 * ts, 2.0, 1.4, 12, rgb(255, 236, 152), TexId.SOLID, 0.3);
   mb.addCylinder(19.5 * ts, 0, 8.5 * ts, 3.8, 4.8, 5.4, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
   mb.addTorus(19.5 * ts, 5.4, 8.5 * ts, 3.8, 1.0, 12, 8, 'y', rgb(252, 254, 255), TexId.SOLID, 0.45);
 
-  // 8. Bedroom Carved Sleigh Double Bed with Duvet & Pillows (cols 26..27, rows 6..7 => x: 432, z: 112)
+  // 8. Upstairs Stairwell Guardrail along west side (cols 15..18, rows 13..18)
+  for (let rowOff = 0; rowOff < 6; rowOff++) {
+    const postZ = 14.3 * ts + rowOff * 9;
+    mb.addCylinder(15.2 * ts, 0, postZ, 0.55, 0.55, 6.8, 8, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.35);
+  }
+  mb.addBeveledBox(15.2 * ts, 6.8, 16 * ts, 1.4, 1.1, 3.2 * ts, 0.25, rgb(134, 82, 44), TexId.WOOD_GRAIN, 0.45);
+
+  // 9. Bedroom Carved Sleigh Double Bed with Duvet & Pillows (cols 26..27, rows 6..7 => x: 432, z: 112)
   {
     const bx = 27 * ts;
     const bz = 7 * ts;
     mb.addShadowDisc(bx, 0, bz, 17, 17, 0.34);
     mb.addBeveledBox(bx, 0, bz, 2 * ts - 2, 4.8, 2 * ts - 2, 0.6, rgb(128, 78, 38), TexId.WOOD_GRAIN, 0.7);
-    // Carved headboard on North side
-    mb.addBeveledBox(bx, 4.8, bz - ts + 2.5, 2 * ts - 2, 7.2, 3.2, 0.6, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.65);
-    // White sheet & plush crimson duvet
+    mb.addBeveledBox(bx, 4.8, bz - ts + 2.5, 2 * ts - 2, 8.4, 3.2, 0.6, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.65);
     mb.addBeveledBox(bx, 4.6, bz, 2 * ts - 4, 2.0, 2 * ts - 4, 0.6, rgb(248, 248, 252), TexId.FABRIC, 0.45);
     mb.addBeveledBox(bx, 5.2, bz + 2.5, 2 * ts - 3.5, 2.2, 2 * ts - 9, 0.7, rgb(198, 48, 56), TexId.FABRIC, 0.55);
-    // Plump pillows
     mb.addSphere(bx - 6.5, 7.2, bz - 8.5, 5.2, 1.8, 3.2, 8, 10, rgb(252, 252, 255), TexId.FABRIC, 0.45);
     mb.addSphere(bx + 6.5, 7.2, bz - 8.5, 5.2, 1.8, 3.2, 8, 10, rgb(252, 252, 255), TexId.FABRIC, 0.45);
   }
 
-  // 9. Office Executive Desk, Ultrawide Monitor, Keyboard & Ergonomic Swivel Chair (cols 20..22, rows 15..17)
+  // 10. Office Executive Desk, Ultrawide Monitor, Keyboard & Ergonomic Swivel Chair (cols 20..22, rows 15..17)
   {
     const ox = 21.5 * ts;
     const oz = 16.5 * ts;
     mb.addShadowDisc(ox, 0, oz, 22, 16, 0.32);
     mb.addBeveledBox(ox, 0, oz, 3 * ts - 4, 6.8, 2 * ts - 2, 0.6, rgb(142, 90, 48), TexId.WOOD_GRAIN, 0.7);
-    // Monitor stand, glowing ultrawide screen & keyboard
     mb.addCylinder(ox, 6.8, oz - 4, 2.6, 0.8, 2.2, 10, rgb(52, 58, 70), TexId.SOLID, 0.4);
     mb.addBeveledBox(ox, 8.6, oz - 4, 14, 7.5, 1.8, 0.35, rgb(36, 40, 50), TexId.WINDOW_GLOW, 0.55);
     mb.addBeveledBox(ox, 6.8, oz + 3, 9, 0.6, 3.6, 0.2, rgb(48, 54, 66), TexId.SOLID, 0.35);
-    // Swivel chair with backrest
     mb.addCylinder(ox, 0, oz + 14, 4.2, 1.0, 4.2, 10, rgb(44, 48, 58), TexId.SOLID, 0.45);
     mb.addBeveledBox(ox, 4.0, oz + 14, 8.5, 1.6, 8.5, 0.5, rgb(58, 66, 82), TexId.FABRIC, 0.55);
     mb.addBeveledBox(ox, 5.4, oz + 17.5, 8.0, 6.5, 2.0, 0.5, rgb(52, 60, 76), TexId.FABRIC, 0.55);
@@ -1438,7 +1823,13 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
 
 export function buildPeopleStaticMesh(map: TileMap): MeshBuilder {
   const mb = new MeshBuilder();
-  addIndoorTilesAndWalls(mb, map, 15);
+  addIndoorTilesAndWalls(mb, map, { wallHeight: INDOOR_WALL_HEIGHT });
+  addIndoorCeiling3D(mb, map, {
+    chandeliers: [
+      [10, 13],
+      [20, 13],
+    ],
+  });
   return mb;
 }
 
@@ -1893,31 +2284,22 @@ function addConeOfSight3D(translucentMb: MeshBuilder, cone: ConeOfSight | null |
 
 function addDoorAndFog3D(opaqueMb: MeshBuilder, door: CollidableDoor): void {
   const b = door.bounds;
-  opaqueMb.addBeveledBox(
-    b.x + b.width * 0.5,
-    0,
-    b.y + b.height * 0.5,
-    b.width,
-    15.5,
-    b.height,
-    0.5,
-    rgb(132, 78, 40),
-    TexId.WOOD_GRAIN,
-    0.75
-  );
-  opaqueMb.addSphere(
-    b.x + b.width * 0.75,
-    7.5,
-    b.y + b.height * 0.5 + 2.5,
-    1.05,
-    1.05,
-    1.05,
-    6,
-    8,
-    rgb(250, 214, 72),
-    TexId.SOLID,
-    0.35
-  );
+  const cx = b.x + b.width * 0.5;
+  const cz = b.y + b.height * 0.5;
+  const leafW = b.width - 2.4;
+  const leafH = 24.0;
+  const leafD = 3.6;
+
+  // Paneled door leaf centered inside the recessed doorway opening (making room in the wall)
+  opaqueMb.addBeveledBox(cx, 0, cz, leafW, leafH, leafD, 0.4, rgb(132, 78, 40), TexId.WOOD_GRAIN, 0.7);
+  // Lower and upper raised wooden door panels on both faces
+  opaqueMb.addBox(cx, 2.4, cz, leafW * 0.68, 7.4, leafD + 0.6, rgb(156, 96, 52), TexId.WOOD_GRAIN, 0.35);
+  opaqueMb.addBox(cx, 12.4, cz, leafW * 0.68, 9.2, leafD + 0.6, rgb(156, 96, 52), TexId.WOOD_GRAIN, 0.35);
+
+  // Brass doorknobs on both sides of the door
+  for (const dz of [-leafD * 0.5 - 0.6, leafD * 0.5 + 0.6]) {
+    opaqueMb.addSphere(cx + leafW * 0.32, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
+  }
 
   for (const hr of door.hiddenRegions) {
     opaqueMb.addBox(
@@ -1925,7 +2307,7 @@ function addDoorAndFog3D(opaqueMb: MeshBuilder, door: CollidableDoor): void {
       0.2,
       hr.y + hr.height * 0.5,
       hr.width,
-      16.8,
+      INDOOR_WALL_HEIGHT + 0.4,
       hr.height,
       rgb(12, 14, 22),
       TexId.SOLID,

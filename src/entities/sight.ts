@@ -18,8 +18,8 @@ export const DEFAULT_CONE_OF_SIGHT_FOV = (45 * Math.PI) / 180;
  * A line of sight that spawns bounding boxes (4x4 pixels) along a line
  * starting from `position` in `direction` for `distance` pixels.
  *
- * For each i in 0..9:
- *   p[i] = position + (distanceVector / 10) * i;
+ * For each i in 0..maxPoints - 1 (default maxPoints = 10):
+ *   p[i] = position + (distanceVector / maxPoints) * i;
  *
  * We collision detection check on every i against the map/walls:
  * only spawn the (i + 1)-th bounding box if the i-th bounding box did not collide with a wall.
@@ -29,6 +29,7 @@ export class LineOfSight {
   public direction: number;
   public distance: number;
   public map?: TileMap;
+  public maxPoints: number;
   public boxes: Rect[] = [];
   private callbacks: DetectionCallback[] = [];
 
@@ -36,12 +37,14 @@ export class LineOfSight {
     position: Point2D,
     direction: number,
     distance: number,
-    map?: TileMap
+    map?: TileMap,
+    maxPoints: number = 10
   ) {
     this.position = { ...position };
     this.direction = direction;
     this.distance = distance;
     this.map = map;
+    this.maxPoints = Math.max(1, Math.floor(maxPoints));
     this.recomputeBoxes();
   }
 
@@ -85,9 +88,9 @@ export class LineOfSight {
       y: dirY * this.distance,
     };
 
-    for (let i = 0; i < 10; i++) {
-      const px = this.position.x + (distanceVector.x / 10) * i;
-      const py = this.position.y + (distanceVector.y / 10) * i;
+    for (let i = 0; i < this.maxPoints; i++) {
+      const px = this.position.x + (distanceVector.x / this.maxPoints) * i;
+      const py = this.position.y + (distanceVector.y / this.maxPoints) * i;
       const box: Rect = {
         x: px,
         y: py,

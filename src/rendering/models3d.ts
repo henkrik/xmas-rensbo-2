@@ -111,6 +111,13 @@ export class MeshBuilder {
     return this.data.length / FLOATS_PER_VERTEX;
   }
 
+  scaleAlphaRange(startVertex: number, alphaScale: number): void {
+    const startFloat = startVertex * FLOATS_PER_VERTEX;
+    for (let i = startFloat + 11; i < this.data.length; i += FLOATS_PER_VERTEX) {
+      this.data[i] *= alphaScale;
+    }
+  }
+
   pushVertex(
     x: number,
     y: number,
@@ -1939,7 +1946,10 @@ function addExclamationBadge3D(opaqueMb: MeshBuilder, cx: number, baseY: number,
 // Dynamic Scene Builder (Per-Frame Entities, Doors, Lights, Particles)
 // ============================================================================
 
-export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
+export function buildDynamicSceneMeshes(
+  state: GameState,
+  cameraDistance?: number
+): DynamicSceneMeshes {
   const opaque = new MeshBuilder();
   const translucent = new MeshBuilder();
   const pointLights: PointLight3D[] = [];
@@ -1983,8 +1993,13 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
           hasBeard: true,
         };
 
+    const isPlayerTranslucent =
+      cameraDistance !== undefined && cameraDistance < TILE_SIZE;
+    const playerTargetBuilder = isPlayerTranslucent ? translucent : opaque;
+    const playerStartVertex = playerTargetBuilder.vertexCount;
+
     addHumanoid3D(
-      opaque,
+      playerTargetBuilder,
       px,
       py,
       pz,
@@ -1996,6 +2011,10 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
       state.hasLadder && !state.ladderPlaced,
       translucent
     );
+
+    if (isPlayerTranslucent) {
+      playerTargetBuilder.scaleAlphaRange(playerStartVertex, 0.5);
+    }
   }
 
   // 2. Level-specific dynamic entities & lighting

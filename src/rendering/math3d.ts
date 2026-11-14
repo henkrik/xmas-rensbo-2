@@ -425,18 +425,21 @@ export function computeUnobstructedCameraDistance(
   maxDistance: number,
   map: TileMap
 ): number {
+  const CAMERA_LOS_POINTS = 30;
   const oppositeYaw = cameraYaw + Math.PI;
   const cosPitch = Math.max(0.2, Math.cos(cameraPitch));
   const horizontalMaxDistance = maxDistance * cosPitch;
-  // LineOfSight samples 10 boxes at i = 0..9 (up to 0.9 * distance), so scale by 10/9
-  // so an unobstructed line reaches the full horizontalMaxDistance.
-  const lineOfSightDistance = (horizontalMaxDistance * 10) / 9;
+  // LineOfSight samples CAMERA_LOS_POINTS boxes at i = 0..29 (up to 29/30 * distance),
+  // so scale by 30/29 so an unobstructed line reaches the full horizontalMaxDistance.
+  const lineOfSightDistance =
+    (horizontalMaxDistance * CAMERA_LOS_POINTS) / (CAMERA_LOS_POINTS - 1);
 
   let lineOfSight: LineOfSight | null = new LineOfSight(
     { x: originX, y: originZ },
     oppositeYaw,
     lineOfSightDistance,
-    map
+    map,
+    CAMERA_LOS_POINTS
   );
 
   // Find the n-th point within the line of sight that is furthest from the player

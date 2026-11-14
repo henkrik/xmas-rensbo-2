@@ -592,7 +592,7 @@ export class WebGPURenderer {
     const viewProj = mat4Multiply(proj, view);
 
     const staticEntry = this.getOrUploadStaticLevelBuffer(state);
-    const dynamicScene = buildDynamicSceneMeshes(state);
+    const dynamicScene = buildDynamicSceneMeshes(state, camera.distance);
 
     // Upload dynamic opaque vertices
     if (dynamicScene.opaque.vertices.byteLength > this.dynamicOpaqueCapacityBytes) {

@@ -968,17 +968,19 @@
   var DEFAULT_CONE_OF_SIGHT_DISTANCE = 7.5 * TILE_SIZE;
   var DEFAULT_CONE_OF_SIGHT_FOV = 45 * Math.PI / 180;
   var LineOfSight = class {
-    constructor(position, direction, distance, map) {
+    constructor(position, direction, distance, map, maxPoints = 10) {
       __publicField(this, "position");
       __publicField(this, "direction");
       __publicField(this, "distance");
       __publicField(this, "map");
+      __publicField(this, "maxPoints");
       __publicField(this, "boxes", []);
       __publicField(this, "callbacks", []);
       this.position = { ...position };
       this.direction = direction;
       this.distance = distance;
       this.map = map;
+      this.maxPoints = Math.max(1, Math.floor(maxPoints));
       this.recomputeBoxes();
     }
     /**
@@ -1017,9 +1019,9 @@
         x: dirX * this.distance,
         y: dirY * this.distance
       };
-      for (let i = 0; i < 10; i++) {
-        const px = this.position.x + distanceVector.x / 10 * i;
-        const py = this.position.y + distanceVector.y / 10 * i;
+      for (let i = 0; i < this.maxPoints; i++) {
+        const px = this.position.x + distanceVector.x / this.maxPoints * i;
+        const py = this.position.y + distanceVector.y / this.maxPoints * i;
         const box = {
           x: px,
           y: py,
@@ -1355,15 +1357,17 @@
     };
   }
   function computeUnobstructedCameraDistance(originX, originZ, cameraYaw, cameraPitch, maxDistance, map) {
+    const CAMERA_LOS_POINTS = 30;
     const oppositeYaw = cameraYaw + Math.PI;
     const cosPitch = Math.max(0.2, Math.cos(cameraPitch));
     const horizontalMaxDistance = maxDistance * cosPitch;
-    const lineOfSightDistance = horizontalMaxDistance * 10 / 9;
+    const lineOfSightDistance = horizontalMaxDistance * CAMERA_LOS_POINTS / (CAMERA_LOS_POINTS - 1);
     let lineOfSight = new LineOfSight(
       { x: originX, y: originZ },
       oppositeYaw,
       lineOfSightDistance,
-      map
+      map,
+      CAMERA_LOS_POINTS
     );
     let furthestValidIndex = -1;
     for (let i = lineOfSight.n - 1; i >= 0; i--) {
@@ -2982,6 +2986,12 @@
     get vertexCount() {
       return this.data.length / FLOATS_PER_VERTEX;
     }
+    scaleAlphaRange(startVertex, alphaScale) {
+      const startFloat = startVertex * FLOATS_PER_VERTEX;
+      for (let i = startFloat + 11; i < this.data.length; i += FLOATS_PER_VERTEX) {
+        this.data[i] *= alphaScale;
+      }
+    }
     pushVertex(x, y, z, nx, ny, nz, u, v, color, texId, outlineScale) {
       this.data.push(
         x,
@@ -4239,7 +4249,7 @@
     opaqueMb.addBeveledBox(cx + 1.5, ay + 2.5, cz, 1.6, 5.2, 1.6, 0.3, rgb(255, 42, 42), TexId.SOLID, 0.55);
     opaqueMb.addSphere(cx + 1.5, ay + 0.8, cz, 0.95, 0.95, 0.95, 6, 8, rgb(255, 42, 42), TexId.SOLID, 0.45);
   }
-  function buildDynamicSceneMeshes(state) {
+  function buildDynamicSceneMeshes(state, cameraDistance) {
     const opaque = new MeshBuilder();
     const translucent = new MeshBuilder();
     const pointLights = [];
@@ -4269,8 +4279,11 @@
         hat: rgb(220, 36, 42),
         hasBeard: true
       };
+      const isPlayerTranslucent = cameraDistance !== void 0 && cameraDistance < TILE_SIZE;
+      const playerTargetBuilder = isPlayerTranslucent ? translucent : opaque;
+      const playerStartVertex = playerTargetBuilder.vertexCount;
       addHumanoid3D(
-        opaque,
+        playerTargetBuilder,
         px,
         py,
         pz,
@@ -4282,6 +4295,9 @@
         state.hasLadder && !state.ladderPlaced,
         translucent
       );
+      if (isPlayerTranslucent) {
+        playerTargetBuilder.scaleAlphaRange(playerStartVertex, 0.5);
+      }
     }
     if (levelId === "level-outside") {
       const outside = state.levels["level-outside"];
@@ -5460,7 +5476,7 @@
     ctx.fillStyle = isOutside ? "#172647" : "#14121c";
     ctx.fillRect(0, 0, w, h);
     const staticMesh = getStaticLevelMesh(state.currentLevelId, state.map);
-    const dynamicMeshes = buildDynamicSceneMeshes(state);
+    const dynamicMeshes = buildDynamicSceneMeshes(state, cam.distance);
     const sunX = 0.42;
     const sunY = 0.78;
     const sunZ = 0.46;
@@ -6497,7 +6513,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       const view = mat4LookAt(camera.eye, camera.target, camera.up);
       const viewProj = mat4Multiply(proj, view);
       const staticEntry = this.getOrUploadStaticLevelBuffer(state);
-      const dynamicScene = buildDynamicSceneMeshes(state);
+      const dynamicScene = buildDynamicSceneMeshes(state, camera.distance);
       if (dynamicScene.opaque.vertices.byteLength > this.dynamicOpaqueCapacityBytes) {
         this.dynamicOpaqueBuffer.destroy();
         this.dynamicOpaqueCapacityBytes = dynamicScene.opaque.vertices.byteLength * 2;

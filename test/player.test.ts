@@ -2454,4 +2454,31 @@ Tanja -> Alex
     expect(input.cameraPitch).toBeGreaterThan(initialPitch);
     applyKeyEvent(input, 'ArrowDown', false);
   });
+
+  it('shortens 3D camera distance using a temporary LineOfSight when an obstacle is between camera and player', () => {
+    const state = createGameState({ initialLevelId: 'level-outside', showIntroDialogue: false });
+    const input = createEmptyInput();
+    const cam = createCamera3D();
+
+    // Unobstructed driveway behind Santa (middle of driveway looking North): full 52 distance
+    state.player.x = 14 * TILE_SIZE;
+    state.player.y = 18 * TILE_SIZE;
+    input.cameraYaw = -Math.PI / 2;
+    input.cameraPitch = 0.42;
+    updateCamera3D(cam, state, input, 0.016, 256 / 224);
+    expect(cam.distance).toBeCloseTo(52, 0);
+
+    // Place Santa right in front of the main house south wall (row 10, facing South so house is directly behind him)
+    state.player.x = 10 * TILE_SIZE;
+    state.player.y = 11 * TILE_SIZE + 4;
+    input.cameraYaw = Math.PI / 2; // Looking South; camera is to the North (inside the house footprint!)
+    updateCamera3D(cam, state, input, 0.016, 256 / 224);
+    expect(cam.distance).toBeGreaterThanOrEqual(0);
+    expect(cam.distance).toBeLessThan(30);
+
+    // Turn camera back to look North (camera is to the South, open terrace/driveway): distance returns to full 52
+    input.cameraYaw = -Math.PI / 2;
+    updateCamera3D(cam, state, input, 0.016, 256 / 224);
+    expect(cam.distance).toBeCloseTo(52, 0);
+  });
 });

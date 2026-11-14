@@ -801,6 +801,324 @@
     return false;
   }
 
+  // src/entities/player.ts
+  var FOOTPRINT_DURATION_SECONDS = 3;
+  var FOOTPRINT_STEP_INTERVAL_SECONDS = 0.14;
+  function createPlayer(x, y) {
+    return {
+      x,
+      y,
+      width: 12,
+      height: 12,
+      speed: 75,
+      // pixels per second
+      facing: "up",
+      yaw: -Math.PI / 2,
+      isMoving: false,
+      walkTimer: 0,
+      blinkTimer: 0,
+      footprintSpawnTimer: 0,
+      nextFootprintFoot: "left",
+      states: /* @__PURE__ */ new Map()
+    };
+  }
+  function rectsIntersect(a, b) {
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+  }
+  function isPlayerOnSnowTile(player, map) {
+    const footCenterX = player.x + player.width / 2;
+    const footCenterY = player.y + player.height - 2;
+    const col = Math.floor(footCenterX / map.tileSize);
+    const row = Math.floor(footCenterY / map.tileSize);
+    if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
+      return false;
+    }
+    return map.tiles[row][col] === 0 /* Snow */;
+  }
+  function updateFootprints(footprints, player, map, dtSeconds) {
+    for (let i = footprints.length - 1; i >= 0; i--) {
+      footprints[i].age += dtSeconds;
+      if (footprints[i].age >= footprints[i].maxAge) {
+        footprints.splice(i, 1);
+      }
+    }
+    if (player.isMoving && isPlayerOnSnowTile(player, map)) {
+      player.footprintSpawnTimer -= dtSeconds;
+      while (player.footprintSpawnTimer <= 0) {
+        const foot = player.nextFootprintFoot;
+        const baseX = player.x + player.width / 2;
+        const baseY = player.y + player.height - 1;
+        const isVertical = player.facing === "up" || player.facing === "down";
+        const fx = isVertical ? baseX + (foot === "left" ? -3 : 1) : baseX - 1;
+        const fy = isVertical ? baseY - 1 : baseY + (foot === "left" ? -2 : 1);
+        footprints.push({
+          x: Math.round(fx),
+          y: Math.round(fy),
+          age: 0,
+          maxAge: FOOTPRINT_DURATION_SECONDS,
+          foot,
+          facing: player.facing
+        });
+        player.nextFootprintFoot = foot === "left" ? "right" : "left";
+        player.footprintSpawnTimer += FOOTPRINT_STEP_INTERVAL_SECONDS;
+      }
+    } else {
+      player.footprintSpawnTimer = 0;
+    }
+  }
+  function updatePlayer(player, input, dtSeconds, map, solidObstacles = []) {
+    if (player.blinkTimer > 0) {
+      player.blinkTimer = Math.max(0, player.blinkTimer - dtSeconds);
+    }
+    let dx = 0;
+    let dy = 0;
+    if (input.moveVector) {
+      dx = input.moveVector.x;
+      dy = input.moveVector.y;
+    } else if (typeof input.cameraYaw === "number") {
+      const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
+      const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      const rawLen = Math.hypot(forward, strafe);
+      if (rawLen > 0) {
+        const nf = forward / rawLen;
+        const ns = strafe / rawLen;
+        const cosY = Math.cos(input.cameraYaw);
+        const sinY = Math.sin(input.cameraYaw);
+        dx = nf * cosY - ns * sinY;
+        dy = nf * sinY + ns * cosY;
+      }
+    } else {
+      if (input.left) dx -= 1;
+      if (input.right) dx += 1;
+      if (input.up) dy -= 1;
+      if (input.down) dy += 1;
+      const length2 = Math.hypot(dx, dy);
+      if (length2 > 0) {
+        dx /= length2;
+        dy /= length2;
+      }
+    }
+    const length = Math.hypot(dx, dy);
+    if (length < 1e-3) {
+      player.isMoving = false;
+      player.walkTimer = 0;
+      return;
+    }
+    player.isMoving = true;
+    player.walkTimer += dtSeconds;
+    player.yaw = Math.atan2(dy, dx);
+    if (Math.abs(dy) > Math.abs(dx)) {
+      player.facing = dy < 0 ? "up" : "down";
+    } else if (Math.abs(dx) > 0) {
+      player.facing = dx < 0 ? "left" : "right";
+    }
+    const moveX = dx * player.speed * dtSeconds;
+    const moveY = dy * player.speed * dtSeconds;
+    const collidesAt = (testX, testY) => {
+      if (isRectCollidingWithMap(map, testX, testY, player.width, player.height)) {
+        return true;
+      }
+      const testRect = {
+        x: testX,
+        y: testY,
+        width: player.width,
+        height: player.height
+      };
+      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
+    };
+    const nextX = player.x + moveX;
+    const xBlocked = collidesAt(nextX, player.y);
+    if (!xBlocked) {
+      player.x = nextX;
+    }
+    const nextY = player.y + moveY;
+    const yBlocked = collidesAt(player.x, nextY);
+    if (!yBlocked) {
+      player.y = nextY;
+    }
+    if (xBlocked && Math.abs(moveY) < 0.01) {
+      const slideStep = player.speed * dtSeconds * 0.75;
+      for (let offset = 1; offset <= 4; offset++) {
+        if (!collidesAt(nextX, player.y - offset) && !collidesAt(player.x, player.y - slideStep)) {
+          player.y = Math.max(0, player.y - slideStep);
+          break;
+        }
+        if (!collidesAt(nextX, player.y + offset) && !collidesAt(player.x, player.y + slideStep)) {
+          player.y = player.y + slideStep;
+          break;
+        }
+      }
+    }
+    if (yBlocked && Math.abs(moveX) < 0.01) {
+      const slideStep = player.speed * dtSeconds * 0.75;
+      for (let offset = 1; offset <= 4; offset++) {
+        if (!collidesAt(player.x - offset, nextY) && !collidesAt(player.x - slideStep, player.y)) {
+          player.x = Math.max(0, player.x - slideStep);
+          break;
+        }
+        if (!collidesAt(player.x + offset, nextY) && !collidesAt(player.x + slideStep, player.y)) {
+          player.x = player.x + slideStep;
+          break;
+        }
+      }
+    }
+  }
+
+  // src/entities/sight.ts
+  var DEFAULT_CONE_OF_SIGHT_DISTANCE = 7.5 * TILE_SIZE;
+  var DEFAULT_CONE_OF_SIGHT_FOV = 45 * Math.PI / 180;
+  var LineOfSight = class {
+    constructor(position, direction, distance, map) {
+      __publicField(this, "position");
+      __publicField(this, "direction");
+      __publicField(this, "distance");
+      __publicField(this, "map");
+      __publicField(this, "boxes", []);
+      __publicField(this, "callbacks", []);
+      this.position = { ...position };
+      this.direction = direction;
+      this.distance = distance;
+      this.map = map;
+      this.recomputeBoxes();
+    }
+    /**
+     * Number of bounding boxes that were spawned (getter `n`).
+     */
+    get n() {
+      return this.boxes.length;
+    }
+    /**
+     * Returns the point (center of the box) of the i-th box.
+     */
+    points(i) {
+      if (i < 0 || i >= this.boxes.length) {
+        return { ...this.position };
+      }
+      const b = this.boxes[i];
+      return {
+        x: b.x + b.width / 2,
+        y: b.y + b.height / 2
+      };
+    }
+    onDetection(cb) {
+      this.callbacks.push(cb);
+      return () => {
+        const idx = this.callbacks.indexOf(cb);
+        if (idx !== -1) {
+          this.callbacks.splice(idx, 1);
+        }
+      };
+    }
+    recomputeBoxes() {
+      this.boxes = [];
+      const dirX = Math.cos(this.direction);
+      const dirY = Math.sin(this.direction);
+      const distanceVector = {
+        x: dirX * this.distance,
+        y: dirY * this.distance
+      };
+      for (let i = 0; i < 10; i++) {
+        const px = this.position.x + distanceVector.x / 10 * i;
+        const py = this.position.y + distanceVector.y / 10 * i;
+        const box = {
+          x: px,
+          y: py,
+          width: 4,
+          height: 4
+        };
+        this.boxes.push(box);
+        if (this.map && isRectCollidingWithMap(this.map, box.x, box.y, box.width, box.height)) {
+          break;
+        }
+      }
+    }
+    checkDetection(player) {
+      for (const box of this.boxes) {
+        if (rectsIntersect(player, box)) {
+          for (const cb of this.callbacks) {
+            cb(player);
+          }
+          return true;
+        }
+      }
+      return false;
+    }
+  };
+  var _ConeOfSight = class _ConeOfSight {
+    constructor(position, direction, distance = DEFAULT_CONE_OF_SIGHT_DISTANCE, fovOrMap = DEFAULT_CONE_OF_SIGHT_FOV, mapOrFov) {
+      __publicField(this, "position");
+      __publicField(this, "direction");
+      __publicField(this, "distance");
+      __publicField(this, "fieldOfView");
+      __publicField(this, "map");
+      __publicField(this, "lines", []);
+      __publicField(this, "sightPolygon", []);
+      __publicField(this, "callbacks", []);
+      this.position = { ...position };
+      this.direction = direction;
+      this.distance = distance;
+      if (typeof fovOrMap === "number") {
+        this.fieldOfView = fovOrMap;
+        this.map = typeof mapOrFov === "object" ? mapOrFov : void 0;
+      } else {
+        this.map = fovOrMap;
+        this.fieldOfView = typeof mapOrFov === "number" ? mapOrFov : DEFAULT_CONE_OF_SIGHT_FOV;
+      }
+      this.recomputeLines();
+    }
+    onDetection(cb) {
+      this.callbacks.push(cb);
+      return () => {
+        const idx = this.callbacks.indexOf(cb);
+        if (idx !== -1) {
+          this.callbacks.splice(idx, 1);
+        }
+      };
+    }
+    recomputeLines() {
+      const angles = [
+        this.direction - this.fieldOfView / 2,
+        this.direction - this.fieldOfView / 4,
+        this.direction,
+        this.direction + this.fieldOfView / 4,
+        this.direction + this.fieldOfView / 2
+      ];
+      this.lines = angles.map(
+        (ang) => new LineOfSight(this.position, ang, this.distance, this.map)
+      );
+      this.sightPolygon = [
+        { ...this.position },
+        ...this.lines.map((line) => line.points(line.n - 1))
+      ];
+    }
+    getAllBoxes() {
+      const all = [];
+      for (const line of this.lines) {
+        all.push(...line.boxes);
+      }
+      return all;
+    }
+    checkDetection(player) {
+      if (_ConeOfSight.cheatMode) {
+        return false;
+      }
+      let detected = false;
+      for (const line of this.lines) {
+        if (line.checkDetection(player)) {
+          detected = true;
+        }
+      }
+      if (detected) {
+        for (const cb of this.callbacks) {
+          cb(player);
+        }
+      }
+      return detected;
+    }
+  };
+  __publicField(_ConeOfSight, "cheatMode", false);
+  var ConeOfSight = _ConeOfSight;
+
   // src/rendering/math3d.ts
   var MAIN_HOUSE_WALL_HEIGHT = 34;
   var MAIN_HOUSE_ROOF_WALK_HEIGHT = 36;
@@ -1036,12 +1354,39 @@
       wasOnRoof: false
     };
   }
-  function isWallTileAt(map, worldX, worldZ) {
-    const col = Math.floor(worldX / map.tileSize);
-    const row = Math.floor(worldZ / map.tileSize);
-    if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) return false;
-    const t = map.tiles[row][col];
-    return t === 21 /* InteriorWall */ || t === 20 /* VoidBlack */;
+  function computeUnobstructedCameraDistance(originX, originZ, cameraYaw, cameraPitch, maxDistance, map) {
+    const oppositeYaw = cameraYaw + Math.PI;
+    const cosPitch = Math.max(0.2, Math.cos(cameraPitch));
+    const horizontalMaxDistance = maxDistance * cosPitch;
+    const lineOfSightDistance = horizontalMaxDistance * 10 / 9;
+    let lineOfSight = new LineOfSight(
+      { x: originX, y: originZ },
+      oppositeYaw,
+      lineOfSightDistance,
+      map
+    );
+    let furthestValidIndex = -1;
+    for (let i = lineOfSight.n - 1; i >= 0; i--) {
+      const box = lineOfSight.boxes[i];
+      if (!isRectCollidingWithMap(map, box.x, box.y, box.width, box.height)) {
+        furthestValidIndex = i;
+        break;
+      }
+    }
+    let unobstructedDistance = 0;
+    if (furthestValidIndex >= 0) {
+      const furthestPoint = lineOfSight.points(furthestValidIndex);
+      const horizontalDist = Math.hypot(
+        furthestPoint.x - originX,
+        furthestPoint.y - originZ
+      );
+      unobstructedDistance = Math.min(
+        maxDistance,
+        Math.max(0, horizontalDist / cosPitch)
+      );
+    }
+    lineOfSight = null;
+    return unobstructedDistance;
   }
   function updateCamera3D(cam, state, input, dtSeconds, aspect = 256 / 224) {
     const player = state.player;
@@ -1104,8 +1449,7 @@
     }
     const py = getPlayerElevation(state);
     const isOutdoor = state.currentLevelId === "level-outside";
-    const baseDist = isOutdoor ? state.isOnRoof ? 44 : 52 : 38;
-    cam.distance = baseDist;
+    const maxCameraDistance = isOutdoor ? state.isOnRoof ? 44 : 52 : 38;
     const targetHeightOffset = isOutdoor ? 13.5 : 12.5;
     cam.target = {
       x: px,
@@ -1117,23 +1461,18 @@
     const backX = -Math.cos(cam.yaw) * cosPitch;
     const backZ = -Math.sin(cam.yaw) * cosPitch;
     const backY = sinPitch;
-    let actualDist = cam.distance;
-    if (!isOutdoor && cam.pitch < 0.52) {
-      const steps = 12;
-      for (let i = 1; i <= steps; i++) {
-        const testD = cam.distance * i / steps;
-        const tx = cam.target.x + backX * testD;
-        const tz = cam.target.z + backZ * testD;
-        const ty = cam.target.y + backY * testD;
-        if (ty < INDOOR_WALL_HEIGHT + 3 && isWallTileAt(state.map, tx, tz)) {
-          actualDist = Math.max(16, testD - 4);
-          break;
-        }
-      }
-    }
-    let eyeX = cam.target.x + backX * actualDist;
-    let eyeY = cam.target.y + backY * actualDist;
-    let eyeZ = cam.target.z + backZ * actualDist;
+    const effectiveDistance = state.isOnRoof || state.climbing ? maxCameraDistance : computeUnobstructedCameraDistance(
+      cam.target.x,
+      cam.target.z,
+      cam.yaw,
+      cam.pitch,
+      maxCameraDistance,
+      state.map
+    );
+    cam.distance = effectiveDistance;
+    let eyeX = cam.target.x + backX * effectiveDistance;
+    let eyeY = cam.target.y + backY * effectiveDistance;
+    let eyeZ = cam.target.z + backZ * effectiveDistance;
     if (isOutdoor) {
       const groundAtEye = getTerrainHeight(eyeX, eyeZ, "level-outside");
       if (eyeY < groundAtEye + 8) {
@@ -1144,169 +1483,6 @@
     cam.viewMatrix = mat4LookAt(cam.eye, cam.target, cam.up);
     cam.projMatrix = mat4Perspective(cam.fovY, aspect, cam.near, cam.far);
     cam.viewProjMatrix = mat4Multiply(cam.projMatrix, cam.viewMatrix);
-  }
-
-  // src/entities/player.ts
-  var FOOTPRINT_DURATION_SECONDS = 3;
-  var FOOTPRINT_STEP_INTERVAL_SECONDS = 0.14;
-  function createPlayer(x, y) {
-    return {
-      x,
-      y,
-      width: 12,
-      height: 12,
-      speed: 75,
-      // pixels per second
-      facing: "up",
-      yaw: -Math.PI / 2,
-      isMoving: false,
-      walkTimer: 0,
-      blinkTimer: 0,
-      footprintSpawnTimer: 0,
-      nextFootprintFoot: "left",
-      states: /* @__PURE__ */ new Map()
-    };
-  }
-  function rectsIntersect(a, b) {
-    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
-  }
-  function isPlayerOnSnowTile(player, map) {
-    const footCenterX = player.x + player.width / 2;
-    const footCenterY = player.y + player.height - 2;
-    const col = Math.floor(footCenterX / map.tileSize);
-    const row = Math.floor(footCenterY / map.tileSize);
-    if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
-      return false;
-    }
-    return map.tiles[row][col] === 0 /* Snow */;
-  }
-  function updateFootprints(footprints, player, map, dtSeconds) {
-    for (let i = footprints.length - 1; i >= 0; i--) {
-      footprints[i].age += dtSeconds;
-      if (footprints[i].age >= footprints[i].maxAge) {
-        footprints.splice(i, 1);
-      }
-    }
-    if (player.isMoving && isPlayerOnSnowTile(player, map)) {
-      player.footprintSpawnTimer -= dtSeconds;
-      while (player.footprintSpawnTimer <= 0) {
-        const foot = player.nextFootprintFoot;
-        const baseX = player.x + player.width / 2;
-        const baseY = player.y + player.height - 1;
-        const isVertical = player.facing === "up" || player.facing === "down";
-        const fx = isVertical ? baseX + (foot === "left" ? -3 : 1) : baseX - 1;
-        const fy = isVertical ? baseY - 1 : baseY + (foot === "left" ? -2 : 1);
-        footprints.push({
-          x: Math.round(fx),
-          y: Math.round(fy),
-          age: 0,
-          maxAge: FOOTPRINT_DURATION_SECONDS,
-          foot,
-          facing: player.facing
-        });
-        player.nextFootprintFoot = foot === "left" ? "right" : "left";
-        player.footprintSpawnTimer += FOOTPRINT_STEP_INTERVAL_SECONDS;
-      }
-    } else {
-      player.footprintSpawnTimer = 0;
-    }
-  }
-  function updatePlayer(player, input, dtSeconds, map, solidObstacles = []) {
-    if (player.blinkTimer > 0) {
-      player.blinkTimer = Math.max(0, player.blinkTimer - dtSeconds);
-    }
-    let dx = 0;
-    let dy = 0;
-    if (input.moveVector) {
-      dx = input.moveVector.x;
-      dy = input.moveVector.y;
-    } else if (typeof input.cameraYaw === "number") {
-      const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
-      const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-      const rawLen = Math.hypot(forward, strafe);
-      if (rawLen > 0) {
-        const nf = forward / rawLen;
-        const ns = strafe / rawLen;
-        const cosY = Math.cos(input.cameraYaw);
-        const sinY = Math.sin(input.cameraYaw);
-        dx = nf * cosY - ns * sinY;
-        dy = nf * sinY + ns * cosY;
-      }
-    } else {
-      if (input.left) dx -= 1;
-      if (input.right) dx += 1;
-      if (input.up) dy -= 1;
-      if (input.down) dy += 1;
-      const length2 = Math.hypot(dx, dy);
-      if (length2 > 0) {
-        dx /= length2;
-        dy /= length2;
-      }
-    }
-    const length = Math.hypot(dx, dy);
-    if (length < 1e-3) {
-      player.isMoving = false;
-      player.walkTimer = 0;
-      return;
-    }
-    player.isMoving = true;
-    player.walkTimer += dtSeconds;
-    player.yaw = Math.atan2(dy, dx);
-    if (Math.abs(dy) > Math.abs(dx)) {
-      player.facing = dy < 0 ? "up" : "down";
-    } else if (Math.abs(dx) > 0) {
-      player.facing = dx < 0 ? "left" : "right";
-    }
-    const moveX = dx * player.speed * dtSeconds;
-    const moveY = dy * player.speed * dtSeconds;
-    const collidesAt = (testX, testY) => {
-      if (isRectCollidingWithMap(map, testX, testY, player.width, player.height)) {
-        return true;
-      }
-      const testRect = {
-        x: testX,
-        y: testY,
-        width: player.width,
-        height: player.height
-      };
-      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
-    };
-    const nextX = player.x + moveX;
-    const xBlocked = collidesAt(nextX, player.y);
-    if (!xBlocked) {
-      player.x = nextX;
-    }
-    const nextY = player.y + moveY;
-    const yBlocked = collidesAt(player.x, nextY);
-    if (!yBlocked) {
-      player.y = nextY;
-    }
-    if (xBlocked && Math.abs(moveY) < 0.01) {
-      const slideStep = player.speed * dtSeconds * 0.75;
-      for (let offset = 1; offset <= 4; offset++) {
-        if (!collidesAt(nextX, player.y - offset) && !collidesAt(player.x, player.y - slideStep)) {
-          player.y = Math.max(0, player.y - slideStep);
-          break;
-        }
-        if (!collidesAt(nextX, player.y + offset) && !collidesAt(player.x, player.y + slideStep)) {
-          player.y = player.y + slideStep;
-          break;
-        }
-      }
-    }
-    if (yBlocked && Math.abs(moveX) < 0.01) {
-      const slideStep = player.speed * dtSeconds * 0.75;
-      for (let offset = 1; offset <= 4; offset++) {
-        if (!collidesAt(player.x - offset, nextY) && !collidesAt(player.x - slideStep, player.y)) {
-          player.x = Math.max(0, player.x - slideStep);
-          break;
-        }
-        if (!collidesAt(player.x + offset, nextY) && !collidesAt(player.x + slideStep, player.y)) {
-          player.x = player.x + slideStep;
-          break;
-        }
-      }
-    }
   }
 
   // src/entities/cat.ts
@@ -1462,161 +1638,6 @@
       }
     }
   }
-
-  // src/entities/sight.ts
-  var DEFAULT_CONE_OF_SIGHT_DISTANCE = 7.5 * TILE_SIZE;
-  var DEFAULT_CONE_OF_SIGHT_FOV = 45 * Math.PI / 180;
-  var LineOfSight = class {
-    constructor(position, direction, distance, map) {
-      __publicField(this, "position");
-      __publicField(this, "direction");
-      __publicField(this, "distance");
-      __publicField(this, "map");
-      __publicField(this, "boxes", []);
-      __publicField(this, "callbacks", []);
-      this.position = { ...position };
-      this.direction = direction;
-      this.distance = distance;
-      this.map = map;
-      this.recomputeBoxes();
-    }
-    /**
-     * Number of bounding boxes that were spawned (getter `n`).
-     */
-    get n() {
-      return this.boxes.length;
-    }
-    /**
-     * Returns the point (center of the box) of the i-th box.
-     */
-    points(i) {
-      if (i < 0 || i >= this.boxes.length) {
-        return { ...this.position };
-      }
-      const b = this.boxes[i];
-      return {
-        x: b.x + b.width / 2,
-        y: b.y + b.height / 2
-      };
-    }
-    onDetection(cb) {
-      this.callbacks.push(cb);
-      return () => {
-        const idx = this.callbacks.indexOf(cb);
-        if (idx !== -1) {
-          this.callbacks.splice(idx, 1);
-        }
-      };
-    }
-    recomputeBoxes() {
-      this.boxes = [];
-      const dirX = Math.cos(this.direction);
-      const dirY = Math.sin(this.direction);
-      const distanceVector = {
-        x: dirX * this.distance,
-        y: dirY * this.distance
-      };
-      for (let i = 0; i < 10; i++) {
-        const px = this.position.x + distanceVector.x / 10 * i;
-        const py = this.position.y + distanceVector.y / 10 * i;
-        const box = {
-          x: px,
-          y: py,
-          width: 4,
-          height: 4
-        };
-        this.boxes.push(box);
-        if (this.map && isRectCollidingWithMap(this.map, box.x, box.y, box.width, box.height)) {
-          break;
-        }
-      }
-    }
-    checkDetection(player) {
-      for (const box of this.boxes) {
-        if (rectsIntersect(player, box)) {
-          for (const cb of this.callbacks) {
-            cb(player);
-          }
-          return true;
-        }
-      }
-      return false;
-    }
-  };
-  var _ConeOfSight = class _ConeOfSight {
-    constructor(position, direction, distance = DEFAULT_CONE_OF_SIGHT_DISTANCE, fovOrMap = DEFAULT_CONE_OF_SIGHT_FOV, mapOrFov) {
-      __publicField(this, "position");
-      __publicField(this, "direction");
-      __publicField(this, "distance");
-      __publicField(this, "fieldOfView");
-      __publicField(this, "map");
-      __publicField(this, "lines", []);
-      __publicField(this, "sightPolygon", []);
-      __publicField(this, "callbacks", []);
-      this.position = { ...position };
-      this.direction = direction;
-      this.distance = distance;
-      if (typeof fovOrMap === "number") {
-        this.fieldOfView = fovOrMap;
-        this.map = typeof mapOrFov === "object" ? mapOrFov : void 0;
-      } else {
-        this.map = fovOrMap;
-        this.fieldOfView = typeof mapOrFov === "number" ? mapOrFov : DEFAULT_CONE_OF_SIGHT_FOV;
-      }
-      this.recomputeLines();
-    }
-    onDetection(cb) {
-      this.callbacks.push(cb);
-      return () => {
-        const idx = this.callbacks.indexOf(cb);
-        if (idx !== -1) {
-          this.callbacks.splice(idx, 1);
-        }
-      };
-    }
-    recomputeLines() {
-      const angles = [
-        this.direction - this.fieldOfView / 2,
-        this.direction - this.fieldOfView / 4,
-        this.direction,
-        this.direction + this.fieldOfView / 4,
-        this.direction + this.fieldOfView / 2
-      ];
-      this.lines = angles.map(
-        (ang) => new LineOfSight(this.position, ang, this.distance, this.map)
-      );
-      this.sightPolygon = [
-        { ...this.position },
-        ...this.lines.map((line) => line.points(line.n - 1))
-      ];
-    }
-    getAllBoxes() {
-      const all = [];
-      for (const line of this.lines) {
-        all.push(...line.boxes);
-      }
-      return all;
-    }
-    checkDetection(player) {
-      if (_ConeOfSight.cheatMode) {
-        return false;
-      }
-      let detected = false;
-      for (const line of this.lines) {
-        if (line.checkDetection(player)) {
-          detected = true;
-        }
-      }
-      if (detected) {
-        for (const cb of this.callbacks) {
-          cb(player);
-        }
-      }
-      return detected;
-    }
-  };
-  __publicField(_ConeOfSight, "cheatMode", false);
-  var ConeOfSight = _ConeOfSight;
 
   // src/world/levels/levelUpstairs.ts
   var V = 20 /* VoidBlack */;

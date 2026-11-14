@@ -1,13 +1,14 @@
 import { InputState } from '../core/input';
 import { Direction } from '../entities/player';
+import { LineOfSight } from '../entities/sight';
 import { GameState } from '../world/gameState';
 import { LevelId } from '../world/levels/types';
 import {
+  isRectCollidingWithMap,
   LADDER_BOTTOM_Y,
   ROOF_WALK_Y,
   TILE_SIZE,
   TileMap,
-  TileType,
 } from '../world/tilemap';
 
 export interface Vec3 {
@@ -411,17 +412,66 @@ export function createCamera3D(initialYaw: number = -Math.PI / 2): Camera3D {
   };
 }
 
-function isWallTileAt(map: TileMap, worldX: number, worldZ: number): boolean {
-  const col = Math.floor(worldX / map.tileSize);
-  const row = Math.floor(worldZ / map.tileSize);
-  if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) return false;
-  const t = map.tiles[row][col];
-  return t === TileType.InteriorWall || t === TileType.VoidBlack;
+/**
+ * Casts a temporary LineOfSight behind the player (opposite the camera yaw) and returns
+ * the furthest unobstructed camera distance in [0, maxDistance] before colliding with the map.
+ * The LineOfSight instance is immediately discarded after computing the distance.
+ */
+export function computeUnobstructedCameraDistance(
+  originX: number,
+  originZ: number,
+  cameraYaw: number,
+  cameraPitch: number,
+  maxDistance: number,
+  map: TileMap
+): number {
+  const oppositeYaw = cameraYaw + Math.PI;
+  const cosPitch = Math.max(0.2, Math.cos(cameraPitch));
+  const horizontalMaxDistance = maxDistance * cosPitch;
+  // LineOfSight samples 10 boxes at i = 0..9 (up to 0.9 * distance), so scale by 10/9
+  // so an unobstructed line reaches the full horizontalMaxDistance.
+  const lineOfSightDistance = (horizontalMaxDistance * 10) / 9;
+
+  let lineOfSight: LineOfSight | null = new LineOfSight(
+    { x: originX, y: originZ },
+    oppositeYaw,
+    lineOfSightDistance,
+    map
+  );
+
+  // Find the n-th point within the line of sight that is furthest from the player
+  // without colliding with anything on the map.
+  let furthestValidIndex = -1;
+  for (let i = lineOfSight.n - 1; i >= 0; i--) {
+    const box = lineOfSight.boxes[i];
+    if (!isRectCollidingWithMap(map, box.x, box.y, box.width, box.height)) {
+      furthestValidIndex = i;
+      break;
+    }
+  }
+
+  let unobstructedDistance = 0;
+  if (furthestValidIndex >= 0) {
+    const furthestPoint = lineOfSight.points(furthestValidIndex);
+    const horizontalDist = Math.hypot(
+      furthestPoint.x - originX,
+      furthestPoint.y - originZ
+    );
+    unobstructedDistance = Math.min(
+      maxDistance,
+      Math.max(0, horizontalDist / cosPitch)
+    );
+  }
+
+  // Delete the temporary LineOfSight object as soon as the computation is done
+  lineOfSight = null;
+
+  return unobstructedDistance;
 }
 
 /**
  * Updates the 3D camera so it smoothly follows behind Santa's back, respecting mouse look
- * and sloped terrain / indoor room boundaries.
+ * and sloped terrain / map obstacles.
  */
 export function updateCamera3D(
   cam: Camera3D,
@@ -509,8 +559,7 @@ export function updateCamera3D(
   const py = getPlayerElevation(state);
 
   const isOutdoor = state.currentLevelId === 'level-outside';
-  const baseDist = isOutdoor ? (state.isOnRoof ? 44 : 52) : 38;
-  cam.distance = baseDist;
+  const maxCameraDistance = isOutdoor ? (state.isOnRoof ? 44 : 52) : 38;
 
   // Look target is slightly above Santa's head/shoulders so Santa is framed in the lower-middle third
   const targetHeightOffset = isOutdoor ? 13.5 : 12.5;
@@ -527,27 +576,24 @@ export function updateCamera3D(
   const backZ = -Math.sin(cam.yaw) * cosPitch;
   const backY = sinPitch;
 
-  let actualDist = cam.distance;
+  // Compute unobstructed camera distance in [0, maxCameraDistance] using a temporary LineOfSight.
+  // Skip when on the roof or climbing the ladder since roof/house tiles beneath Santa are solid in the 2D map.
+  const effectiveDistance =
+    state.isOnRoof || state.climbing
+      ? maxCameraDistance
+      : computeUnobstructedCameraDistance(
+          cam.target.x,
+          cam.target.z,
+          cam.yaw,
+          cam.pitch,
+          maxCameraDistance,
+          state.map
+        );
+  cam.distance = effectiveDistance;
 
-  // Indoors, raymarch backward from Santa to avoid placing the camera inside or behind a wall
-  // unless pitch is high enough to look over the cutaway wall
-  if (!isOutdoor && cam.pitch < 0.52) {
-    const steps = 12;
-    for (let i = 1; i <= steps; i++) {
-      const testD = (cam.distance * i) / steps;
-      const tx = cam.target.x + backX * testD;
-      const tz = cam.target.z + backZ * testD;
-      const ty = cam.target.y + backY * testD;
-      if (ty < INDOOR_WALL_HEIGHT + 3 && isWallTileAt(state.map, tx, tz)) {
-        actualDist = Math.max(16, testD - 4);
-        break;
-      }
-    }
-  }
-
-  let eyeX = cam.target.x + backX * actualDist;
-  let eyeY = cam.target.y + backY * actualDist;
-  let eyeZ = cam.target.z + backZ * actualDist;
+  let eyeX = cam.target.x + backX * effectiveDistance;
+  let eyeY = cam.target.y + backY * effectiveDistance;
+  let eyeZ = cam.target.z + backZ * effectiveDistance;
 
   // Ensure camera stays above the sloped outdoor ground
   if (isOutdoor) {

@@ -29,11 +29,10 @@ import {
   UPSTAIRS_DIANA_PRESENT_BOUNDS,
   UPSTAIRS_SIMON_PRESENT_BOUNDS,
 } from '../world/levels/levelUpstairs';
-import { CollidableDoor, LevelId } from '../world/levels/types';
+import { CollidableDoor, LevelId, OpenedDoorAnimation } from '../world/levels/types';
 import {
   DAMAGED_WIRE_HAZARD,
   GROUND_LADDER_BOUNDS,
-  LADDER_BOTTOM_Y,
   LADDER_CLIMB_X,
   ROOF_CHIMNEY_BOUNDS,
   ROOF_WALK_Y,
@@ -43,6 +42,7 @@ import {
 } from '../world/tilemap';
 import {
   directionToYaw,
+  getMainHouseRoofElevation,
   getPlayerElevation,
   getTerrainHeight,
   getTerrainNormal,
@@ -880,20 +880,17 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
       true
     );
 
-    // Roof walk boardwalk along z = ROOF_WALK_Y + 6 (72) from col 4 to col 8
-    const roofWalkY = baseY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
-    mb.addBeveledBox(96, roofWalkY - 1.5, ROOF_WALK_Y + 6, 76, 2.2, 14, 0.5, rgb(242, 248, 255), TexId.SNOW, 0.5);
-
     // High-Fi Red Brick Chimney on the roof at ROOF_CHIMNEY_BOUNDS (x: 120..136, z: 58..76)
+    const roofWalkY = baseY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
     const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
     const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
-    mb.addBox(chimX, roofWalkY - 4, chimZ, 16, 17, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.8);
+    mb.addBox(chimX, roofWalkY, chimZ, 16, 17, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.8);
     // Corbeled brick chimney crown
-    mb.addBeveledBox(chimX, roofWalkY + 12.5, chimZ, 18.5, 2.8, 18.5, 0.6, rgb(245, 250, 255), TexId.SNOW, 0.55);
-    mb.addBox(chimX, roofWalkY + 14.8, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
+    mb.addBeveledBox(chimX, roofWalkY + 17.0, chimZ, 18.5, 2.8, 18.5, 0.6, rgb(245, 250, 255), TexId.SNOW, 0.55);
+    mb.addBox(chimX, roofWalkY + 19.3, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
     // Dual terracotta chimney flue pots
-    mb.addCylinder(chimX - 3, roofWalkY + 14.8, chimZ, 2.0, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
-    mb.addCylinder(chimX + 3, roofWalkY + 14.8, chimZ, 2.0, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+    mb.addCylinder(chimX - 3, roofWalkY + 19.3, chimZ, 2.0, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+    mb.addCylinder(chimX + 3, roofWalkY + 19.3, chimZ, 2.0, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
 
     // Shuttered Glowing Windows on South wall (cols 5..6 and 14..15, two stories)
     const greenShutter = rgb(44, 108, 68);
@@ -1090,6 +1087,8 @@ interface IndoorWallOptions {
   wallOverrides?: Map<string, WallOverrideKind>;
   /** Floor coordinates that act as doorway openings and should have a 3D frame + upper header built above them. */
   openableDoorCoords?: ReadonlyArray<readonly [number, number]>;
+  /** Optional floor rectangle (e.g. descending stairwell opening) where flat y=0 floor tiles are omitted. */
+  skipFloorRect?: { minCol: number; maxCol: number; minRow: number; maxRow: number };
 }
 
 function tileKey(col: number, row: number): string {
@@ -1363,6 +1362,16 @@ function addIndoorTilesAndWalls(
           addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback);
         }
       } else {
+        const skipFloor = options?.skipFloorRect;
+        if (
+          skipFloor &&
+          c >= skipFloor.minCol &&
+          c <= skipFloor.maxCol &&
+          r >= skipFloor.minRow &&
+          r <= skipFloor.maxRow
+        ) {
+          continue;
+        }
         let floorColor = rgb(198, 146, 92);
         let floorTex: number = TexId.WOOD_FLOOR;
 
@@ -1534,11 +1543,88 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
     }
   }
 
-  // 7. Hallway Coat Rack with Hanging Coat, Scarf & Top Hat (col 14, rows 17..18)
-  mb.addShadowDisc(14.5 * ts, 0, 18 * ts, 5, 5, 0.28);
-  mb.addCylinder(14.5 * ts, 0, 18 * ts, 4.0, 0.9, 15.5, 10, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.6);
-  mb.addSphere(14.5 * ts, 10.8, 18 * ts, 3.6, 4.4, 3.6, 8, 10, rgb(186, 48, 48), TexId.FABRIC, 0.55);
-  mb.addCylinder(14.5 * ts, 15.2, 18 * ts, 2.4, 2.6, 2.8, 10, rgb(34, 36, 44), TexId.SOLID, 0.5);
+  // 7. Hallway Coat Rack with Wall Hook Rail, Coat Hangers, Tailored Winter Coats & Freestanding Coat Tree (col 14, rows 17..18)
+  {
+    const rackX = 14.08 * ts;
+    const rackZ = 18.0 * ts;
+    const wood = rgb(118, 72, 38);
+    const chrome = rgb(214, 222, 234);
+
+    // Wall-mounted oak backboard & upper hat shelf along west wall
+    mb.addBeveledBox(rackX + 0.5, 19.2, rackZ, 1.4, 2.4, 26, 0.25, wood, TexId.WOOD_GRAIN, 0.5);
+    mb.addBeveledBox(rackX + 2.2, 21.6, rackZ, 4.6, 0.9, 26, 0.25, wood, TexId.WOOD_GRAIN, 0.45);
+    // Wrought-iron brackets under the shelf
+    for (const bz of [rackZ - 9.5, rackZ + 9.5]) {
+      mb.addOrientedBox(rackX + 1.8, 20.1, bz, 3.2, 0.7, 0.7, 0, -0.7, rgb(48, 52, 62), TexId.SOLID, 0.3);
+    }
+
+    // Triangular coat hangers + brass peg hooks + hanging winter coats along the rail
+    const coatConfigs: Array<{ z: number; coat: Color4 | null; accent: Color4 }> = [
+      { z: rackZ - 7.8, coat: rgb(182, 44, 46), accent: rgb(238, 232, 222) },
+      { z: rackZ, coat: rgb(42, 68, 114), accent: rgb(196, 172, 118) },
+      { z: rackZ + 7.8, coat: null, accent: wood }, // empty visible triangular hanger
+    ];
+
+    for (const cfg of coatConfigs) {
+      // Wall peg & hanger wire hook
+      mb.addCylinder(rackX + 1.4, 19.6, cfg.z, 0.35, 0.45, 1.4, 8, chrome, TexId.SOLID, 0.3);
+      mb.addTorus(rackX + 2.4, 18.9, cfg.z, 0.65, 0.18, 8, 6, 'x', chrome, TexId.SOLID, 0.25);
+
+      // Triangular wooden coat hanger frame (top shoulder bars + horizontal trouser bar)
+      mb.addOrientedBox(rackX + 2.5, 17.5, cfg.z - 1.6, 0.55, 0.65, 3.8, Math.PI * 0.5, 0.42, wood, TexId.WOOD_GRAIN, 0.35);
+      mb.addOrientedBox(rackX + 2.5, 17.5, cfg.z + 1.6, 0.55, 0.65, 3.8, Math.PI * 0.5, -0.42, wood, TexId.WOOD_GRAIN, 0.35);
+      mb.addBox(rackX + 2.5, 16.5, cfg.z, 0.5, 0.5, 6.2, wood, TexId.WOOD_GRAIN, 0.3);
+
+      if (cfg.coat) {
+        // Hung coat torso with flared skirt, sleeves & contrasting collar lapels
+        mb.addBeveledBox(rackX + 2.7, 8.2, cfg.z, 2.2, 9.2, 5.2, 0.45, cfg.coat, TexId.FABRIC, 0.55);
+        mb.addOrientedBox(rackX + 2.7, 12.2, cfg.z - 2.6, 1.5, 6.8, 1.5, Math.PI * 0.5, 0.14, cfg.coat, TexId.FABRIC, 0.45);
+        mb.addOrientedBox(rackX + 2.7, 12.2, cfg.z + 2.6, 1.5, 6.8, 1.5, Math.PI * 0.5, -0.14, cfg.coat, TexId.FABRIC, 0.45);
+        mb.addBox(rackX + 3.7, 15.6, cfg.z, 0.5, 2.2, 2.4, cfg.accent, TexId.FABRIC, 0.3);
+      }
+    }
+
+    // Classic freestanding bentwood coat tree stand at north end of tile with tripod base, hooks & hat
+    const tx = 14.55 * ts;
+    const tz = 17.28 * ts;
+    mb.addShadowDisc(tx, 0, tz, 4.2, 4.2, 0.26);
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2 + Math.PI / 4;
+      mb.addOrientedBox(
+        tx + Math.cos(a) * 1.9,
+        1.2,
+        tz + Math.sin(a) * 1.9,
+        3.6,
+        1.1,
+        0.95,
+        a,
+        0.48,
+        wood,
+        TexId.WOOD_GRAIN,
+        0.45
+      );
+      // Curved upper branch hooks
+      mb.addOrientedBox(
+        tx + Math.cos(a) * 1.5,
+        17.8,
+        tz + Math.sin(a) * 1.5,
+        2.8,
+        0.65,
+        0.65,
+        a,
+        -0.55,
+        wood,
+        TexId.WOOD_GRAIN,
+        0.35
+      );
+      mb.addSphere(tx + Math.cos(a) * 2.7, 18.8, tz + Math.sin(a) * 2.7, 0.45, 0.45, 0.45, 6, 6, chrome, TexId.SOLID, 0.25);
+    }
+    mb.addCylinder(tx, 1.2, tz, 0.95, 0.65, 17.8, 10, wood, TexId.WOOD_GRAIN, 0.55);
+    // Dark wool fedora hat perched on top finial of coat stand
+    mb.addCylinder(tx, 19.2, tz, 3.1, 3.1, 0.45, 12, rgb(38, 40, 48), TexId.FABRIC, 0.45);
+    mb.addCylinder(tx, 19.65, tz, 1.95, 1.7, 2.1, 12, rgb(44, 46, 56), TexId.FABRIC, 0.45);
+    mb.addCylinder(tx, 19.75, tz, 2.02, 2.02, 0.5, 12, rgb(168, 42, 44), TexId.SOLID, 0.25);
+  }
 
   // 8. Locked Double Doors recessed cleanly inside wall openings (cols 15..16, row 12 & row 20)
   addLockedDoubleDoor3D(mb, 16 * ts, 12.5 * ts, ts);
@@ -1608,6 +1694,8 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
       [21, 13], // Office door
       [11, 15], // Table Room door
     ],
+    // Leave stairwell steps (cols 15..18, rows 14..17) open below y=0 so descending stairs are clearly visible
+    skipFloorRect: { minCol: 15, maxCol: 18, minRow: 14, maxRow: 17 },
   });
 
   // Aesthetic Coffered Ceiling + Rafters + Chandeliers (leave stairwell at cols 15..18, rows 14..18 open)
@@ -1780,12 +1868,58 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
   mb.addCylinder(19.5 * ts, 0, 8.5 * ts, 3.8, 4.8, 5.4, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
   mb.addTorus(19.5 * ts, 5.4, 8.5 * ts, 3.8, 1.0, 12, 8, 'y', rgb(252, 254, 255), TexId.SOLID, 0.45);
 
-  // 8. Upstairs Stairwell Guardrail along west side (cols 15..18, rows 13..18)
-  for (let rowOff = 0; rowOff < 6; rowOff++) {
-    const postZ = 14.3 * ts + rowOff * 9;
-    mb.addCylinder(15.2 * ts, 0, postZ, 0.55, 0.55, 6.8, 8, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.35);
+  // 8. Upstairs Staircase Descending to Basement (cols 15..18, rows 14..17) + Guardrails
+  {
+    const stairX0 = 15 * ts;
+    const stairX1 = 19 * ts;
+    const stairCx = (stairX0 + stairX1) * 0.5;
+    const stairW = stairX1 - stairX0;
+    const stairZ0 = 14 * ts;
+    const stairZ1 = 18 * ts;
+    const numSteps = 12;
+    const stepD = (stairZ1 - stairZ0) / numSteps;
+    const stepDrop = 1.65;
+    const stairWellDepth = numSteps * stepDrop + 4;
+
+    // Recessed stairwell lining walls descending below y=0 so there is no gap into the void
+    mb.addBox(stairX0 + 0.4, -stairWellDepth, (stairZ0 + stairZ1) * 0.5, 0.8, stairWellDepth, stairZ1 - stairZ0, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.4);
+    mb.addBox(stairX1 - 0.4, -stairWellDepth, (stairZ0 + stairZ1) * 0.5, 0.8, stairWellDepth, stairZ1 - stairZ0, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.4);
+    mb.addBox(stairCx, -stairWellDepth, stairZ1 - 0.4, stairW, stairWellDepth, 0.8, rgb(186, 178, 166), TexId.INTERIOR_WALL, 0.4);
+
+    // 12 Descending Wooden Steps + Risers (top at north z = 14*ts, descending southward to z = 18*ts)
+    for (let s = 0; s < numSteps; s++) {
+      const treadTopY = -(s + 1) * stepDrop;
+      const treadCz = stairZ0 + (s + 0.5) * stepD;
+      // Cream riser + projecting warm oak stair tread
+      mb.addBox(stairCx, -stairWellDepth, treadCz, stairW - 1.2, Math.max(0.5, treadTopY + stairWellDepth - 0.8), stepD + 0.2, rgb(236, 228, 214), TexId.WOOD_GRAIN, 0.35);
+      mb.addBeveledBox(stairCx, treadTopY - 1.0, treadCz, stairW - 1.0, 1.0, stepD + 0.6, 0.2, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.5);
+    }
+
+    // Sloped Stairwell Handrails & Newel Posts on West & East edges leading downward
+    for (const sideX of [15.2 * ts, 18.8 * ts]) {
+      mb.addCylinder(sideX, 0, stairZ0, 0.75, 0.75, 7.6, 8, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.4);
+      mb.addSphere(sideX, 7.8, stairZ0, 0.95, 0.95, 0.95, 6, 8, rgb(134, 82, 44), TexId.WOOD_GRAIN, 0.3);
+      for (let p = 1; p <= 5; p++) {
+        const pt = p / 5;
+        const postZ = stairZ0 + pt * (stairZ1 - stairZ0 - 4);
+        const stepY = -pt * numSteps * stepDrop;
+        mb.addCylinder(sideX, stepY, postZ, 0.45, 0.45, 7.0, 8, rgb(242, 238, 230), TexId.SOLID, 0.3);
+      }
+      mb.addOrientedBox(
+        sideX,
+        7.0 - (numSteps * stepDrop) * 0.5,
+        (stairZ0 + stairZ1 - 4) * 0.5,
+        3.95 * ts,
+        1.0,
+        1.2,
+        Math.PI * 0.5,
+        -0.31,
+        rgb(134, 82, 44),
+        TexId.WOOD_GRAIN,
+        0.45
+      );
+    }
   }
-  mb.addBeveledBox(15.2 * ts, 6.8, 16 * ts, 1.4, 1.1, 3.2 * ts, 0.25, rgb(134, 82, 44), TexId.WOOD_GRAIN, 0.45);
 
   // 9. Bedroom Carved Sleigh Double Bed with Duvet & Pillows (cols 26..27, rows 6..7 => x: 432, z: 112)
   {
@@ -1884,10 +2018,11 @@ export function addHumanoid3D(
   style: CharacterColors3D,
   isSanta = false,
   carryingLadder = false,
-  translucentMb?: MeshBuilder
+  translucentMb?: MeshBuilder,
+  shadowGroundY: number = baseY
 ): void {
   if (translucentMb) {
-    translucentMb.addShadowDisc(cx, baseY, cz, 5.6, 5.6, 0.36);
+    translucentMb.addShadowDisc(cx, shadowGroundY, cz, 5.6, 5.6, 0.36);
   }
 
   const cyaw = Math.cos(yaw);
@@ -2095,7 +2230,7 @@ function addDog3D(
   const baseY = getTerrainHeight(cx, cz, 'level-outside');
   translucentMb.addShadowDisc(cx, baseY, cz, 5.8, 4.4, 0.35);
 
-  const yaw = directionToYaw(dog.facing);
+  const yaw = typeof dog.yaw === 'number' ? dog.yaw : directionToYaw(dog.facing);
   const cyaw = Math.cos(yaw);
   const syaw = Math.sin(yaw);
   const fx = cyaw;
@@ -2179,20 +2314,57 @@ function addCat3D(mb: MeshBuilder, translucentMb: MeshBuilder, cat: Cat, elapsed
   const cz = cat.y + cat.height * 0.5;
   translucentMb.addShadowDisc(cx, 0, cz, 4.4, 4.4, 0.32);
 
+  const speed = Math.hypot(cat.vx, cat.vy);
+  const isRunning = cat.mode === 'flee' || speed > 1.5;
+  const yaw =
+    typeof cat.yaw === 'number'
+      ? cat.yaw
+      : speed > 0.5
+        ? Math.atan2(cat.vy, cat.vx)
+        : Math.PI / 2;
+  const fx = Math.cos(yaw);
+  const fz = Math.sin(yaw);
+  const rx = -fz;
+  const rz = fx;
+
   const catBlack = rgb(28, 30, 40);
-  // Lithe seated feline body & white front paws
-  mb.addCylinder(cx, 0, cz, 3.0, 2.2, 5.2, 12, catBlack, TexId.SOLID, 0.65);
-  mb.addSphere(cx - 1.1, 0.55, cz + 2.4, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
-  mb.addSphere(cx + 1.1, 0.55, cz + 2.4, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
-  // Sculpted Cat Head + Pointed Ears + Pink Inner Ears + Glowing Emerald Eyes
-  mb.addSphere(cx, 6.6, cz + 1.0, 2.6, 2.4, 2.6, 10, 12, catBlack, TexId.SOLID, 0.65);
-  mb.addCone(cx - 1.55, 8.2, cz + 1.0, 0.95, 2.3, 8, catBlack, TexId.SOLID, 0.5);
-  mb.addCone(cx + 1.55, 8.2, cz + 1.0, 0.95, 2.3, 8, catBlack, TexId.SOLID, 0.5);
-  mb.addSphere(cx - 0.95, 6.85, cz + 3.25, 0.52, 0.58, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
-  mb.addSphere(cx + 0.95, 6.85, cz + 3.25, 0.52, 0.58, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
-  // S-curved swishing tail
+  const runStride = isRunning ? Math.sin(elapsedTime * 18) * 1.4 : 0;
+
+  if (isRunning) {
+    // Sleek stretched running body & animated legs oriented along running direction
+    mb.addOrientedBox(cx, 3.0, cz, 5.4, 2.8, 3.2, yaw, 0, catBlack, TexId.SOLID, 0.65);
+    for (const [fSign, rSign] of [
+      [1, 1],
+      [1, -1],
+      [-1, 1],
+      [-1, -1],
+    ] as const) {
+      const lx = cx + fx * (fSign * 2.1 + fSign * runStride * 0.65) + rx * rSign * 1.1;
+      const lz = cz + fz * (fSign * 2.1 + fSign * runStride * 0.65) + rz * rSign * 1.1;
+      mb.addCylinder(lx, 0, lz, 0.55, 0.55, 2.6, 8, catBlack, TexId.SOLID, 0.4);
+      mb.addSphere(lx + fx * 0.25, 0.35, lz + fz * 0.25, 0.65, 0.45, 0.75, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.25);
+    }
+  } else {
+    // Lithe seated feline body & white front paws oriented along yaw
+    mb.addCylinder(cx, 0, cz, 2.8, 2.1, 5.0, 12, catBlack, TexId.SOLID, 0.65);
+    mb.addSphere(cx + fx * 2.3 + rx * 1.05, 0.55, cz + fz * 2.3 + rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+    mb.addSphere(cx + fx * 2.3 - rx * 1.05, 0.55, cz + fz * 2.3 - rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+  }
+
+  // Sculpted Cat Head + Pointed Ears + Glowing Emerald Eyes facing `yaw`
+  const headDist = isRunning ? 3.2 : 1.0;
+  const headY = isRunning ? 5.2 : 6.6;
+  const hx = cx + fx * headDist;
+  const hz = cz + fz * headDist;
+  mb.addSphere(hx, headY, hz, 2.5, 2.3, 2.5, 10, 12, catBlack, TexId.SOLID, 0.65);
+  mb.addCone(hx + rx * 1.45, headY + 1.6, hz + rz * 1.45, 0.9, 2.2, 8, catBlack, TexId.SOLID, 0.5);
+  mb.addCone(hx - rx * 1.45, headY + 1.6, hz - rz * 1.45, 0.9, 2.2, 8, catBlack, TexId.SOLID, 0.5);
+  mb.addSphere(hx + fx * 2.15 + rx * 0.95, headY + 0.25, hz + fz * 2.15 + rz * 0.95, 0.5, 0.55, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+  mb.addSphere(hx + fx * 2.15 - rx * 0.95, headY + 0.25, hz + fz * 2.15 - rz * 0.95, 0.5, 0.55, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+
+  // S-curved trailing swishing tail
   const swish = Math.sin(elapsedTime * 5) * 0.9;
-  mb.addSphere(cx + swish, 2.2, cz - 3.2, 0.7, 2.2, 0.7, 6, 8, catBlack, TexId.SOLID, 0.45);
+  mb.addSphere(cx - fx * 3.3 + rx * swish, isRunning ? 3.8 : 2.2, cz - fz * 3.3 + rz * swish, 0.7, 2.2, 0.7, 6, 8, catBlack, TexId.SOLID, 0.45);
 }
 
 function addMotorcycle3D(
@@ -2251,11 +2423,11 @@ function addConeOfSight3D(translucentMb: MeshBuilder, cone: ConeOfSight | null |
   const oz = poly[0].y;
   const y = 0.42;
   const beamColor = ConeOfSight.cheatMode
-    ? rgb(82, 224, 128, 0.28)
-    : rgb(255, 232, 92, 0.32);
+    ? rgb(82, 224, 128, 0.48)
+    : rgb(255, 232, 68, 0.62);
   const edgeColor = ConeOfSight.cheatMode
-    ? rgb(82, 245, 140, 0.62)
-    : rgb(255, 112, 48, 0.68);
+    ? rgb(82, 245, 140, 0.85)
+    : rgb(255, 152, 48, 0.90);
 
   for (let i = 1; i < poly.length - 1; i++) {
     const p1 = poly[i];
@@ -2272,14 +2444,38 @@ function addConeOfSight3D(translucentMb: MeshBuilder, cone: ConeOfSight | null |
     translucentMb.addQuad(
       [p1.x, y, p1.y],
       [p2.x, y, p2.y],
-      [p2.x, y + 1.5, p2.y],
-      [p1.x, y + 1.5, p1.y],
+      [p2.x, y + 2.0, p2.y],
+      [p1.x, y + 2.0, p1.y],
       [0, 1, 0],
       edgeColor,
       TexId.SOLID,
       0
     );
   }
+
+  // Crisp left & right side edge ribbons from the NPC apex out to the cone perimeter
+  const firstPt = poly[1];
+  const lastPt = poly[poly.length - 1];
+  translucentMb.addQuad(
+    [ox, y, oz],
+    [firstPt.x, y, firstPt.y],
+    [firstPt.x, y + 2.0, firstPt.y],
+    [ox, y + 2.0, oz],
+    [0, 1, 0],
+    edgeColor,
+    TexId.SOLID,
+    0
+  );
+  translucentMb.addQuad(
+    [lastPt.x, y, lastPt.y],
+    [ox, y, oz],
+    [ox, y + 2.0, oz],
+    [lastPt.x, y + 2.0, lastPt.y],
+    [0, 1, 0],
+    edgeColor,
+    TexId.SOLID,
+    0
+  );
 }
 
 function addDoorAndFog3D(opaqueMb: MeshBuilder, door: CollidableDoor): void {
@@ -2316,6 +2512,38 @@ function addDoorAndFog3D(opaqueMb: MeshBuilder, door: CollidableDoor): void {
   }
 }
 
+function addOpenedDoor3D(opaqueMb: MeshBuilder, door: OpenedDoorAnimation): void {
+  const b = door.bounds;
+  const leafW = b.width - 2.4;
+  const leafH = 24.0;
+  const leafD = 3.6;
+
+  // Hinge pivot on left jamb inside the recessed doorway opening
+  const hx = b.x + 1.2;
+  const hz = b.y + b.height * 0.5;
+  const ease = 1 - Math.pow(1 - Math.max(0, Math.min(1, door.progress)), 3);
+  const angle = door.swingDirection * ease * (Math.PI * 0.48);
+
+  const ux = Math.cos(angle);
+  const uz = Math.sin(angle);
+  const nx = -uz;
+  const nz = ux;
+  const cx = hx + ux * leafW * 0.5;
+  const cz = hz + uz * leafW * 0.5;
+
+  opaqueMb.addOrientedBox(cx, leafH * 0.5, cz, leafW, leafH, leafD, angle, 0, rgb(132, 78, 40), TexId.WOOD_GRAIN, 0.7);
+  opaqueMb.addOrientedBox(cx, 2.4 + 3.7, cz, leafW * 0.68, 7.4, leafD + 0.6, angle, 0, rgb(156, 96, 52), TexId.WOOD_GRAIN, 0.35);
+  opaqueMb.addOrientedBox(cx, 12.4 + 4.6, cz, leafW * 0.68, 9.2, leafD + 0.6, angle, 0, rgb(156, 96, 52), TexId.WOOD_GRAIN, 0.35);
+
+  const knobDist = leafW * 0.32;
+  const kx = cx + ux * knobDist;
+  const kz = cz + uz * knobDist;
+  for (const side of [-1, 1] as const) {
+    const off = side * (leafD * 0.5 + 0.6);
+    opaqueMb.addSphere(kx + nx * off, 11.2, kz + nz * off, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
+  }
+}
+
 function addExclamationBadge3D(opaqueMb: MeshBuilder, cx: number, baseY: number, cz: number): void {
   const ay = baseY + 19;
   opaqueMb.addBeveledBox(cx - 1.5, ay + 2.5, cz, 1.6, 5.2, 1.6, 0.3, rgb(255, 42, 42), TexId.SOLID, 0.55);
@@ -2343,14 +2571,21 @@ export function buildDynamicSceneMeshes(
     state.player.blinkTimer <= 0 || Math.floor(state.player.blinkTimer * 12) % 2 === 0;
   const px = state.player.x + state.player.width * 0.5;
   const pz =
-    state.isOnRoof && levelId === 'level-outside'
-      ? ROOF_WALK_Y + state.player.height * 0.5
+    state.climbing && levelId === 'level-outside'
+      ? 10 * TILE_SIZE + 5.2
       : state.player.y + state.player.height * 0.5;
   const py = getPlayerElevation(state);
+  const shadowGroundY = state.climbing
+    ? getTerrainHeight(px, pz, levelId)
+    : py - (state.player.jumpOffset ?? 0);
   const playerYaw =
-    typeof state.player.yaw === 'number'
-      ? state.player.yaw
-      : directionToYaw(state.player.facing);
+    state.climbing && levelId === 'level-outside'
+      ? -Math.PI / 2
+      : typeof state.player.renderYaw === 'number'
+        ? state.player.renderYaw
+        : typeof state.player.yaw === 'number'
+          ? state.player.yaw
+          : directionToYaw(state.player.facing);
 
   if (playerVisible) {
     const electrocutedFlash =
@@ -2391,11 +2626,12 @@ export function buildDynamicSceneMeshes(
       santaStyle,
       true,
       state.hasLadder && !state.ladderPlaced,
-      translucent
+      translucent,
+      shadowGroundY
     );
 
     if (isPlayerTranslucent) {
-      playerTargetBuilder.scaleAlphaRange(playerStartVertex, 0.5);
+      playerTargetBuilder.scaleAlphaRange(playerStartVertex, 0.25);
     }
   }
 
@@ -2410,7 +2646,7 @@ export function buildDynamicSceneMeshes(
       translucent.addSphere(fp.x, fy, fp.y, 1.2, 0.2, 1.6, 6, 8, rgb(138, 162, 198, alpha), TexId.SOLID, 0);
     }
 
-    // Ladder (on ground at GROUND_LADDER_BOUNDS or placed on west wall of main house)
+    // Ladder (on ground at GROUND_LADDER_BOUNDS or placed outside the south wall of main house)
     if (!state.hasLadder && !state.ladderPlaced) {
       const lx = GROUND_LADDER_BOUNDS.x + GROUND_LADDER_BOUNDS.width * 0.5;
       const lz = GROUND_LADDER_BOUNDS.y + GROUND_LADDER_BOUNDS.height * 0.5;
@@ -2418,11 +2654,10 @@ export function buildDynamicSceneMeshes(
       addWoodenLadder3D(opaque, lx, ly, lz, 24, false);
     } else if (state.ladderPlaced) {
       const lx = LADDER_CLIMB_X + 6;
-      const lz = LADDER_BOTTOM_Y;
+      const lz = 10 * TILE_SIZE + 3.2;
       const ly = getTerrainHeight(lx, lz, 'level-outside');
-      const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, 'level-outside');
-      const roofY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
-      addWoodenLadder3D(opaque, lx, ly, lz - 4, roofY - ly + 2, true);
+      const roofEdgeY = getMainHouseRoofElevation(lx, ROOF_WALK_Y + 6);
+      addWoodenLadder3D(opaque, lx, ly, lz, roofEdgeY - ly + 2.5, true);
     }
 
     // Motorcycle
@@ -2497,7 +2732,7 @@ export function buildDynamicSceneMeshes(
 
     // Chimney Smoke Puffs rising from the main house chimney
     const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, 'level-outside');
-    const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 16;
+    const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 21;
     const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
     const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
     for (let i = 0; i < 5; i++) {
@@ -2667,6 +2902,9 @@ export function buildDynamicSceneMeshes(
 
     for (const door of basement.doors) {
       addDoorAndFog3D(opaque, door);
+    }
+    for (const door of basement.openedDoors) {
+      addOpenedDoor3D(opaque, door);
     }
   } else if (levelId === 'level-upstairs') {
     const upstairs = state.levels['level-upstairs'];
@@ -2894,6 +3132,9 @@ export function buildDynamicSceneMeshes(
 
     for (const door of upstairs.doors) {
       addDoorAndFog3D(opaque, door);
+    }
+    for (const door of upstairs.openedDoors) {
+      addOpenedDoor3D(opaque, door);
     }
   } else if (levelId === 'level-people') {
     const peopleLevel = state.levels['level-people'];

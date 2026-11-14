@@ -1,10 +1,22 @@
 import { InputState } from '../core/input';
-import { isRectCollidingWithMap, TileMap, TileType } from '../world/tilemap';
+import {
+  isRectCollidingWithMap,
+  TILE_SIZE,
+  TileMap,
+  TileType,
+} from '../world/tilemap';
 
 export type Direction = 'up' | 'down' | 'left' | 'right';
 
 export const FOOTPRINT_DURATION_SECONDS = 3.0;
 export const FOOTPRINT_STEP_INTERVAL_SECONDS = 0.14;
+
+export const PLAYER_JUMP_HEIGHT = 0.5 * TILE_SIZE;
+export const PLAYER_JUMP_DURATION = 0.44;
+export const PLAYER_JUMP_GRAVITY =
+  (8 * PLAYER_JUMP_HEIGHT) / (PLAYER_JUMP_DURATION * PLAYER_JUMP_DURATION);
+export const PLAYER_JUMP_INITIAL_VELOCITY =
+  (4 * PLAYER_JUMP_HEIGHT) / PLAYER_JUMP_DURATION;
 
 export interface Footprint {
   x: number;
@@ -31,6 +43,12 @@ export interface Player {
   facing: Direction;
   /** Continuous 3D facing yaw in radians (`-Math.PI / 2` = North / up) */
   yaw?: number;
+  /** Smoothed 3D rendered facing yaw that rapidly turns toward `yaw` */
+  renderYaw?: number;
+  /** Aesthetic 3D vertical jump/fall height offset above ground/roof (in world units) */
+  jumpOffset?: number;
+  /** Vertical velocity for jump/fall animation (units/sec) */
+  jumpVelocity?: number;
   isMoving: boolean;
   walkTimer: number;
   blinkTimer: number;
@@ -48,6 +66,9 @@ export function createPlayer(x: number, y: number): Player {
     speed: 75, // pixels per second
     facing: 'up',
     yaw: -Math.PI / 2,
+    renderYaw: -Math.PI / 2,
+    jumpOffset: 0,
+    jumpVelocity: 0,
     isMoving: false,
     walkTimer: 0,
     blinkTimer: 0,
@@ -55,6 +76,39 @@ export function createPlayer(x: number, y: number): Player {
     nextFootprintFoot: 'left',
     states: new Map<string, unknown>(),
   };
+}
+
+export function lerpAngle(current: number, target: number, t: number): number {
+  let diff = (target - current + Math.PI) % (Math.PI * 2);
+  if (diff < 0) diff += Math.PI * 2;
+  diff -= Math.PI;
+  return current + diff * t;
+}
+
+export function triggerPlayerJump(player: Player): boolean {
+  if ((player.jumpOffset ?? 0) > 0 || (player.jumpVelocity ?? 0) !== 0) {
+    return false;
+  }
+  player.jumpOffset = 0.001;
+  player.jumpVelocity = PLAYER_JUMP_INITIAL_VELOCITY;
+  return true;
+}
+
+export function updatePlayerJump(player: Player, dtSeconds: number): void {
+  const offset = player.jumpOffset ?? 0;
+  const velocity = player.jumpVelocity ?? 0;
+  if (offset <= 0 && velocity === 0) {
+    return;
+  }
+  const nextVelocity = velocity - PLAYER_JUMP_GRAVITY * dtSeconds;
+  const nextOffset = offset + 0.5 * (velocity + nextVelocity) * dtSeconds;
+  if (nextOffset <= 0) {
+    player.jumpOffset = 0;
+    player.jumpVelocity = 0;
+  } else {
+    player.jumpOffset = nextOffset;
+    player.jumpVelocity = nextVelocity;
+  }
 }
 
 export function rectsIntersect(a: Rect, b: Rect): boolean {
@@ -123,7 +177,8 @@ export function updatePlayer(
   input: InputState,
   dtSeconds: number,
   map: TileMap,
-  solidObstacles: readonly Rect[] = []
+  solidObstacles: readonly Rect[] = [],
+  ignoreTilePred?: (col: number, row: number) => boolean
 ): void {
   if (player.blinkTimer > 0) {
     player.blinkTimer = Math.max(0, player.blinkTimer - dtSeconds);
@@ -164,12 +219,17 @@ export function updatePlayer(
   if (length < 0.001) {
     player.isMoving = false;
     player.walkTimer = 0;
+    const targetYaw = player.yaw ?? -Math.PI / 2;
+    const turnBlend = Math.min(1, dtSeconds * 16);
+    player.renderYaw = lerpAngle(player.renderYaw ?? targetYaw, targetYaw, turnBlend);
     return;
   }
 
   player.isMoving = true;
   player.walkTimer += dtSeconds;
   player.yaw = Math.atan2(dy, dx);
+  const turnBlend = Math.min(1, dtSeconds * 16);
+  player.renderYaw = lerpAngle(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
 
   if (Math.abs(dy) > Math.abs(dx)) {
     player.facing = dy < 0 ? 'up' : 'down';
@@ -181,7 +241,17 @@ export function updatePlayer(
   const moveY = dy * player.speed * dtSeconds;
 
   const collidesAt = (testX: number, testY: number): boolean => {
-    if (isRectCollidingWithMap(map, testX, testY, player.width, player.height)) {
+    if (
+      isRectCollidingWithMap(
+        map,
+        testX,
+        testY,
+        player.width,
+        player.height,
+        true,
+        ignoreTilePred
+      )
+    ) {
       return true;
     }
     const testRect: Rect = {

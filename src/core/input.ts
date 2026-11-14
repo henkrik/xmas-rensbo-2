@@ -63,12 +63,6 @@ const KEY_TO_BUTTON: Record<
   KeyD: 'right',
   d: 'right',
   D: 'right',
-  KeyZ: 'action',
-  z: 'action',
-  Z: 'action',
-  KeyE: 'action',
-  e: 'action',
-  E: 'action',
   Space: 'action',
   ' ': 'action',
 };

@@ -3,7 +3,13 @@ import { ConeOfSight } from '../../entities/sight';
 import { Interactable } from '../interaction';
 import { MAP_COLS, MAP_ROWS, TILE_SIZE, TileMap, TileType } from '../tilemap';
 import { UPSTAIRS_INTRO_STATE_KEY } from './levelUpstairs';
-import { CollidableDoor, GameLevel, LevelId, LevelTransitionContext } from './types';
+import {
+  CollidableDoor,
+  GameLevel,
+  LevelId,
+  LevelTransitionContext,
+  OpenedDoorAnimation,
+} from './types';
 
 const V = TileType.VoidBlack;
 const W = TileType.InteriorWall;
@@ -73,7 +79,7 @@ export const BASEMENT_MAP: TileMap = {
 export const BASEMENT_FIREPLACE_SPAWN = {
   x: 9.5 * TILE_SIZE,
   y: 11 * TILE_SIZE + 2,
-  facing: 'left' as Direction,
+  facing: 'down' as Direction,
 };
 
 /** Spawn on the stairs when returning to `level-basement` after having used the stairs. */
@@ -163,6 +169,7 @@ export class LevelBasement implements GameLevel {
   public readonly id: LevelId = 'level-basement';
   public readonly map: TileMap = BASEMENT_MAP;
   public doors: CollidableDoor[];
+  public openedDoors: OpenedDoorAnimation[] = [];
   public readonly windowNpc = { ...BASEMENT_WINDOW_NPC };
   public readonly olexaNpc = { ...BASEMENT_OLEXA_NPC };
   public readonly toiletNpc = { ...BASEMENT_TOILET_NPC };
@@ -206,8 +213,25 @@ export class LevelBasement implements GameLevel {
       player.y = BASEMENT_FIREPLACE_SPAWN.y;
       player.facing = BASEMENT_FIREPLACE_SPAWN.facing;
     }
+    const spawnYaw =
+      player.facing === 'up'
+        ? -Math.PI / 2
+        : player.facing === 'down'
+          ? Math.PI / 2
+          : player.facing === 'left'
+            ? Math.PI
+            : 0;
+    player.yaw = spawnYaw;
+    player.renderYaw = spawnYaw;
+    player.jumpOffset = 0;
+    player.jumpVelocity = 0;
     player.isMoving = false;
     player.walkTimer = 0;
+
+    // Preserve openedDoors only if already opened; reset if bathroom door is still closed
+    if (this.doors.some((d) => d.id === 'basement-bathroom-door')) {
+      this.openedDoors = [];
+    }
 
     // Reset NPC sight to looking north
     this.npcSightAngle = -Math.PI / 2;
@@ -279,6 +303,12 @@ export class LevelBasement implements GameLevel {
     if (doorIdx !== -1) {
       const openedDoor = this.doors[doorIdx];
       this.doors.splice(doorIdx, 1);
+      this.openedDoors.push({
+        id: openedDoor.id,
+        bounds: { ...openedDoor.bounds },
+        progress: 0,
+        swingDirection: player.y >= openedDoor.bounds.y ? -1 : 1,
+      });
       if (openedDoor.id === 'basement-bathroom-door') {
         this.startToiletCutscene(player);
       }

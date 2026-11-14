@@ -1,8 +1,6 @@
 import { loadAllAssets } from './assets';
 import {
   attachKeyboardListeners,
-  attachMouseLookListeners,
-  attachPointerListeners,
   computeViewportLayout,
   createEmptyInput,
   createVirtualJoystick,
@@ -11,7 +9,7 @@ import { attachDebugConsole } from './core/debugConsole';
 import { initSecretSantaDB } from './core/secretSantaDB';
 import secretText from '../inspiration/secret.txt';
 import { createCamera3D, updateCamera3D } from './rendering/math3d';
-import { computeCamera, renderGame } from './rendering/renderer';
+import { renderGame } from './rendering/renderer';
 import { WebGPURenderer } from './rendering/webgpuRenderer';
 import {
   createGameState,
@@ -231,8 +229,21 @@ async function startGame(): Promise<void> {
     screen.orientation.addEventListener('change', onOrientationChange);
   }
 
-  if (new URLSearchParams(window.location.search).has('debug')) {
+  const searchParams = new URLSearchParams(window.location.search);
+
+  if (searchParams.has('debug')) {
     attachDebugConsole(document.getElementById('viewport-frame'));
+  }
+
+  let fpsElement: HTMLPreElement | null = null;
+  if (searchParams.has('fps')) {
+    const viewportFrame = document.getElementById('viewport-frame');
+    if (viewportFrame) {
+      fpsElement = document.createElement('pre');
+      fpsElement.id = 'viewport-fps-text';
+      fpsElement.textContent = 'fps: 0';
+      viewportFrame.appendChild(fpsElement);
+    }
   }
 
   // Initialize SecretSantaDB and debug log giver/receiver mappings
@@ -245,7 +256,6 @@ async function startGame(): Promise<void> {
     },
   });
 
-  const searchParams = new URLSearchParams(window.location.search);
   const initialLevelId = parseLevelQueryParam(searchParams.get('level'));
   const hasLevelOverride = searchParams.has('level');
 
@@ -278,43 +288,37 @@ async function startGame(): Promise<void> {
     });
   }
 
-  attachPointerListeners({
-    canvas,
-    input,
-    getCamera: () => {
-      const mapWidthPx = state.map.cols * state.map.tileSize;
-      const mapHeightPx = state.map.rows * state.map.tileSize;
-      return computeCamera(
-        state.player.x,
-        state.player.y,
-        state.player.width,
-        state.player.height,
-        canvas.width,
-        canvas.height,
-        mapWidthPx,
-        mapHeightPx
-      );
-    },
-    isJoystickActive: () => joystick?.isPointerActive() ?? false,
-    isDialogueActive: () => state.activeDialogue !== null,
-  });
-
-  attachMouseLookListeners({
-    element: canvas,
-    input,
-    isDialogueActive: () => state.activeDialogue !== null,
-  });
+  // Enable 3D camera-relative WASD movement and arrow-key camera turning (without mouse camera movement).
+  input.cameraYaw = -Math.PI / 2;
+  input.cameraPitch = 0.38;
 
   let lastTimestamp: number | null = null;
+  let fpsFrameCount = 0;
+  let fpsAccumSeconds = 0;
+  let currentFps = 0;
 
   function frame(now: number): void {
     applyViewportLayout(false);
 
-    const dtSeconds =
-      lastTimestamp === null
-        ? 0
-        : Math.max(0, Math.min((now - lastTimestamp) / 1000, 0.1));
+    const rawDtSeconds =
+      lastTimestamp === null ? 0 : Math.max(0, (now - lastTimestamp) / 1000);
+    const dtSeconds = Math.min(rawDtSeconds, 0.1);
     lastTimestamp = now;
+
+    if (fpsElement && rawDtSeconds > 0) {
+      fpsFrameCount += 1;
+      fpsAccumSeconds += rawDtSeconds;
+      if (currentFps === 0) {
+        currentFps = Math.round(1 / rawDtSeconds);
+        fpsElement.textContent = `fps: ${currentFps}`;
+      }
+      if (fpsAccumSeconds >= 0.25) {
+        currentFps = Math.round(fpsFrameCount / fpsAccumSeconds);
+        fpsElement.textContent = `fps: ${currentFps}`;
+        fpsFrameCount = 0;
+        fpsAccumSeconds = 0;
+      }
+    }
 
     // Track joystick active state in game state so renderer & entities (like dog speed) adapt
     const isJoystickShown = joystick?.isVisible() ?? false;

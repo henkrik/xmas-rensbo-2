@@ -11,6 +11,13 @@ export interface CollidableDoor {
   hiddenRegions: Rect[];
 }
 
+export interface OpenedDoorAnimation {
+  id: string;
+  bounds: Rect;
+  progress: number;
+  swingDirection: 1 | -1;
+}
+
 export interface LevelTransitionContext {
   loadLevel: (levelId: LevelId) => void;
   openDialogue: (

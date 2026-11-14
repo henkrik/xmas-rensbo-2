@@ -137,12 +137,6 @@
     KeyD: "right",
     d: "right",
     D: "right",
-    KeyZ: "action",
-    z: "action",
-    Z: "action",
-    KeyE: "action",
-    e: "action",
-    E: "action",
     Space: "action",
     " ": "action"
   };
@@ -199,61 +193,6 @@
     return () => {
       target.removeEventListener("keydown", onKeyDown);
       target.removeEventListener("keyup", onKeyUp);
-    };
-  }
-  function attachPointerListeners(options) {
-    const { canvas, input, getCamera, isJoystickActive, isDialogueActive } = options;
-    let activePointerId = null;
-    let pointerDownTime = 0;
-    let startClientX = 0;
-    let startClientY = 0;
-    const toWorldCoords = (clientX, clientY) => {
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const canvasX = (clientX - rect.left) * scaleX;
-      const canvasY = (clientY - rect.top) * scaleY;
-      const camera = getCamera();
-      return {
-        worldX: canvasX + camera.x,
-        worldY: canvasY + camera.y,
-        canvasX,
-        canvasY
-      };
-    };
-    const onPointerDown = (e) => {
-      const isTargetCanvas = e.target === canvas || canvas.contains(e.target);
-      const dialogueActive = isDialogueActive?.() ?? false;
-      if (!isTargetCanvas && !dialogueActive) return;
-      if (isJoystickActive?.() && !dialogueActive) return;
-      e.preventDefault();
-      activePointerId = e.pointerId;
-      pointerDownTime = performance.now();
-      startClientX = e.clientX;
-      startClientY = e.clientY;
-    };
-    const onPointerUp = (e) => {
-      if (activePointerId !== e.pointerId) return;
-      activePointerId = null;
-      const duration = performance.now() - pointerDownTime;
-      const moveDist = Math.hypot(e.clientX - startClientX, e.clientY - startClientY);
-      if (duration < 400 && moveDist < 16) {
-        const { worldX, worldY } = toWorldCoords(e.clientX, e.clientY);
-        input.pointerClick = { worldX, worldY };
-      }
-    };
-    const onPointerCancel = (e) => {
-      if (activePointerId !== e.pointerId) return;
-      activePointerId = null;
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerCancel);
-    canvas.style.touchAction = "none";
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
     };
   }
   function computeViewportLayout(vw, vh, isLandscapeOverride) {
@@ -407,90 +346,6 @@
         win?.removeEventListener("pointerup", onPointerUp);
         win?.removeEventListener("pointercancel", onPointerCancel);
       }
-    };
-  }
-  function attachMouseLookListeners(options) {
-    const {
-      element,
-      input,
-      sensitivity = 42e-4,
-      isDialogueActive
-    } = options;
-    if (typeof input.cameraYaw !== "number") {
-      input.cameraYaw = -Math.PI / 2;
-    }
-    if (typeof input.cameraPitch !== "number") {
-      input.cameraPitch = 0.38;
-    }
-    let lastClientX = null;
-    let lastClientY = null;
-    const applyDelta = (dx, dy) => {
-      const currentYaw = typeof input.cameraYaw === "number" ? input.cameraYaw : -Math.PI / 2;
-      const currentPitch = typeof input.cameraPitch === "number" ? input.cameraPitch : 0.38;
-      let nextYaw = currentYaw + dx * sensitivity;
-      while (nextYaw > Math.PI) nextYaw -= Math.PI * 2;
-      while (nextYaw < -Math.PI) nextYaw += Math.PI * 2;
-      const nextPitch = Math.max(
-        0.12,
-        Math.min(1.12, currentPitch + dy * sensitivity * 0.75)
-      );
-      input.cameraYaw = nextYaw;
-      input.cameraPitch = nextPitch;
-    };
-    const onMouseMove = (e) => {
-      const doc = typeof document !== "undefined" ? document : null;
-      const isLocked = doc && (doc.pointerLockElement === element || doc.pointerLockElement && element.contains(doc.pointerLockElement));
-      if (isLocked) {
-        applyDelta(e.movementX || 0, e.movementY || 0);
-        return;
-      }
-      const isOverElement = e.target === element || element.contains(e.target);
-      if (!isOverElement && e.buttons === 0) {
-        lastClientX = null;
-        lastClientY = null;
-        return;
-      }
-      let dx = e.movementX;
-      let dy = e.movementY;
-      if ((typeof dx !== "number" || dx === 0 && dy === 0) && lastClientX !== null && lastClientY !== null) {
-        dx = e.clientX - lastClientX;
-        dy = e.clientY - lastClientY;
-      }
-      lastClientX = e.clientX;
-      lastClientY = e.clientY;
-      if (dx || dy) {
-        applyDelta(dx || 0, dy || 0);
-      }
-    };
-    const onMouseDown = (e) => {
-      const isTarget = e.target === element || element.contains(e.target);
-      if (!isTarget) return;
-      lastClientX = e.clientX;
-      lastClientY = e.clientY;
-      const doc = typeof document !== "undefined" ? document : null;
-      const isLocked = doc && (doc.pointerLockElement === element || doc.pointerLockElement && element.contains(doc.pointerLockElement));
-      if (isDialogueActive?.()) {
-        input.actionJustPressed = true;
-        return;
-      }
-      if (!isLocked && typeof element.requestPointerLock === "function") {
-        try {
-          const lockPromise = element.requestPointerLock();
-          if (lockPromise && typeof lockPromise.catch === "function") {
-            lockPromise.catch(() => {
-            });
-          }
-        } catch {
-        }
-      } else if (isLocked && e.button === 0) {
-        input.actionJustPressed = true;
-      }
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    element.addEventListener("mousedown", onMouseDown);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      element.removeEventListener("mousedown", onMouseDown);
     };
   }
 
@@ -686,9 +541,15 @@
   };
   var ROOF_LADDER_BOUNDS = {
     x: 4 * TILE_SIZE,
-    y: 4 * TILE_SIZE,
-    width: 16,
-    height: 16
+    y: 9 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var MAIN_HOUSE_ROOF_BOUNDS = {
+    x: 4 * TILE_SIZE,
+    y: 3 * TILE_SIZE,
+    width: 13 * TILE_SIZE,
+    height: 7 * TILE_SIZE
   };
   var ROOF_CHIMNEY_BOUNDS = {
     x: 7 * TILE_SIZE + 8,
@@ -698,7 +559,7 @@
   };
   var LADDER_CLIMB_X = 4 * TILE_SIZE + 2;
   var LADDER_BOTTOM_Y = 10 * TILE_SIZE;
-  var ROOF_WALK_Y = 4 * TILE_SIZE + 2;
+  var ROOF_WALK_Y = 9 * TILE_SIZE;
   var ROOF_MIN_X = 4 * TILE_SIZE + 2;
   var ROOF_MAX_X = 7 * TILE_SIZE + 6;
   var CLIMB_DURATION_SECONDS = 0.6;
@@ -779,20 +640,23 @@
     18 /* BathroomTileFloor */,
     19 /* StairsFloor */
   ]);
-  function isSolidTile(map, col, row) {
+  function isSolidTile(map, col, row, collideWithMapBoundary = true) {
     if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
-      return true;
+      return collideWithMapBoundary;
     }
     return !WALKABLE_TILES.has(map.tiles[row][col]);
   }
-  function isRectCollidingWithMap(map, x, y, width, height) {
+  function isRectCollidingWithMap(map, x, y, width, height, collideWithMapBoundary = true, ignoreTilePred) {
     const startCol = Math.floor(x / map.tileSize);
     const endCol = Math.floor((x + width - 1e-3) / map.tileSize);
     const startRow = Math.floor(y / map.tileSize);
     const endRow = Math.floor((y + height - 1e-3) / map.tileSize);
     for (let r = startRow; r <= endRow; r++) {
       for (let c = startCol; c <= endCol; c++) {
-        if (isSolidTile(map, c, r)) {
+        if (ignoreTilePred?.(c, r)) {
+          continue;
+        }
+        if (isSolidTile(map, c, r, collideWithMapBoundary)) {
           return true;
         }
       }
@@ -803,6 +667,10 @@
   // src/entities/player.ts
   var FOOTPRINT_DURATION_SECONDS = 3;
   var FOOTPRINT_STEP_INTERVAL_SECONDS = 0.14;
+  var PLAYER_JUMP_HEIGHT = 0.5 * TILE_SIZE;
+  var PLAYER_JUMP_DURATION = 0.44;
+  var PLAYER_JUMP_GRAVITY = 8 * PLAYER_JUMP_HEIGHT / (PLAYER_JUMP_DURATION * PLAYER_JUMP_DURATION);
+  var PLAYER_JUMP_INITIAL_VELOCITY = 4 * PLAYER_JUMP_HEIGHT / PLAYER_JUMP_DURATION;
   function createPlayer(x, y) {
     return {
       x,
@@ -813,6 +681,9 @@
       // pixels per second
       facing: "up",
       yaw: -Math.PI / 2,
+      renderYaw: -Math.PI / 2,
+      jumpOffset: 0,
+      jumpVelocity: 0,
       isMoving: false,
       walkTimer: 0,
       blinkTimer: 0,
@@ -820,6 +691,36 @@
       nextFootprintFoot: "left",
       states: /* @__PURE__ */ new Map()
     };
+  }
+  function lerpAngle(current, target, t) {
+    let diff = (target - current + Math.PI) % (Math.PI * 2);
+    if (diff < 0) diff += Math.PI * 2;
+    diff -= Math.PI;
+    return current + diff * t;
+  }
+  function triggerPlayerJump(player) {
+    if ((player.jumpOffset ?? 0) > 0 || (player.jumpVelocity ?? 0) !== 0) {
+      return false;
+    }
+    player.jumpOffset = 1e-3;
+    player.jumpVelocity = PLAYER_JUMP_INITIAL_VELOCITY;
+    return true;
+  }
+  function updatePlayerJump(player, dtSeconds) {
+    const offset = player.jumpOffset ?? 0;
+    const velocity = player.jumpVelocity ?? 0;
+    if (offset <= 0 && velocity === 0) {
+      return;
+    }
+    const nextVelocity = velocity - PLAYER_JUMP_GRAVITY * dtSeconds;
+    const nextOffset = offset + 0.5 * (velocity + nextVelocity) * dtSeconds;
+    if (nextOffset <= 0) {
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
+    } else {
+      player.jumpOffset = nextOffset;
+      player.jumpVelocity = nextVelocity;
+    }
   }
   function rectsIntersect(a, b) {
     return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -865,7 +766,7 @@
       player.footprintSpawnTimer = 0;
     }
   }
-  function updatePlayer(player, input, dtSeconds, map, solidObstacles = []) {
+  function updatePlayer(player, input, dtSeconds, map, solidObstacles = [], ignoreTilePred) {
     if (player.blinkTimer > 0) {
       player.blinkTimer = Math.max(0, player.blinkTimer - dtSeconds);
     }
@@ -901,11 +802,16 @@
     if (length < 1e-3) {
       player.isMoving = false;
       player.walkTimer = 0;
+      const targetYaw = player.yaw ?? -Math.PI / 2;
+      const turnBlend2 = Math.min(1, dtSeconds * 16);
+      player.renderYaw = lerpAngle(player.renderYaw ?? targetYaw, targetYaw, turnBlend2);
       return;
     }
     player.isMoving = true;
     player.walkTimer += dtSeconds;
     player.yaw = Math.atan2(dy, dx);
+    const turnBlend = Math.min(1, dtSeconds * 16);
+    player.renderYaw = lerpAngle(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
     if (Math.abs(dy) > Math.abs(dx)) {
       player.facing = dy < 0 ? "up" : "down";
     } else if (Math.abs(dx) > 0) {
@@ -914,7 +820,15 @@
     const moveX = dx * player.speed * dtSeconds;
     const moveY = dy * player.speed * dtSeconds;
     const collidesAt = (testX, testY) => {
-      if (isRectCollidingWithMap(map, testX, testY, player.width, player.height)) {
+      if (isRectCollidingWithMap(
+        map,
+        testX,
+        testY,
+        player.width,
+        player.height,
+        true,
+        ignoreTilePred
+      )) {
         return true;
       }
       const testRect = {
@@ -1028,7 +942,7 @@
           height: 4
         };
         this.boxes.push(box);
-        if (this.map && isRectCollidingWithMap(this.map, box.x, box.y, box.width, box.height)) {
+        if (this.map && isRectCollidingWithMap(this.map, box.x, box.y, box.width, box.height, false)) {
           break;
         }
       }
@@ -1122,6 +1036,7 @@
 
   // src/rendering/math3d.ts
   var MAIN_HOUSE_WALL_HEIGHT = 34;
+  var MAIN_HOUSE_ROOF_PEAK_ADD = 16;
   var MAIN_HOUSE_ROOF_WALK_HEIGHT = 36;
   var INDOOR_WALL_HEIGHT = 2 * TILE_SIZE;
   function sub3(a, b) {
@@ -1150,7 +1065,7 @@
     if (a < 0) a += Math.PI * 2;
     return a - Math.PI;
   }
-  function lerpAngle(from, to, t) {
+  function lerpAngle2(from, to, t) {
     const diff = wrapAngle(to - from);
     return wrapAngle(from + diff * Math.max(0, Math.min(1, t)));
   }
@@ -1296,37 +1211,45 @@
       z: hD - hU
     });
   }
+  function getMainHouseRoofElevation(_px, pz) {
+    const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
+    const roofBaseY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
+    const zCenter = 6.5 * TILE_SIZE;
+    const zHalfSpan = 3.75 * TILE_SIZE;
+    const slopeT = Math.max(0, 1 - Math.abs(pz - zCenter) / zHalfSpan);
+    return roofBaseY + MAIN_HOUSE_ROOF_PEAK_ADD * slopeT;
+  }
   function getPlayerElevation(state) {
     const px = state.player.x + state.player.width / 2;
     const pz = state.player.y + state.player.height / 2;
+    const jumpOffset = state.player.jumpOffset ?? 0;
     if (state.currentLevelId === "level-outside") {
-      const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
-      const roofWalkElevation = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
       if (state.climbing) {
         const groundY = getTerrainHeight(px, LADDER_BOTTOM_Y + 6, "level-outside");
+        const roofEdgeY = getMainHouseRoofElevation(px, ROOF_WALK_Y + 6);
         const t = Math.max(0, Math.min(1, state.climbing.progress));
-        return state.climbing.direction === "up" ? groundY + (roofWalkElevation - groundY) * t : roofWalkElevation + (groundY - roofWalkElevation) * t;
+        return state.climbing.direction === "up" ? groundY + (roofEdgeY - groundY) * t : roofEdgeY + (groundY - roofEdgeY) * t;
       }
       if (state.isOnRoof) {
-        return roofWalkElevation;
+        return getMainHouseRoofElevation(px, pz) + jumpOffset;
       }
-      return getTerrainHeight(px, pz, "level-outside");
+      return getTerrainHeight(px, pz, "level-outside") + jumpOffset;
     }
     if (state.currentLevelId === "level-basement") {
       if (px >= 18 * TILE_SIZE && px <= 22 * TILE_SIZE && pz >= 15 * TILE_SIZE && pz <= 19 * TILE_SIZE) {
         const stairProgress = Math.max(0, Math.min(1, (px - 18 * TILE_SIZE) / (3 * TILE_SIZE)));
-        return stairProgress * 12;
+        return stairProgress * 12 + jumpOffset;
       }
-      return 0;
+      return jumpOffset;
     }
     if (state.currentLevelId === "level-upstairs") {
       if (px >= 15 * TILE_SIZE && px <= 19 * TILE_SIZE && pz >= 13 * TILE_SIZE && pz <= 18 * TILE_SIZE) {
         const stairProgress = Math.max(0, Math.min(1, (pz - 13.5 * TILE_SIZE) / (4 * TILE_SIZE)));
-        return -stairProgress * 10;
+        return -stairProgress * 10 + jumpOffset;
       }
-      return 0;
+      return jumpOffset;
     }
-    return 0;
+    return jumpOffset;
   }
   var DEFAULT_CAMERA_PITCH = 0.42;
   var MIN_CAMERA_PITCH = 0.08;
@@ -1371,7 +1294,7 @@
     let furthestValidIndex = -1;
     for (let i = lineOfSight.n - 1; i >= 0; i--) {
       const box = lineOfSight.boxes[i];
-      if (!isRectCollidingWithMap(map, box.x, box.y, box.width, box.height)) {
+      if (!isRectCollidingWithMap(map, box.x, box.y, box.width, box.height, false)) {
         furthestValidIndex = i;
         break;
       }
@@ -1399,15 +1322,16 @@
       const spawnYaw = directionToYaw(player.facing);
       cam.yaw = spawnYaw;
       player.yaw = spawnYaw;
+      player.renderYaw = spawnYaw;
       if (input.cameraYaw !== null && input.cameraYaw !== void 0) {
         input.cameraYaw = spawnYaw;
       }
     }
     if (state.isOnRoof && !cam.wasOnRoof) {
-      cam.yaw = 0;
-      player.yaw = 0;
+      cam.yaw = -Math.PI / 2;
+      player.yaw = -Math.PI / 2;
       if (input.cameraYaw !== null && input.cameraYaw !== void 0) {
-        input.cameraYaw = 0;
+        input.cameraYaw = -Math.PI / 2;
       }
     }
     cam.wasOnRoof = state.isOnRoof;
@@ -1438,7 +1362,7 @@
       cam.yaw = wrapAngle(input.cameraYaw);
     } else if (player.isMoving && dtSeconds > 0) {
       const targetYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
-      cam.yaw = lerpAngle(cam.yaw, targetYaw, Math.min(1, dtSeconds * 6));
+      cam.yaw = lerpAngle2(cam.yaw, targetYaw, Math.min(1, dtSeconds * 6));
     }
     if (typeof input.cameraPitch === "number") {
       cam.pitch = Math.max(
@@ -1446,10 +1370,16 @@
         Math.min(MAX_CAMERA_PITCH, input.cameraPitch)
       );
     }
+    if (state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") {
+      cam.yaw = 0;
+      if (typeof input.cameraYaw === "number") {
+        input.cameraYaw = 0;
+      }
+    }
     const px = player.x + player.width / 2;
     let pz = player.y + player.height / 2;
-    if (state.isOnRoof && state.currentLevelId === "level-outside") {
-      pz = ROOF_WALK_Y + player.height / 2;
+    if (state.climbing && state.currentLevelId === "level-outside") {
+      pz = LADDER_BOTTOM_Y + player.height / 2;
     }
     const py = getPlayerElevation(state);
     const isOutdoor = state.currentLevelId === "level-outside";
@@ -1460,12 +1390,32 @@
       y: py + targetHeightOffset,
       z: pz
     };
+    const rosannaCutscene = state.currentLevelId === "level-upstairs" ? state.levels["level-upstairs"].rosannaCutscene : null;
+    let zoomEase = 0;
+    if (rosannaCutscene?.active) {
+      const turnBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 6) : 1;
+      cam.yaw = lerpAngle2(cam.yaw, -Math.PI / 2, turnBlend);
+      if (typeof input.cameraYaw === "number") {
+        input.cameraYaw = cam.yaw;
+      }
+      cam.pitch = cam.pitch + (0.16 - cam.pitch) * turnBlend;
+      if (typeof input.cameraPitch === "number") {
+        input.cameraPitch = cam.pitch;
+      }
+      const zoomT = Math.min(1, rosannaCutscene.elapsed / 1.1);
+      zoomEase = zoomT * zoomT * (3 - 2 * zoomT);
+      cam.fovY = (55 - 23 * zoomEase) * Math.PI / 180;
+      cam.target.y += 3 * zoomEase;
+      cam.target.z -= 12 * zoomEase;
+    } else {
+      cam.fovY = 55 * Math.PI / 180;
+    }
     const cosPitch = Math.cos(cam.pitch);
     const sinPitch = Math.sin(cam.pitch);
     const backX = -Math.cos(cam.yaw) * cosPitch;
     const backZ = -Math.sin(cam.yaw) * cosPitch;
     const backY = sinPitch;
-    const effectiveDistance = state.isOnRoof || state.climbing ? maxCameraDistance : computeUnobstructedCameraDistance(
+    const baseEffectiveDistance = state.isOnRoof || state.climbing ? maxCameraDistance : computeUnobstructedCameraDistance(
       cam.target.x,
       cam.target.z,
       cam.yaw,
@@ -1473,6 +1423,7 @@
       maxCameraDistance,
       state.map
     );
+    const effectiveDistance = baseEffectiveDistance * (1 - 0.42 * zoomEase);
     cam.distance = effectiveDistance;
     let eyeX = cam.target.x + backX * effectiveDistance;
     let eyeY = cam.target.y + backY * effectiveDistance;
@@ -1518,6 +1469,7 @@
       deceleration: CAT_DECELERATION,
       mode: "standing",
       facing: "left",
+      yaw: Math.PI / 2,
       animTimer: 0,
       hasBeenActivated: false,
       wallForceDirX: 0,
@@ -1629,6 +1581,9 @@
       }
     }
     if (cat.vx !== 0 || cat.vy !== 0) {
+      if (Math.hypot(cat.vx, cat.vy) > 0.5) {
+        cat.yaw = Math.atan2(cat.vy, cat.vx);
+      }
       cat.animTimer += dtSeconds;
       const nextX = cat.x + cat.vx * dtSeconds;
       if (!collidesAt(nextX, cat.y)) {
@@ -1887,6 +1842,7 @@
       __publicField(this, "id", "level-upstairs");
       __publicField(this, "map", UPSTAIRS_MAP);
       __publicField(this, "doors");
+      __publicField(this, "openedDoors", []);
       __publicField(this, "rosannaCutscene", null);
       __publicField(this, "cat");
       // Upstairs NPCs
@@ -1987,6 +1943,10 @@
       player.x = UPSTAIRS_STAIRS_SPAWN.x;
       player.y = UPSTAIRS_STAIRS_SPAWN.y;
       player.facing = UPSTAIRS_STAIRS_SPAWN.facing;
+      player.yaw = -Math.PI / 2;
+      player.renderYaw = -Math.PI / 2;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
       player.isMoving = false;
       player.walkTimer = 0;
       this.intruderDetected = false;
@@ -2229,6 +2189,12 @@
           }
         }
         this.doors.splice(doorIdx, 1);
+        this.openedDoors.push({
+          id: door.id,
+          bounds: { ...door.bounds },
+          progress: 0,
+          swingDirection: player.y >= door.bounds.y ? -1 : 1
+        });
         return true;
       }
       if (interactableId === "upstairs-stairs-down") {
@@ -3497,14 +3463,13 @@
         true
       );
       const roofWalkY = baseY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
-      mb.addBeveledBox(96, roofWalkY - 1.5, ROOF_WALK_Y + 6, 76, 2.2, 14, 0.5, rgb(242, 248, 255), TexId.SNOW, 0.5);
       const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
       const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
-      mb.addBox(chimX, roofWalkY - 4, chimZ, 16, 17, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.8);
-      mb.addBeveledBox(chimX, roofWalkY + 12.5, chimZ, 18.5, 2.8, 18.5, 0.6, rgb(245, 250, 255), TexId.SNOW, 0.55);
-      mb.addBox(chimX, roofWalkY + 14.8, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
-      mb.addCylinder(chimX - 3, roofWalkY + 14.8, chimZ, 2, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
-      mb.addCylinder(chimX + 3, roofWalkY + 14.8, chimZ, 2, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+      mb.addBox(chimX, roofWalkY, chimZ, 16, 17, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.8);
+      mb.addBeveledBox(chimX, roofWalkY + 17, chimZ, 18.5, 2.8, 18.5, 0.6, rgb(245, 250, 255), TexId.SNOW, 0.55);
+      mb.addBox(chimX, roofWalkY + 19.3, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
+      mb.addCylinder(chimX - 3, roofWalkY + 19.3, chimZ, 2, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+      mb.addCylinder(chimX + 3, roofWalkY + 19.3, chimZ, 2, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
       const greenShutter = rgb(44, 108, 68);
       for (const winCol of [5.5, 14.5]) {
         const wx = (winCol + 0.5) * ts;
@@ -3800,6 +3765,10 @@
             addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback);
           }
         } else {
+          const skipFloor = options?.skipFloorRect;
+          if (skipFloor && c >= skipFloor.minCol && c <= skipFloor.maxCol && r >= skipFloor.minRow && r <= skipFloor.maxRow) {
+            continue;
+          }
           let floorColor = rgb(198, 146, 92);
           let floorTex = TexId.WOOD_FLOOR;
           if (tile === 17 /* StoneTileFloor */) {
@@ -3923,10 +3892,73 @@
         mb.addCone(cx + p, 7.4, cz + 4.2, 0.85, 2.6, 8, rgb(76, 82, 96), TexId.SOLID, 0.3);
       }
     }
-    mb.addShadowDisc(14.5 * ts, 0, 18 * ts, 5, 5, 0.28);
-    mb.addCylinder(14.5 * ts, 0, 18 * ts, 4, 0.9, 15.5, 10, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.6);
-    mb.addSphere(14.5 * ts, 10.8, 18 * ts, 3.6, 4.4, 3.6, 8, 10, rgb(186, 48, 48), TexId.FABRIC, 0.55);
-    mb.addCylinder(14.5 * ts, 15.2, 18 * ts, 2.4, 2.6, 2.8, 10, rgb(34, 36, 44), TexId.SOLID, 0.5);
+    {
+      const rackX = 14.08 * ts;
+      const rackZ = 18 * ts;
+      const wood = rgb(118, 72, 38);
+      const chrome = rgb(214, 222, 234);
+      mb.addBeveledBox(rackX + 0.5, 19.2, rackZ, 1.4, 2.4, 26, 0.25, wood, TexId.WOOD_GRAIN, 0.5);
+      mb.addBeveledBox(rackX + 2.2, 21.6, rackZ, 4.6, 0.9, 26, 0.25, wood, TexId.WOOD_GRAIN, 0.45);
+      for (const bz of [rackZ - 9.5, rackZ + 9.5]) {
+        mb.addOrientedBox(rackX + 1.8, 20.1, bz, 3.2, 0.7, 0.7, 0, -0.7, rgb(48, 52, 62), TexId.SOLID, 0.3);
+      }
+      const coatConfigs = [
+        { z: rackZ - 7.8, coat: rgb(182, 44, 46), accent: rgb(238, 232, 222) },
+        { z: rackZ, coat: rgb(42, 68, 114), accent: rgb(196, 172, 118) },
+        { z: rackZ + 7.8, coat: null, accent: wood }
+        // empty visible triangular hanger
+      ];
+      for (const cfg of coatConfigs) {
+        mb.addCylinder(rackX + 1.4, 19.6, cfg.z, 0.35, 0.45, 1.4, 8, chrome, TexId.SOLID, 0.3);
+        mb.addTorus(rackX + 2.4, 18.9, cfg.z, 0.65, 0.18, 8, 6, "x", chrome, TexId.SOLID, 0.25);
+        mb.addOrientedBox(rackX + 2.5, 17.5, cfg.z - 1.6, 0.55, 0.65, 3.8, Math.PI * 0.5, 0.42, wood, TexId.WOOD_GRAIN, 0.35);
+        mb.addOrientedBox(rackX + 2.5, 17.5, cfg.z + 1.6, 0.55, 0.65, 3.8, Math.PI * 0.5, -0.42, wood, TexId.WOOD_GRAIN, 0.35);
+        mb.addBox(rackX + 2.5, 16.5, cfg.z, 0.5, 0.5, 6.2, wood, TexId.WOOD_GRAIN, 0.3);
+        if (cfg.coat) {
+          mb.addBeveledBox(rackX + 2.7, 8.2, cfg.z, 2.2, 9.2, 5.2, 0.45, cfg.coat, TexId.FABRIC, 0.55);
+          mb.addOrientedBox(rackX + 2.7, 12.2, cfg.z - 2.6, 1.5, 6.8, 1.5, Math.PI * 0.5, 0.14, cfg.coat, TexId.FABRIC, 0.45);
+          mb.addOrientedBox(rackX + 2.7, 12.2, cfg.z + 2.6, 1.5, 6.8, 1.5, Math.PI * 0.5, -0.14, cfg.coat, TexId.FABRIC, 0.45);
+          mb.addBox(rackX + 3.7, 15.6, cfg.z, 0.5, 2.2, 2.4, cfg.accent, TexId.FABRIC, 0.3);
+        }
+      }
+      const tx = 14.55 * ts;
+      const tz = 17.28 * ts;
+      mb.addShadowDisc(tx, 0, tz, 4.2, 4.2, 0.26);
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2 + Math.PI / 4;
+        mb.addOrientedBox(
+          tx + Math.cos(a) * 1.9,
+          1.2,
+          tz + Math.sin(a) * 1.9,
+          3.6,
+          1.1,
+          0.95,
+          a,
+          0.48,
+          wood,
+          TexId.WOOD_GRAIN,
+          0.45
+        );
+        mb.addOrientedBox(
+          tx + Math.cos(a) * 1.5,
+          17.8,
+          tz + Math.sin(a) * 1.5,
+          2.8,
+          0.65,
+          0.65,
+          a,
+          -0.55,
+          wood,
+          TexId.WOOD_GRAIN,
+          0.35
+        );
+        mb.addSphere(tx + Math.cos(a) * 2.7, 18.8, tz + Math.sin(a) * 2.7, 0.45, 0.45, 0.45, 6, 6, chrome, TexId.SOLID, 0.25);
+      }
+      mb.addCylinder(tx, 1.2, tz, 0.95, 0.65, 17.8, 10, wood, TexId.WOOD_GRAIN, 0.55);
+      mb.addCylinder(tx, 19.2, tz, 3.1, 3.1, 0.45, 12, rgb(38, 40, 48), TexId.FABRIC, 0.45);
+      mb.addCylinder(tx, 19.65, tz, 1.95, 1.7, 2.1, 12, rgb(44, 46, 56), TexId.FABRIC, 0.45);
+      mb.addCylinder(tx, 19.75, tz, 2.02, 2.02, 0.5, 12, rgb(168, 42, 44), TexId.SOLID, 0.25);
+    }
     addLockedDoubleDoor3D(mb, 16 * ts, 12.5 * ts, ts);
     addLockedDoubleDoor3D(mb, 16 * ts, 20.5 * ts, ts);
     for (let s = 0; s < 12; s++) {
@@ -3983,7 +4015,9 @@
         // Office door
         [11, 15]
         // Table Room door
-      ]
+      ],
+      // Leave stairwell steps (cols 15..18, rows 14..17) open below y=0 so descending stairs are clearly visible
+      skipFloorRect: { minCol: 15, maxCol: 18, minRow: 14, maxRow: 17 }
     });
     addIndoorCeiling3D(mb, map, {
       skipRect: { minCol: 15, maxCol: 18, minRow: 14, maxRow: 18 },
@@ -4120,11 +4154,50 @@
     mb.addBox(17.12 * ts, 23.4, 8 * ts, 2, 1.4, 12, rgb(255, 236, 152), TexId.SOLID, 0.3);
     mb.addCylinder(19.5 * ts, 0, 8.5 * ts, 3.8, 4.8, 5.4, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
     mb.addTorus(19.5 * ts, 5.4, 8.5 * ts, 3.8, 1, 12, 8, "y", rgb(252, 254, 255), TexId.SOLID, 0.45);
-    for (let rowOff = 0; rowOff < 6; rowOff++) {
-      const postZ = 14.3 * ts + rowOff * 9;
-      mb.addCylinder(15.2 * ts, 0, postZ, 0.55, 0.55, 6.8, 8, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.35);
+    {
+      const stairX0 = 15 * ts;
+      const stairX1 = 19 * ts;
+      const stairCx = (stairX0 + stairX1) * 0.5;
+      const stairW = stairX1 - stairX0;
+      const stairZ0 = 14 * ts;
+      const stairZ1 = 18 * ts;
+      const numSteps = 12;
+      const stepD = (stairZ1 - stairZ0) / numSteps;
+      const stepDrop = 1.65;
+      const stairWellDepth = numSteps * stepDrop + 4;
+      mb.addBox(stairX0 + 0.4, -stairWellDepth, (stairZ0 + stairZ1) * 0.5, 0.8, stairWellDepth, stairZ1 - stairZ0, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.4);
+      mb.addBox(stairX1 - 0.4, -stairWellDepth, (stairZ0 + stairZ1) * 0.5, 0.8, stairWellDepth, stairZ1 - stairZ0, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.4);
+      mb.addBox(stairCx, -stairWellDepth, stairZ1 - 0.4, stairW, stairWellDepth, 0.8, rgb(186, 178, 166), TexId.INTERIOR_WALL, 0.4);
+      for (let s = 0; s < numSteps; s++) {
+        const treadTopY = -(s + 1) * stepDrop;
+        const treadCz = stairZ0 + (s + 0.5) * stepD;
+        mb.addBox(stairCx, -stairWellDepth, treadCz, stairW - 1.2, Math.max(0.5, treadTopY + stairWellDepth - 0.8), stepD + 0.2, rgb(236, 228, 214), TexId.WOOD_GRAIN, 0.35);
+        mb.addBeveledBox(stairCx, treadTopY - 1, treadCz, stairW - 1, 1, stepD + 0.6, 0.2, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.5);
+      }
+      for (const sideX of [15.2 * ts, 18.8 * ts]) {
+        mb.addCylinder(sideX, 0, stairZ0, 0.75, 0.75, 7.6, 8, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.4);
+        mb.addSphere(sideX, 7.8, stairZ0, 0.95, 0.95, 0.95, 6, 8, rgb(134, 82, 44), TexId.WOOD_GRAIN, 0.3);
+        for (let p = 1; p <= 5; p++) {
+          const pt = p / 5;
+          const postZ = stairZ0 + pt * (stairZ1 - stairZ0 - 4);
+          const stepY = -pt * numSteps * stepDrop;
+          mb.addCylinder(sideX, stepY, postZ, 0.45, 0.45, 7, 8, rgb(242, 238, 230), TexId.SOLID, 0.3);
+        }
+        mb.addOrientedBox(
+          sideX,
+          7 - numSteps * stepDrop * 0.5,
+          (stairZ0 + stairZ1 - 4) * 0.5,
+          3.95 * ts,
+          1,
+          1.2,
+          Math.PI * 0.5,
+          -0.31,
+          rgb(134, 82, 44),
+          TexId.WOOD_GRAIN,
+          0.45
+        );
+      }
     }
-    mb.addBeveledBox(15.2 * ts, 6.8, 16 * ts, 1.4, 1.1, 3.2 * ts, 0.25, rgb(134, 82, 44), TexId.WOOD_GRAIN, 0.45);
     {
       const bx = 27 * ts;
       const bz = 7 * ts;
@@ -4181,9 +4254,9 @@
     staticMeshCache.set(levelId, mesh);
     return mesh;
   }
-  function addHumanoid3D(mb, cx, baseY, cz, yaw, walkPhase, isMoving, style, isSanta = false, carryingLadder = false, translucentMb) {
+  function addHumanoid3D(mb, cx, baseY, cz, yaw, walkPhase, isMoving, style, isSanta = false, carryingLadder = false, translucentMb, shadowGroundY = baseY) {
     if (translucentMb) {
-      translucentMb.addShadowDisc(cx, baseY, cz, 5.6, 5.6, 0.36);
+      translucentMb.addShadowDisc(cx, shadowGroundY, cz, 5.6, 5.6, 0.36);
     }
     const cyaw = Math.cos(yaw);
     const syaw = Math.sin(yaw);
@@ -4330,7 +4403,7 @@
     const cz = dog.y + dog.height * 0.5;
     const baseY = getTerrainHeight(cx, cz, "level-outside");
     translucentMb.addShadowDisc(cx, baseY, cz, 5.8, 4.4, 0.35);
-    const yaw = directionToYaw(dog.facing);
+    const yaw = typeof dog.yaw === "number" ? dog.yaw : directionToYaw(dog.facing);
     const cyaw = Math.cos(yaw);
     const syaw = Math.sin(yaw);
     const fx = cyaw;
@@ -4396,17 +4469,44 @@
     const cx = cat.x + cat.width * 0.5;
     const cz = cat.y + cat.height * 0.5;
     translucentMb.addShadowDisc(cx, 0, cz, 4.4, 4.4, 0.32);
+    const speed = Math.hypot(cat.vx, cat.vy);
+    const isRunning = cat.mode === "flee" || speed > 1.5;
+    const yaw = typeof cat.yaw === "number" ? cat.yaw : speed > 0.5 ? Math.atan2(cat.vy, cat.vx) : Math.PI / 2;
+    const fx = Math.cos(yaw);
+    const fz = Math.sin(yaw);
+    const rx = -fz;
+    const rz = fx;
     const catBlack = rgb(28, 30, 40);
-    mb.addCylinder(cx, 0, cz, 3, 2.2, 5.2, 12, catBlack, TexId.SOLID, 0.65);
-    mb.addSphere(cx - 1.1, 0.55, cz + 2.4, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
-    mb.addSphere(cx + 1.1, 0.55, cz + 2.4, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
-    mb.addSphere(cx, 6.6, cz + 1, 2.6, 2.4, 2.6, 10, 12, catBlack, TexId.SOLID, 0.65);
-    mb.addCone(cx - 1.55, 8.2, cz + 1, 0.95, 2.3, 8, catBlack, TexId.SOLID, 0.5);
-    mb.addCone(cx + 1.55, 8.2, cz + 1, 0.95, 2.3, 8, catBlack, TexId.SOLID, 0.5);
-    mb.addSphere(cx - 0.95, 6.85, cz + 3.25, 0.52, 0.58, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
-    mb.addSphere(cx + 0.95, 6.85, cz + 3.25, 0.52, 0.58, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+    const runStride = isRunning ? Math.sin(elapsedTime * 18) * 1.4 : 0;
+    if (isRunning) {
+      mb.addOrientedBox(cx, 3, cz, 5.4, 2.8, 3.2, yaw, 0, catBlack, TexId.SOLID, 0.65);
+      for (const [fSign, rSign] of [
+        [1, 1],
+        [1, -1],
+        [-1, 1],
+        [-1, -1]
+      ]) {
+        const lx = cx + fx * (fSign * 2.1 + fSign * runStride * 0.65) + rx * rSign * 1.1;
+        const lz = cz + fz * (fSign * 2.1 + fSign * runStride * 0.65) + rz * rSign * 1.1;
+        mb.addCylinder(lx, 0, lz, 0.55, 0.55, 2.6, 8, catBlack, TexId.SOLID, 0.4);
+        mb.addSphere(lx + fx * 0.25, 0.35, lz + fz * 0.25, 0.65, 0.45, 0.75, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.25);
+      }
+    } else {
+      mb.addCylinder(cx, 0, cz, 2.8, 2.1, 5, 12, catBlack, TexId.SOLID, 0.65);
+      mb.addSphere(cx + fx * 2.3 + rx * 1.05, 0.55, cz + fz * 2.3 + rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+      mb.addSphere(cx + fx * 2.3 - rx * 1.05, 0.55, cz + fz * 2.3 - rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+    }
+    const headDist = isRunning ? 3.2 : 1;
+    const headY = isRunning ? 5.2 : 6.6;
+    const hx = cx + fx * headDist;
+    const hz = cz + fz * headDist;
+    mb.addSphere(hx, headY, hz, 2.5, 2.3, 2.5, 10, 12, catBlack, TexId.SOLID, 0.65);
+    mb.addCone(hx + rx * 1.45, headY + 1.6, hz + rz * 1.45, 0.9, 2.2, 8, catBlack, TexId.SOLID, 0.5);
+    mb.addCone(hx - rx * 1.45, headY + 1.6, hz - rz * 1.45, 0.9, 2.2, 8, catBlack, TexId.SOLID, 0.5);
+    mb.addSphere(hx + fx * 2.15 + rx * 0.95, headY + 0.25, hz + fz * 2.15 + rz * 0.95, 0.5, 0.55, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+    mb.addSphere(hx + fx * 2.15 - rx * 0.95, headY + 0.25, hz + fz * 2.15 - rz * 0.95, 0.5, 0.55, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
     const swish = Math.sin(elapsedTime * 5) * 0.9;
-    mb.addSphere(cx + swish, 2.2, cz - 3.2, 0.7, 2.2, 0.7, 6, 8, catBlack, TexId.SOLID, 0.45);
+    mb.addSphere(cx - fx * 3.3 + rx * swish, isRunning ? 3.8 : 2.2, cz - fz * 3.3 + rz * swish, 0.7, 2.2, 0.7, 6, 8, catBlack, TexId.SOLID, 0.45);
   }
   function addMotorcycle3D(mb, translucentMb, motorcycle, elapsedTime) {
     const cx = motorcycle.x + motorcycle.width * 0.5;
@@ -4451,8 +4551,8 @@
     const ox = poly[0].x;
     const oz = poly[0].y;
     const y = 0.42;
-    const beamColor = ConeOfSight.cheatMode ? rgb(82, 224, 128, 0.28) : rgb(255, 232, 92, 0.32);
-    const edgeColor = ConeOfSight.cheatMode ? rgb(82, 245, 140, 0.62) : rgb(255, 112, 48, 0.68);
+    const beamColor = ConeOfSight.cheatMode ? rgb(82, 224, 128, 0.48) : rgb(255, 232, 68, 0.62);
+    const edgeColor = ConeOfSight.cheatMode ? rgb(82, 245, 140, 0.85) : rgb(255, 152, 48, 0.9);
     for (let i = 1; i < poly.length - 1; i++) {
       const p1 = poly[i];
       const p2 = poly[i + 1];
@@ -4468,14 +4568,36 @@
       translucentMb.addQuad(
         [p1.x, y, p1.y],
         [p2.x, y, p2.y],
-        [p2.x, y + 1.5, p2.y],
-        [p1.x, y + 1.5, p1.y],
+        [p2.x, y + 2, p2.y],
+        [p1.x, y + 2, p1.y],
         [0, 1, 0],
         edgeColor,
         TexId.SOLID,
         0
       );
     }
+    const firstPt = poly[1];
+    const lastPt = poly[poly.length - 1];
+    translucentMb.addQuad(
+      [ox, y, oz],
+      [firstPt.x, y, firstPt.y],
+      [firstPt.x, y + 2, firstPt.y],
+      [ox, y + 2, oz],
+      [0, 1, 0],
+      edgeColor,
+      TexId.SOLID,
+      0
+    );
+    translucentMb.addQuad(
+      [lastPt.x, y, lastPt.y],
+      [ox, y, oz],
+      [ox, y + 2, oz],
+      [lastPt.x, y + 2, lastPt.y],
+      [0, 1, 0],
+      edgeColor,
+      TexId.SOLID,
+      0
+    );
   }
   function addDoorAndFog3D(opaqueMb, door) {
     const b = door.bounds;
@@ -4504,6 +4626,32 @@
       );
     }
   }
+  function addOpenedDoor3D(opaqueMb, door) {
+    const b = door.bounds;
+    const leafW = b.width - 2.4;
+    const leafH = 24;
+    const leafD = 3.6;
+    const hx = b.x + 1.2;
+    const hz = b.y + b.height * 0.5;
+    const ease = 1 - Math.pow(1 - Math.max(0, Math.min(1, door.progress)), 3);
+    const angle = door.swingDirection * ease * (Math.PI * 0.48);
+    const ux = Math.cos(angle);
+    const uz = Math.sin(angle);
+    const nx = -uz;
+    const nz = ux;
+    const cx = hx + ux * leafW * 0.5;
+    const cz = hz + uz * leafW * 0.5;
+    opaqueMb.addOrientedBox(cx, leafH * 0.5, cz, leafW, leafH, leafD, angle, 0, rgb(132, 78, 40), TexId.WOOD_GRAIN, 0.7);
+    opaqueMb.addOrientedBox(cx, 2.4 + 3.7, cz, leafW * 0.68, 7.4, leafD + 0.6, angle, 0, rgb(156, 96, 52), TexId.WOOD_GRAIN, 0.35);
+    opaqueMb.addOrientedBox(cx, 12.4 + 4.6, cz, leafW * 0.68, 9.2, leafD + 0.6, angle, 0, rgb(156, 96, 52), TexId.WOOD_GRAIN, 0.35);
+    const knobDist = leafW * 0.32;
+    const kx = cx + ux * knobDist;
+    const kz = cz + uz * knobDist;
+    for (const side of [-1, 1]) {
+      const off = side * (leafD * 0.5 + 0.6);
+      opaqueMb.addSphere(kx + nx * off, 11.2, kz + nz * off, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
+    }
+  }
   function addExclamationBadge3D(opaqueMb, cx, baseY, cz) {
     const ay = baseY + 19;
     opaqueMb.addBeveledBox(cx - 1.5, ay + 2.5, cz, 1.6, 5.2, 1.6, 0.3, rgb(255, 42, 42), TexId.SOLID, 0.55);
@@ -4519,9 +4667,10 @@
     const levelId = state.currentLevelId;
     const playerVisible = state.player.blinkTimer <= 0 || Math.floor(state.player.blinkTimer * 12) % 2 === 0;
     const px = state.player.x + state.player.width * 0.5;
-    const pz = state.isOnRoof && levelId === "level-outside" ? ROOF_WALK_Y + state.player.height * 0.5 : state.player.y + state.player.height * 0.5;
+    const pz = state.climbing && levelId === "level-outside" ? 10 * TILE_SIZE + 5.2 : state.player.y + state.player.height * 0.5;
     const py = getPlayerElevation(state);
-    const playerYaw = typeof state.player.yaw === "number" ? state.player.yaw : directionToYaw(state.player.facing);
+    const shadowGroundY = state.climbing ? getTerrainHeight(px, pz, levelId) : py - (state.player.jumpOffset ?? 0);
+    const playerYaw = state.climbing && levelId === "level-outside" ? -Math.PI / 2 : typeof state.player.renderYaw === "number" ? state.player.renderYaw : typeof state.player.yaw === "number" ? state.player.yaw : directionToYaw(state.player.facing);
     if (playerVisible) {
       const electrocutedFlash = state.electrocutionTimer > 0 && Math.floor(t * 20) % 2 === 0;
       const santaStyle = electrocutedFlash ? {
@@ -4555,10 +4704,11 @@
         santaStyle,
         true,
         state.hasLadder && !state.ladderPlaced,
-        translucent
+        translucent,
+        shadowGroundY
       );
       if (isPlayerTranslucent) {
-        playerTargetBuilder.scaleAlphaRange(playerStartVertex, 0.5);
+        playerTargetBuilder.scaleAlphaRange(playerStartVertex, 0.25);
       }
     }
     if (levelId === "level-outside") {
@@ -4575,11 +4725,10 @@
         addWoodenLadder3D(opaque, lx, ly, lz, 24, false);
       } else if (state.ladderPlaced) {
         const lx = LADDER_CLIMB_X + 6;
-        const lz = LADDER_BOTTOM_Y;
+        const lz = 10 * TILE_SIZE + 3.2;
         const ly = getTerrainHeight(lx, lz, "level-outside");
-        const houseGroundY2 = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
-        const roofY = houseGroundY2 + MAIN_HOUSE_ROOF_WALK_HEIGHT;
-        addWoodenLadder3D(opaque, lx, ly, lz - 4, roofY - ly + 2, true);
+        const roofEdgeY = getMainHouseRoofElevation(lx, ROOF_WALK_Y + 6);
+        addWoodenLadder3D(opaque, lx, ly, lz, roofEdgeY - ly + 2.5, true);
       }
       addMotorcycle3D(opaque, translucent, state.motorcycle, t);
       addDog3D(opaque, translucent, state.dog, t);
@@ -4639,7 +4788,7 @@
         opaque.addSphere(sx, groundY + 7.5, sz, 3.3, 3.3, 3.3, 10, 12, rgb(248, 252, 255), TexId.SNOW, 0.6);
       }
       const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
-      const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 16;
+      const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 21;
       const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
       const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
       for (let i = 0; i < 5; i++) {
@@ -4795,6 +4944,9 @@
       addConeOfSight3D(translucent, basement.olexaConeOfSight);
       for (const door of basement.doors) {
         addDoorAndFog3D(opaque, door);
+      }
+      for (const door of basement.openedDoors) {
+        addOpenedDoor3D(opaque, door);
       }
     } else if (levelId === "level-upstairs") {
       const upstairs = state.levels["level-upstairs"];
@@ -5000,6 +5152,9 @@
       }
       for (const door of upstairs.doors) {
         addDoorAndFog3D(opaque, door);
+      }
+      for (const door of upstairs.openedDoors) {
+        addOpenedDoor3D(opaque, door);
       }
     } else if (levelId === "level-people") {
       const peopleLevel = state.levels["level-people"];
@@ -5997,7 +6152,7 @@
       for (const cone of basementCones) {
         if (cone?.sightPolygon.length > 2) {
           ctx.save();
-          ctx.fillStyle = "rgba(255, 250, 205, 0.20)";
+          ctx.fillStyle = "rgba(255, 250, 180, 0.48)";
           ctx.beginPath();
           const [first, ...rest] = cone.sightPolygon;
           ctx.moveTo(Math.round(first.x), Math.round(first.y));
@@ -6151,7 +6306,7 @@
       for (const cone of upstairsCones) {
         if (cone && cone.sightPolygon.length > 2) {
           ctx.save();
-          ctx.fillStyle = "rgba(255, 250, 205, 0.20)";
+          ctx.fillStyle = "rgba(255, 250, 180, 0.48)";
           ctx.beginPath();
           const [first, ...rest] = cone.sightPolygon;
           ctx.moveTo(Math.round(first.x), Math.round(first.y));
@@ -6936,6 +7091,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       deceleration: DOG_DECELERATION,
       mode: "waiting",
       facing: "left",
+      yaw: Math.PI,
       animTimer: 0,
       heartSpawnTimer: 0,
       hearts: []
@@ -7001,6 +7157,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
     };
     if (dog.vx !== 0 || dog.vy !== 0) {
+      if (Math.hypot(dog.vx, dog.vy) > 0.5) {
+        dog.yaw = Math.atan2(dog.vy, dog.vx);
+      }
       dog.animTimer += dtSeconds;
       const nextX = dog.x + dog.vx * dtSeconds;
       if (!collidesAt(nextX, dog.y)) {
@@ -7330,7 +7489,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
   var BASEMENT_FIREPLACE_SPAWN = {
     x: 9.5 * TILE_SIZE,
     y: 11 * TILE_SIZE + 2,
-    facing: "left"
+    facing: "down"
   };
   var BASEMENT_STAIRS_SPAWN = {
     x: 18.5 * TILE_SIZE,
@@ -7396,6 +7555,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       __publicField(this, "id", "level-basement");
       __publicField(this, "map", BASEMENT_MAP);
       __publicField(this, "doors");
+      __publicField(this, "openedDoors", []);
       __publicField(this, "windowNpc", { ...BASEMENT_WINDOW_NPC });
       __publicField(this, "olexaNpc", { ...BASEMENT_OLEXA_NPC });
       __publicField(this, "toiletNpc", { ...BASEMENT_TOILET_NPC });
@@ -7438,8 +7598,16 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         player.y = BASEMENT_FIREPLACE_SPAWN.y;
         player.facing = BASEMENT_FIREPLACE_SPAWN.facing;
       }
+      const spawnYaw = player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
+      player.yaw = spawnYaw;
+      player.renderYaw = spawnYaw;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
       player.isMoving = false;
       player.walkTimer = 0;
+      if (this.doors.some((d) => d.id === "basement-bathroom-door")) {
+        this.openedDoors = [];
+      }
       this.npcSightAngle = -Math.PI / 2;
       this.npcSightTimer = 0;
       this.intruderDetected = false;
@@ -7500,6 +7668,12 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       if (doorIdx !== -1) {
         const openedDoor = this.doors[doorIdx];
         this.doors.splice(doorIdx, 1);
+        this.openedDoors.push({
+          id: openedDoor.id,
+          bounds: { ...openedDoor.bounds },
+          progress: 0,
+          swingDirection: player.y >= openedDoor.bounds.y ? -1 : 1
+        });
         if (openedDoor.id === "basement-bathroom-door") {
           this.startToiletCutscene(player);
         }
@@ -7612,7 +7786,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     y: 19 * TILE_SIZE + 2,
     width: 12,
     height: 12,
-    facing: "down"
+    facing: "left"
   };
   var LevelOutside = class {
     constructor(map = STARTER_MAP) {
@@ -7638,6 +7812,10 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       player.x = PLAYER_START_X;
       player.y = PLAYER_START_Y;
       player.facing = "up";
+      player.yaw = -Math.PI / 2;
+      player.renderYaw = -Math.PI / 2;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
       player.isMoving = false;
       player.walkTimer = 0;
     }
@@ -7659,6 +7837,8 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         player.x = this.motorcycle.x + 8;
         player.y = this.motorcycle.y - 2;
         player.facing = "right";
+        player.yaw = 0;
+        player.renderYaw = 0;
         player.isMoving = true;
         return true;
       }
@@ -7676,13 +7856,21 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         player.x = LADDER_CLIMB_X;
         player.y = LADDER_BOTTOM_Y;
         player.facing = "up";
+        player.yaw = -Math.PI / 2;
+        player.renderYaw = -Math.PI / 2;
+        player.jumpOffset = 0;
+        player.jumpVelocity = 0;
         return true;
       }
       if (interactableId === "roof-ladder") {
         this.climbing = { direction: "down", progress: 0 };
         player.x = LADDER_CLIMB_X;
-        player.y = ROOF_WALK_Y;
+        player.y = LADDER_BOTTOM_Y;
         player.facing = "down";
+        player.yaw = Math.PI / 2;
+        player.renderYaw = Math.PI / 2;
+        player.jumpOffset = 0;
+        player.jumpVelocity = 0;
         return true;
       }
       if (interactableId === "roof-chimney") {
@@ -7891,7 +8079,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     return "level-outside";
   }
   function createIntroDialogue(isMobile) {
-    const firstLine = isMobile ? "Use the virtual joystick to move around. To interact with things, move close enough to it and an interaction button will appear. Click anywhere to close this window and start playing." : "Use the arrow keys to move around and Z to interact. Press Z to close this window and start playing.";
+    const firstLine = isMobile ? "Use the virtual joystick to move around. To interact with things, move close enough to it and an interaction button will appear. Click anywhere to close this window and start playing." : "Use WASD to move around, the arrow keys to look around, and Space to jump and interact with things. Press Space to close this window and start playing.";
     return {
       lines: [firstLine, "Good luck!\nChristmas depends on you..."],
       currentIndex: 0
@@ -7996,6 +8184,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     state.player.y = PLAYER_START_Y;
     state.player.facing = "up";
     state.player.yaw = -Math.PI / 2;
+    state.player.renderYaw = -Math.PI / 2;
+    state.player.jumpOffset = 0;
+    state.player.jumpVelocity = 0;
     state.player.isMoving = false;
     state.player.walkTimer = 0;
     state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
@@ -8015,41 +8206,54 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     syncOutsideToLevel(state);
     refreshInteractables(state);
   }
-  function updateRoofMovement(player, input, dtSeconds) {
-    if (player.blinkTimer > 0) {
-      player.blinkTimer = Math.max(0, player.blinkTimer - dtSeconds);
-    }
-    let dx = 0;
-    if (input.moveVector) {
-      dx = input.moveVector.x;
-    } else if (typeof input.cameraYaw === "number") {
-      const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
-      const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-      const rawLen = Math.hypot(forward, strafe);
-      if (rawLen > 0) {
-        const nf = forward / rawLen;
-        const ns = strafe / rawLen;
-        const cosY = Math.cos(input.cameraYaw);
-        const sinY = Math.sin(input.cameraYaw);
-        const worldDx = nf * cosY - ns * sinY;
-        dx = Math.abs(worldDx) > 0.15 ? Math.sign(worldDx) : strafe;
+  function isMainHouseTile(col, row) {
+    return col >= 4 && col <= 16 && row >= 3 && row <= 9;
+  }
+  function updateRoofMovement(state, input, dtSeconds) {
+    const player = state.player;
+    const prevCenterX = player.x + player.width * 0.5;
+    const prevCenterZ = player.y + player.height * 0.5;
+    const prevRoofElevation = getMainHouseRoofElevation(prevCenterX, prevCenterZ);
+    const chimneyCore = {
+      x: ROOF_CHIMNEY_BOUNDS.x + 3,
+      y: ROOF_CHIMNEY_BOUNDS.y + 3,
+      width: Math.max(4, ROOF_CHIMNEY_BOUNDS.width - 6),
+      height: Math.max(4, ROOF_CHIMNEY_BOUNDS.height - 6)
+    };
+    updatePlayer(
+      player,
+      input,
+      dtSeconds,
+      state.map,
+      [chimneyCore],
+      isMainHouseTile
+    );
+    const cx = player.x + player.width * 0.5;
+    const cz = player.y + player.height * 0.5;
+    const minX = MAIN_HOUSE_ROOF_BOUNDS.x;
+    const maxX = MAIN_HOUSE_ROOF_BOUNDS.x + MAIN_HOUSE_ROOF_BOUNDS.width;
+    const minZ = MAIN_HOUSE_ROOF_BOUNDS.y;
+    const maxZ = MAIN_HOUSE_ROOF_BOUNDS.y + MAIN_HOUSE_ROOF_BOUNDS.height;
+    if (cx < minX || cx > maxX || cz < minZ || cz > maxZ) {
+      state.isOnRoof = false;
+      if (cx < minX) {
+        player.x = minX - player.width - 1;
+      } else if (cx > maxX) {
+        player.x = maxX + 1;
       }
-    } else {
-      if (input.left) dx -= 1;
-      if (input.right) dx += 1;
+      if (cz < minZ) {
+        player.y = minZ - player.height - 1;
+      } else if (cz > maxZ) {
+        player.y = maxZ + 1;
+      }
+      const landingGroundY = getTerrainHeight(
+        player.x + player.width * 0.5,
+        player.y + player.height * 0.5,
+        "level-outside"
+      );
+      player.jumpOffset = Math.max(1e-3, prevRoofElevation - landingGroundY);
+      player.jumpVelocity = 0;
     }
-    player.y = ROOF_WALK_Y;
-    if (Math.abs(dx) < 1e-3) {
-      player.isMoving = false;
-      player.walkTimer = 0;
-      return;
-    }
-    player.isMoving = true;
-    player.walkTimer += dtSeconds;
-    player.facing = dx < 0 ? "left" : "right";
-    player.yaw = dx < 0 ? Math.PI : 0;
-    const nextX = player.x + dx * player.speed * dtSeconds;
-    player.x = Math.max(ROOF_MIN_X, Math.min(ROOF_MAX_X, nextX));
   }
   function updateOutsideLevel(state, input, dtSeconds) {
     if (state.electrocutionTimer > 0) {
@@ -8072,6 +8276,8 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       state.player.x = state.motorcycle.x + 8;
       state.player.y = state.motorcycle.y - 2;
       state.player.facing = "right";
+      state.player.yaw = 0;
+      state.player.renderYaw = 0;
       state.player.isMoving = true;
       state.player.walkTimer += dtSeconds;
       if (state.motorcycle.x >= MOTORCYCLE_CRASH_X) {
@@ -8096,7 +8302,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       state.player.walkTimer += dtSeconds;
       if (state.climbing.direction === "up") {
         state.player.facing = "up";
-        state.player.y = LADDER_BOTTOM_Y + (ROOF_WALK_Y - LADDER_BOTTOM_Y) * state.climbing.progress;
+        state.player.yaw = -Math.PI / 2;
+        state.player.renderYaw = -Math.PI / 2;
+        state.player.y = LADDER_BOTTOM_Y;
         if (state.climbing.progress >= 1) {
           state.player.y = ROOF_WALK_Y;
           state.player.isMoving = false;
@@ -8105,7 +8313,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         }
       } else {
         state.player.facing = "down";
-        state.player.y = ROOF_WALK_Y + (LADDER_BOTTOM_Y - ROOF_WALK_Y) * state.climbing.progress;
+        state.player.yaw = Math.PI / 2;
+        state.player.renderYaw = Math.PI / 2;
+        state.player.y = LADDER_BOTTOM_Y;
         if (state.climbing.progress >= 1) {
           state.player.y = LADDER_BOTTOM_Y;
           state.player.isMoving = false;
@@ -8117,13 +8327,14 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       return true;
     }
     if (state.isOnRoof) {
-      updateRoofMovement(state.player, input, dtSeconds);
+      updateRoofMovement(state, input, dtSeconds);
       for (let i = state.footprints.length - 1; i >= 0; i--) {
         state.footprints[i].age += dtSeconds;
         if (state.footprints[i].age >= state.footprints[i].maxAge) {
           state.footprints.splice(i, 1);
         }
       }
+      syncOutsideToLevel(state);
       return false;
     }
     const solidObstacles = [...state.throwers, state.motorcycle];
@@ -8164,14 +8375,13 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     const safeDt = Math.max(0, dtSeconds);
     state.elapsedTime += safeDt;
     dtSeconds = safeDt;
-    const zPressed = consumeActionPress(input);
-    const pointerClick = input.pointerClick;
-    if (pointerClick) {
+    const actionPressed = consumeActionPress(input);
+    if (input.pointerClick) {
       input.pointerClick = null;
     }
     if (state.activeDialogue) {
       state.player.isMoving = false;
-      if (zPressed || pointerClick) {
+      if (actionPressed) {
         if (state.activeDialogue.unclosable && state.activeDialogue.currentIndex >= state.activeDialogue.lines.length - 1) {
           return;
         }
@@ -8185,6 +8395,13 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         }
       }
       return;
+    }
+    updatePlayerJump(state.player, dtSeconds);
+    for (const door of state.levels["level-basement"].openedDoors) {
+      door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
+    }
+    for (const door of state.levels["level-upstairs"].openedDoors) {
+      door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
     }
     const transitionCtx = {
       loadLevel: (nextId) => loadLevel(state, nextId),
@@ -8280,38 +8497,33 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       );
     }
     refreshInteractables(state);
-    let pointerInteracted = false;
-    if (pointerClick && state.nearbyInteractable) {
-      const b = state.nearbyInteractable.bounds;
-      const clickMargin = 24;
-      const clickedNearObject = pointerClick.worldX >= b.x - clickMargin && pointerClick.worldX <= b.x + b.width + clickMargin && pointerClick.worldY >= b.y - clickMargin && pointerClick.worldY <= b.y + b.height + clickMargin;
-      if (clickedNearObject) {
-        pointerInteracted = true;
-      }
-    }
-    if ((zPressed || pointerInteracted) && state.nearbyInteractable) {
-      const target = state.nearbyInteractable;
-      if (state.currentLevelId === "level-outside") {
-        syncOutsideToLevel(state);
-      }
-      const activeLevel = getActiveLevel(state);
-      const prevLevelId = state.currentLevelId;
-      const handledByLevel = activeLevel.handleInteraction(
-        target.id,
-        state.player,
-        transitionCtx
-      );
-      if (handledByLevel) {
-        if (prevLevelId === "level-outside" && state.currentLevelId === "level-outside") {
-          syncLevelToOutside(state);
+    if (actionPressed) {
+      if (state.nearbyInteractable) {
+        const target = state.nearbyInteractable;
+        if (state.currentLevelId === "level-outside") {
+          syncOutsideToLevel(state);
         }
-        refreshInteractables(state);
-      } else if (target.dialogueLines.length > 0) {
-        state.activeDialogue = {
-          lines: target.dialogueLines,
-          currentIndex: 0,
-          speakerPortrait: target.speakerPortrait
-        };
+        const activeLevel = getActiveLevel(state);
+        const prevLevelId = state.currentLevelId;
+        const handledByLevel = activeLevel.handleInteraction(
+          target.id,
+          state.player,
+          transitionCtx
+        );
+        if (handledByLevel) {
+          if (prevLevelId === "level-outside" && state.currentLevelId === "level-outside") {
+            syncLevelToOutside(state);
+          }
+          refreshInteractables(state);
+        } else if (target.dialogueLines.length > 0) {
+          state.activeDialogue = {
+            lines: target.dialogueLines,
+            currentIndex: 0,
+            speakerPortrait: target.speakerPortrait
+          };
+        }
+      } else {
+        triggerPlayerJump(state.player);
       }
     }
   }
@@ -8476,8 +8688,19 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     if (typeof screen !== "undefined" && screen.orientation?.addEventListener) {
       screen.orientation.addEventListener("change", onOrientationChange);
     }
-    if (new URLSearchParams(window.location.search).has("debug")) {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.has("debug")) {
       attachDebugConsole(document.getElementById("viewport-frame"));
+    }
+    let fpsElement = null;
+    if (searchParams.has("fps")) {
+      const viewportFrame = document.getElementById("viewport-frame");
+      if (viewportFrame) {
+        fpsElement = document.createElement("pre");
+        fpsElement.id = "viewport-fps-text";
+        fpsElement.textContent = "fps: 0";
+        viewportFrame.appendChild(fpsElement);
+      }
     }
     const secretSantaDB = await initSecretSantaDB(secret_default);
     attachKeyboardListeners(window, input, {
@@ -8486,7 +8709,6 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         applyViewportLayout(true);
       }
     });
-    const searchParams = new URLSearchParams(window.location.search);
     const initialLevelId = parseLevelQueryParam(searchParams.get("level"));
     const hasLevelOverride = searchParams.has("level");
     const isDebug = searchParams.has("debug");
@@ -8515,36 +8737,31 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         input.action = false;
       });
     }
-    attachPointerListeners({
-      canvas,
-      input,
-      getCamera: () => {
-        const mapWidthPx = state.map.cols * state.map.tileSize;
-        const mapHeightPx = state.map.rows * state.map.tileSize;
-        return computeCamera(
-          state.player.x,
-          state.player.y,
-          state.player.width,
-          state.player.height,
-          canvas.width,
-          canvas.height,
-          mapWidthPx,
-          mapHeightPx
-        );
-      },
-      isJoystickActive: () => joystick?.isPointerActive() ?? false,
-      isDialogueActive: () => state.activeDialogue !== null
-    });
-    attachMouseLookListeners({
-      element: canvas,
-      input,
-      isDialogueActive: () => state.activeDialogue !== null
-    });
+    input.cameraYaw = -Math.PI / 2;
+    input.cameraPitch = 0.38;
     let lastTimestamp = null;
+    let fpsFrameCount = 0;
+    let fpsAccumSeconds = 0;
+    let currentFps = 0;
     function frame(now) {
       applyViewportLayout(false);
-      const dtSeconds = lastTimestamp === null ? 0 : Math.max(0, Math.min((now - lastTimestamp) / 1e3, 0.1));
+      const rawDtSeconds = lastTimestamp === null ? 0 : Math.max(0, (now - lastTimestamp) / 1e3);
+      const dtSeconds = Math.min(rawDtSeconds, 0.1);
       lastTimestamp = now;
+      if (fpsElement && rawDtSeconds > 0) {
+        fpsFrameCount += 1;
+        fpsAccumSeconds += rawDtSeconds;
+        if (currentFps === 0) {
+          currentFps = Math.round(1 / rawDtSeconds);
+          fpsElement.textContent = `fps: ${currentFps}`;
+        }
+        if (fpsAccumSeconds >= 0.25) {
+          currentFps = Math.round(fpsFrameCount / fpsAccumSeconds);
+          fpsElement.textContent = `fps: ${currentFps}`;
+          fpsFrameCount = 0;
+          fpsAccumSeconds = 0;
+        }
+      }
       const isJoystickShown = joystick?.isVisible() ?? false;
       state.joystickActive = isJoystickShown;
       updateGameState(state, input, dtSeconds);

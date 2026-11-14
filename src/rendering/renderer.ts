@@ -1425,7 +1425,7 @@ export function renderGame(
     for (const cone of basementCones) {
       if (cone?.sightPolygon.length > 2) {
         ctx.save();
-        ctx.fillStyle = 'rgba(255, 250, 205, 0.20)'; // 80% transparent whitish-yellowish
+        ctx.fillStyle = 'rgba(255, 250, 180, 0.48)'; // Clearly visible yellowish sight cone
         ctx.beginPath();
         const [first, ...rest] = cone.sightPolygon;
         ctx.moveTo(Math.round(first.x), Math.round(first.y));
@@ -1600,7 +1600,7 @@ export function renderGame(
     for (const cone of upstairsCones) {
       if (cone && cone.sightPolygon.length > 2) {
         ctx.save();
-        ctx.fillStyle = 'rgba(255, 250, 205, 0.20)';
+        ctx.fillStyle = 'rgba(255, 250, 180, 0.48)';
         ctx.beginPath();
         const [first, ...rest] = cone.sightPolygon;
         ctx.moveTo(Math.round(first.x), Math.round(first.y));

@@ -24,6 +24,8 @@ export interface Dog {
   deceleration: number;
   mode: DogMode;
   facing: 'left' | 'right';
+  /** Continuous 3D facing yaw in radians */
+  yaw?: number;
   animTimer: number;
   heartSpawnTimer: number;
   hearts: DogHeart[];
@@ -59,6 +61,7 @@ export function createDog(
     deceleration: DOG_DECELERATION,
     mode: 'waiting',
     facing: 'left',
+    yaw: Math.PI,
     animTimer: 0,
     heartSpawnTimer: 0,
     hearts: [],
@@ -145,6 +148,9 @@ export function updateDog(
   };
 
   if (dog.vx !== 0 || dog.vy !== 0) {
+    if (Math.hypot(dog.vx, dog.vy) > 0.5) {
+      dog.yaw = Math.atan2(dog.vy, dog.vx);
+    }
     dog.animTimer += dtSeconds;
 
     const nextX = dog.x + dog.vx * dtSeconds;

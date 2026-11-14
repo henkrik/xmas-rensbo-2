@@ -309,29 +309,41 @@ export function getTerrainNormal(
 }
 
 /**
- * Returns the 3D world Y elevation of the player (handling outdoor slopes, ladder climbing, roof walking, and indoor stairs).
+ * Returns the pitched Main House gable rooftop Y elevation at world (px, pz),
+ * matching the 3D roof geometry (`roofBaseY = baseY + 36`, ridge peak `+16` along z = 6.5 * TILE_SIZE).
+ */
+export function getMainHouseRoofElevation(_px: number, pz: number): number {
+  const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, 'level-outside');
+  const roofBaseY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT; // baseY + 36
+  const zCenter = 6.5 * TILE_SIZE; // 104 (ridge center)
+  const zHalfSpan = 3.75 * TILE_SIZE; // 60 (half of d + 8 = 120)
+  const slopeT = Math.max(0, 1 - Math.abs(pz - zCenter) / zHalfSpan);
+  return roofBaseY + MAIN_HOUSE_ROOF_PEAK_ADD * slopeT;
+}
+
+/**
+ * Returns the 3D world Y elevation of the player (handling outdoor slopes, ladder climbing, roof walking, jump arc, and indoor stairs).
  */
 export function getPlayerElevation(state: GameState): number {
   const px = state.player.x + state.player.width / 2;
   const pz = state.player.y + state.player.height / 2;
+  const jumpOffset = state.player.jumpOffset ?? 0;
 
   if (state.currentLevelId === 'level-outside') {
-    const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, 'level-outside');
-    const roofWalkElevation = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
-
     if (state.climbing) {
       const groundY = getTerrainHeight(px, LADDER_BOTTOM_Y + 6, 'level-outside');
+      const roofEdgeY = getMainHouseRoofElevation(px, ROOF_WALK_Y + 6);
       const t = Math.max(0, Math.min(1, state.climbing.progress));
       return state.climbing.direction === 'up'
-        ? groundY + (roofWalkElevation - groundY) * t
-        : roofWalkElevation + (groundY - roofWalkElevation) * t;
+        ? groundY + (roofEdgeY - groundY) * t
+        : roofEdgeY + (groundY - roofEdgeY) * t;
     }
 
     if (state.isOnRoof) {
-      return roofWalkElevation;
+      return getMainHouseRoofElevation(px, pz) + jumpOffset;
     }
 
-    return getTerrainHeight(px, pz, 'level-outside');
+    return getTerrainHeight(px, pz, 'level-outside') + jumpOffset;
   }
 
   if (state.currentLevelId === 'level-basement') {
@@ -343,9 +355,9 @@ export function getPlayerElevation(state: GameState): number {
       pz <= 19 * TILE_SIZE
     ) {
       const stairProgress = Math.max(0, Math.min(1, (px - 18 * TILE_SIZE) / (3 * TILE_SIZE)));
-      return stairProgress * 12;
+      return stairProgress * 12 + jumpOffset;
     }
-    return 0;
+    return jumpOffset;
   }
 
   if (state.currentLevelId === 'level-upstairs') {
@@ -357,12 +369,12 @@ export function getPlayerElevation(state: GameState): number {
       pz <= 18 * TILE_SIZE
     ) {
       const stairProgress = Math.max(0, Math.min(1, (pz - 13.5 * TILE_SIZE) / (4 * TILE_SIZE)));
-      return -stairProgress * 10;
+      return -stairProgress * 10 + jumpOffset;
     }
-    return 0;
+    return jumpOffset;
   }
 
-  return 0;
+  return jumpOffset;
 }
 
 export interface Camera3D {
@@ -443,11 +455,11 @@ export function computeUnobstructedCameraDistance(
   );
 
   // Find the n-th point within the line of sight that is furthest from the player
-  // without colliding with anything on the map.
+  // without colliding with anything on the map (ignoring map boundaries).
   let furthestValidIndex = -1;
   for (let i = lineOfSight.n - 1; i >= 0; i--) {
     const box = lineOfSight.boxes[i];
-    if (!isRectCollidingWithMap(map, box.x, box.y, box.width, box.height)) {
+    if (!isRectCollidingWithMap(map, box.x, box.y, box.width, box.height, false)) {
       furthestValidIndex = i;
       break;
     }
@@ -496,17 +508,18 @@ export function updateCamera3D(
     const spawnYaw = directionToYaw(player.facing);
     cam.yaw = spawnYaw;
     player.yaw = spawnYaw;
+    player.renderYaw = spawnYaw;
     if (input.cameraYaw !== null && input.cameraYaw !== undefined) {
       input.cameraYaw = spawnYaw;
     }
   }
 
-  // When transitioning onto the roof, orient camera East toward the chimney so Santa's path is right in front
+  // When transitioning onto the roof, orient camera north toward the chimney
   if (state.isOnRoof && !cam.wasOnRoof) {
-    cam.yaw = 0; // Facing East along the roof ridge toward the chimney
-    player.yaw = 0;
+    cam.yaw = -Math.PI / 2;
+    player.yaw = -Math.PI / 2;
     if (input.cameraYaw !== null && input.cameraYaw !== undefined) {
-      input.cameraYaw = 0;
+      input.cameraYaw = -Math.PI / 2;
     }
   }
   cam.wasOnRoof = state.isOnRoof;
@@ -542,11 +555,11 @@ export function updateCamera3D(
     }
   }
 
-  // Sync from mouse-look yaw/pitch on InputState if active
+  // Sync yaw/pitch on InputState if active
   if (typeof input.cameraYaw === 'number') {
     cam.yaw = wrapAngle(input.cameraYaw);
   } else if (player.isMoving && dtSeconds > 0) {
-    // If no mouse look is active (e.g. keyboard-only), gently follow behind Santa's movement direction
+    // Gently follow behind Santa's movement direction when cameraYaw is unset
     const targetYaw =
       typeof player.yaw === 'number' ? player.yaw : directionToYaw(player.facing);
     cam.yaw = lerpAngle(cam.yaw, targetYaw, Math.min(1, dtSeconds * 6));
@@ -559,10 +572,21 @@ export function updateCamera3D(
     );
   }
 
+  // Task 7: When sitting on the motorcycle and riding East, face the camera East in travel direction
+  if (
+    state.currentLevelId === 'level-outside' &&
+    state.motorcycle.status === 'driving'
+  ) {
+    cam.yaw = 0;
+    if (typeof input.cameraYaw === 'number') {
+      input.cameraYaw = 0;
+    }
+  }
+
   const px = player.x + player.width / 2;
   let pz = player.y + player.height / 2;
-  if (state.isOnRoof && state.currentLevelId === 'level-outside') {
-    pz = ROOF_WALK_Y + player.height / 2;
+  if (state.climbing && state.currentLevelId === 'level-outside') {
+    pz = LADDER_BOTTOM_Y + player.height / 2;
   }
   const py = getPlayerElevation(state);
 
@@ -577,6 +601,32 @@ export function updateCamera3D(
     z: pz,
   };
 
+  // Task 8: Upstairs Kitchen Rosanna cutscene — face north window and zoom in smoothly
+  const rosannaCutscene =
+    state.currentLevelId === 'level-upstairs'
+      ? state.levels['level-upstairs'].rosannaCutscene
+      : null;
+  let zoomEase = 0;
+  if (rosannaCutscene?.active) {
+    const turnBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 6) : 1;
+    cam.yaw = lerpAngle(cam.yaw, -Math.PI / 2, turnBlend);
+    if (typeof input.cameraYaw === 'number') {
+      input.cameraYaw = cam.yaw;
+    }
+    cam.pitch = cam.pitch + (0.16 - cam.pitch) * turnBlend;
+    if (typeof input.cameraPitch === 'number') {
+      input.cameraPitch = cam.pitch;
+    }
+
+    const zoomT = Math.min(1, rosannaCutscene.elapsed / 1.1);
+    zoomEase = zoomT * zoomT * (3 - 2 * zoomT);
+    cam.fovY = ((55 - 23 * zoomEase) * Math.PI) / 180;
+    cam.target.y += 3.0 * zoomEase;
+    cam.target.z -= 12.0 * zoomEase;
+  } else {
+    cam.fovY = (55 * Math.PI) / 180;
+  }
+
   // Forward direction in XZ is (cos(yaw), sin(yaw)); camera sits behind Santa at -forward
   const cosPitch = Math.cos(cam.pitch);
   const sinPitch = Math.sin(cam.pitch);
@@ -586,7 +636,7 @@ export function updateCamera3D(
 
   // Compute unobstructed camera distance in [0, maxCameraDistance] using a temporary LineOfSight.
   // Skip when on the roof or climbing the ladder since roof/house tiles beneath Santa are solid in the 2D map.
-  const effectiveDistance =
+  const baseEffectiveDistance =
     state.isOnRoof || state.climbing
       ? maxCameraDistance
       : computeUnobstructedCameraDistance(
@@ -597,6 +647,7 @@ export function updateCamera3D(
           maxCameraDistance,
           state.map
         );
+  const effectiveDistance = baseEffectiveDistance * (1 - 0.42 * zoomEase);
   cam.distance = effectiveDistance;
 
   let eyeX = cam.target.x + backX * effectiveDistance;

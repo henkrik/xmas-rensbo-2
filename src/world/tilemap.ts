@@ -74,9 +74,16 @@ export const HOUSE_WEST_LADDER_SPOT: Rect = {
 // Ladder & Chimney interaction bounds when Santa is on the Main House roof
 export const ROOF_LADDER_BOUNDS: Rect = {
   x: 4 * TILE_SIZE,
-  y: 4 * TILE_SIZE,
-  width: 16,
-  height: 16,
+  y: 9 * TILE_SIZE,
+  width: TILE_SIZE,
+  height: TILE_SIZE,
+};
+
+export const MAIN_HOUSE_ROOF_BOUNDS: Rect = {
+  x: 4 * TILE_SIZE,
+  y: 3 * TILE_SIZE,
+  width: 13 * TILE_SIZE,
+  height: 7 * TILE_SIZE,
 };
 
 // Chimney positioned slightly left of the center (col 10) of the Main House roof
@@ -89,7 +96,7 @@ export const ROOF_CHIMNEY_BOUNDS: Rect = {
 
 export const LADDER_CLIMB_X = 4 * TILE_SIZE + 2;
 export const LADDER_BOTTOM_Y = 10 * TILE_SIZE;
-export const ROOF_WALK_Y = 4 * TILE_SIZE + 2;
+export const ROOF_WALK_Y = 9 * TILE_SIZE;
 export const ROOF_MIN_X = 4 * TILE_SIZE + 2;
 export const ROOF_MAX_X = 7 * TILE_SIZE + 6;
 export const CLIMB_DURATION_SECONDS = 0.6;
@@ -161,9 +168,14 @@ export const WALKABLE_TILES: ReadonlySet<TileType> = new Set([
   TileType.StairsFloor,
 ]);
 
-export function isSolidTile(map: TileMap, col: number, row: number): boolean {
+export function isSolidTile(
+  map: TileMap,
+  col: number,
+  row: number,
+  collideWithMapBoundary: boolean = true
+): boolean {
   if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
-    return true;
+    return collideWithMapBoundary;
   }
   return !WALKABLE_TILES.has(map.tiles[row][col]);
 }
@@ -173,7 +185,9 @@ export function isRectCollidingWithMap(
   x: number,
   y: number,
   width: number,
-  height: number
+  height: number,
+  collideWithMapBoundary: boolean = true,
+  ignoreTilePred?: (col: number, row: number) => boolean
 ): boolean {
   const startCol = Math.floor(x / map.tileSize);
   const endCol = Math.floor((x + width - 0.001) / map.tileSize);
@@ -182,7 +196,10 @@ export function isRectCollidingWithMap(
 
   for (let r = startRow; r <= endRow; r++) {
     for (let c = startCol; c <= endCol; c++) {
-      if (isSolidTile(map, c, r)) {
+      if (ignoreTilePred?.(c, r)) {
+        continue;
+      }
+      if (isSolidTile(map, c, r, collideWithMapBoundary)) {
         return true;
       }
     }

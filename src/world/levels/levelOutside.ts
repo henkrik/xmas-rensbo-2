@@ -13,7 +13,6 @@ import {
   MOTORCYCLE_START_Y,
   PLAYER_START_X,
   PLAYER_START_Y,
-  ROOF_WALK_Y,
   STARTER_MAP,
   TILE_SIZE,
   TileMap,
@@ -47,7 +46,7 @@ export const OUTSIDE_ALEX_NPC: Rect & { facing: 'down' | 'left' | 'right' | 'up'
   y: 19 * TILE_SIZE + 2,
   width: 12,
   height: 12,
-  facing: 'down',
+  facing: 'left',
 };
 
 export class LevelOutside implements GameLevel {
@@ -76,6 +75,10 @@ export class LevelOutside implements GameLevel {
     player.x = PLAYER_START_X;
     player.y = PLAYER_START_Y;
     player.facing = 'up';
+    player.yaw = -Math.PI / 2;
+    player.renderYaw = -Math.PI / 2;
+    player.jumpOffset = 0;
+    player.jumpVelocity = 0;
     player.isMoving = false;
     player.walkTimer = 0;
   }
@@ -104,6 +107,8 @@ export class LevelOutside implements GameLevel {
       player.x = this.motorcycle.x + 8;
       player.y = this.motorcycle.y - 2;
       player.facing = 'right';
+      player.yaw = 0;
+      player.renderYaw = 0;
       player.isMoving = true;
       return true;
     }
@@ -121,13 +126,21 @@ export class LevelOutside implements GameLevel {
       player.x = LADDER_CLIMB_X;
       player.y = LADDER_BOTTOM_Y;
       player.facing = 'up';
+      player.yaw = -Math.PI / 2;
+      player.renderYaw = -Math.PI / 2;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
       return true;
     }
     if (interactableId === 'roof-ladder') {
       this.climbing = { direction: 'down', progress: 0 };
       player.x = LADDER_CLIMB_X;
-      player.y = ROOF_WALK_Y;
+      player.y = LADDER_BOTTOM_Y;
       player.facing = 'down';
+      player.yaw = Math.PI / 2;
+      player.renderYaw = Math.PI / 2;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
       return true;
     }
     if (interactableId === 'roof-chimney') {

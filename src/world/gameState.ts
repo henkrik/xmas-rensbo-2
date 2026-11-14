@@ -10,8 +10,10 @@ import {
   Player,
   Rect,
   rectsIntersect,
+  triggerPlayerJump,
   updateFootprints,
   updatePlayer,
+  updatePlayerJump,
 } from '../entities/player';
 import {
   createDrivewayThrowers,
@@ -37,18 +39,22 @@ import { LevelUpstairs } from './levels/levelUpstairs';
 import { LevelPeople } from './levels/levelPeople';
 import { GameLevel, LevelId, LevelTransitionContext } from './levels/types';
 import {
+  getMainHouseRoofElevation,
+  getTerrainHeight,
+} from '../rendering/math3d';
+import {
   CLIMB_DURATION_SECONDS,
   DAMAGED_WIRE_HAZARD,
   ELECTROCUTION_DURATION_SECONDS,
   LADDER_BOTTOM_Y,
   LADDER_CLIMB_X,
+  MAIN_HOUSE_ROOF_BOUNDS,
   MOTORCYCLE_CRASH_X,
   MOTORCYCLE_SPEED,
   MOTORCYCLE_START_Y,
   PLAYER_START_X,
   PLAYER_START_Y,
-  ROOF_MAX_X,
-  ROOF_MIN_X,
+  ROOF_CHIMNEY_BOUNDS,
   ROOF_WALK_Y,
   STARTER_MAP,
   TileMap,
@@ -221,7 +227,7 @@ export function parseLevelQueryParam(
 export function createIntroDialogue(isMobile: boolean): DialogueState {
   const firstLine = isMobile
     ? 'Use the virtual joystick to move around. To interact with things, move close enough to it and an interaction button will appear. Click anywhere to close this window and start playing.'
-    : 'Use the arrow keys to move around and Z to interact. Press Z to close this window and start playing.';
+    : 'Use WASD to move around, the arrow keys to look around, and Space to jump and interact with things. Press Space to close this window and start playing.';
 
   return {
     lines: [firstLine, 'Good luck!\nChristmas depends on you...'],
@@ -350,6 +356,9 @@ export function resetAfterSnowballHit(state: GameState): void {
   state.player.y = PLAYER_START_Y;
   state.player.facing = 'up';
   state.player.yaw = -Math.PI / 2;
+  state.player.renderYaw = -Math.PI / 2;
+  state.player.jumpOffset = 0;
+  state.player.jumpVelocity = 0;
   state.player.isMoving = false;
   state.player.walkTimer = 0;
   state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
@@ -371,51 +380,66 @@ export function resetAfterSnowballHit(state: GameState): void {
   refreshInteractables(state);
 }
 
+function isMainHouseTile(col: number, row: number): boolean {
+  return col >= 4 && col <= 16 && row >= 3 && row <= 9;
+}
+
 function updateRoofMovement(
-  player: Player,
+  state: GameState,
   input: InputState,
   dtSeconds: number
 ): void {
-  if (player.blinkTimer > 0) {
-    player.blinkTimer = Math.max(0, player.blinkTimer - dtSeconds);
-  }
+  const player = state.player;
+  const prevCenterX = player.x + player.width * 0.5;
+  const prevCenterZ = player.y + player.height * 0.5;
+  const prevRoofElevation = getMainHouseRoofElevation(prevCenterX, prevCenterZ);
 
-  // On the roof, Santa can only walk west (left) or east (right); north/south movement is disabled
-  let dx = 0;
-  if (input.moveVector) {
-    dx = input.moveVector.x;
-  } else if (typeof input.cameraYaw === 'number') {
-    const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
-    const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-    const rawLen = Math.hypot(forward, strafe);
-    if (rawLen > 0) {
-      const nf = forward / rawLen;
-      const ns = strafe / rawLen;
-      const cosY = Math.cos(input.cameraYaw);
-      const sinY = Math.sin(input.cameraYaw);
-      const worldDx = nf * cosY - ns * sinY;
-      dx = Math.abs(worldDx) > 0.15 ? Math.sign(worldDx) : strafe;
+  const chimneyCore: Rect = {
+    x: ROOF_CHIMNEY_BOUNDS.x + 3,
+    y: ROOF_CHIMNEY_BOUNDS.y + 3,
+    width: Math.max(4, ROOF_CHIMNEY_BOUNDS.width - 6),
+    height: Math.max(4, ROOF_CHIMNEY_BOUNDS.height - 6),
+  };
+
+  // On the roof, Santa can walk freely in 2D without colliding with the house beneath him,
+  // while still colliding with the brick chimney core and forest behind the house.
+  updatePlayer(
+    player,
+    input,
+    dtSeconds,
+    state.map,
+    [chimneyCore],
+    isMainHouseTile
+  );
+
+  const cx = player.x + player.width * 0.5;
+  const cz = player.y + player.height * 0.5;
+  const minX = MAIN_HOUSE_ROOF_BOUNDS.x;
+  const maxX = MAIN_HOUSE_ROOF_BOUNDS.x + MAIN_HOUSE_ROOF_BOUNDS.width;
+  const minZ = MAIN_HOUSE_ROOF_BOUNDS.y;
+  const maxZ = MAIN_HOUSE_ROOF_BOUNDS.y + MAIN_HOUSE_ROOF_BOUNDS.height;
+
+  if (cx < minX || cx > maxX || cz < minZ || cz > maxZ) {
+    state.isOnRoof = false;
+    if (cx < minX) {
+      player.x = minX - player.width - 1;
+    } else if (cx > maxX) {
+      player.x = maxX + 1;
     }
-  } else {
-    if (input.left) dx -= 1;
-    if (input.right) dx += 1;
+    if (cz < minZ) {
+      player.y = minZ - player.height - 1;
+    } else if (cz > maxZ) {
+      player.y = maxZ + 1;
+    }
+
+    const landingGroundY = getTerrainHeight(
+      player.x + player.width * 0.5,
+      player.y + player.height * 0.5,
+      'level-outside'
+    );
+    player.jumpOffset = Math.max(0.001, prevRoofElevation - landingGroundY);
+    player.jumpVelocity = 0;
   }
-
-  player.y = ROOF_WALK_Y;
-
-  if (Math.abs(dx) < 0.001) {
-    player.isMoving = false;
-    player.walkTimer = 0;
-    return;
-  }
-
-  player.isMoving = true;
-  player.walkTimer += dtSeconds;
-  player.facing = dx < 0 ? 'left' : 'right';
-  player.yaw = dx < 0 ? Math.PI : 0;
-
-  const nextX = player.x + dx * player.speed * dtSeconds;
-  player.x = Math.max(ROOF_MIN_X, Math.min(ROOF_MAX_X, nextX));
 }
 
 function updateOutsideLevel(
@@ -446,6 +470,8 @@ function updateOutsideLevel(
     state.player.x = state.motorcycle.x + 8;
     state.player.y = state.motorcycle.y - 2;
     state.player.facing = 'right';
+    state.player.yaw = 0;
+    state.player.renderYaw = 0;
     state.player.isMoving = true;
     state.player.walkTimer += dtSeconds;
 
@@ -464,7 +490,7 @@ function updateOutsideLevel(
     return true;
   }
 
-  // If Santa is currently sliding up or down the ladder
+  // If Santa is currently climbing straight up or down the ladder outside the south wall
   if (state.climbing) {
     state.climbing.progress = Math.min(
       1,
@@ -476,9 +502,9 @@ function updateOutsideLevel(
 
     if (state.climbing.direction === 'up') {
       state.player.facing = 'up';
-      state.player.y =
-        LADDER_BOTTOM_Y +
-        (ROOF_WALK_Y - LADDER_BOTTOM_Y) * state.climbing.progress;
+      state.player.yaw = -Math.PI / 2;
+      state.player.renderYaw = -Math.PI / 2;
+      state.player.y = LADDER_BOTTOM_Y;
       if (state.climbing.progress >= 1) {
         state.player.y = ROOF_WALK_Y;
         state.player.isMoving = false;
@@ -487,9 +513,9 @@ function updateOutsideLevel(
       }
     } else {
       state.player.facing = 'down';
-      state.player.y =
-        ROOF_WALK_Y +
-        (LADDER_BOTTOM_Y - ROOF_WALK_Y) * state.climbing.progress;
+      state.player.yaw = Math.PI / 2;
+      state.player.renderYaw = Math.PI / 2;
+      state.player.y = LADDER_BOTTOM_Y;
       if (state.climbing.progress >= 1) {
         state.player.y = LADDER_BOTTOM_Y;
         state.player.isMoving = false;
@@ -503,13 +529,14 @@ function updateOutsideLevel(
   }
 
   if (state.isOnRoof) {
-    updateRoofMovement(state.player, input, dtSeconds);
+    updateRoofMovement(state, input, dtSeconds);
     for (let i = state.footprints.length - 1; i >= 0; i--) {
       state.footprints[i].age += dtSeconds;
       if (state.footprints[i].age >= state.footprints[i].maxAge) {
         state.footprints.splice(i, 1);
       }
     }
+    syncOutsideToLevel(state);
     return false;
   }
 
@@ -567,18 +594,17 @@ export function updateGameState(
   const safeDt = Math.max(0, dtSeconds);
   state.elapsedTime += safeDt;
   dtSeconds = safeDt;
-  const zPressed = consumeActionPress(input);
+  const actionPressed = consumeActionPress(input);
 
-  // Consume any pointer/touch click
-  const pointerClick = input.pointerClick;
-  if (pointerClick) {
+  // Clear any legacy pointerClick without triggering dialogue skip or interactions
+  if (input.pointerClick) {
     input.pointerClick = null;
   }
 
-  // If a dialogue box is currently open, pressing Z or clicking the screen advances or closes it
+  // If a dialogue box is currently open, pressing Space advances or closes it
   if (state.activeDialogue) {
     state.player.isMoving = false;
-    if (zPressed || pointerClick) {
+    if (actionPressed) {
       if (
         state.activeDialogue.unclosable &&
         state.activeDialogue.currentIndex >= state.activeDialogue.lines.length - 1
@@ -598,6 +624,15 @@ export function updateGameState(
       }
     }
     return;
+  }
+
+  // Update 3D jump / fall arc and indoor door opening animations
+  updatePlayerJump(state.player, dtSeconds);
+  for (const door of state.levels['level-basement'].openedDoors) {
+    door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
+  }
+  for (const door of state.levels['level-upstairs'].openedDoors) {
+    door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
   }
 
   const transitionCtx: LevelTransitionContext = {
@@ -704,53 +739,42 @@ export function updateGameState(
     );
   }
 
-  // Check if Santa is close enough to an interactable object to show the Z prompt
+  // Check if Santa is close enough to an interactable object to show the Space prompt
   refreshInteractables(state);
 
-  // If the player clicked with mouse/finger, check if they clicked near the interactable object
-  let pointerInteracted = false;
-  if (pointerClick && state.nearbyInteractable) {
-    const b = state.nearbyInteractable.bounds;
-    const clickMargin = 24;
-    const clickedNearObject =
-      pointerClick.worldX >= b.x - clickMargin &&
-      pointerClick.worldX <= b.x + b.width + clickMargin &&
-      pointerClick.worldY >= b.y - clickMargin &&
-      pointerClick.worldY <= b.y + b.height + clickMargin;
-
-    if (clickedNearObject) {
-      pointerInteracted = true;
-    }
-  }
-
-  if ((zPressed || pointerInteracted) && state.nearbyInteractable) {
-    const target = state.nearbyInteractable;
-    if (state.currentLevelId === 'level-outside') {
-      syncOutsideToLevel(state);
-    }
-
-    const activeLevel = getActiveLevel(state);
-    const prevLevelId = state.currentLevelId;
-    const handledByLevel = activeLevel.handleInteraction(
-      target.id,
-      state.player,
-      transitionCtx
-    );
-
-    if (handledByLevel) {
-      if (
-        prevLevelId === 'level-outside' &&
-        state.currentLevelId === 'level-outside'
-      ) {
-        syncLevelToOutside(state);
+  if (actionPressed) {
+    if (state.nearbyInteractable) {
+      const target = state.nearbyInteractable;
+      if (state.currentLevelId === 'level-outside') {
+        syncOutsideToLevel(state);
       }
-      refreshInteractables(state);
-    } else if (target.dialogueLines.length > 0) {
-      state.activeDialogue = {
-        lines: target.dialogueLines,
-        currentIndex: 0,
-        speakerPortrait: target.speakerPortrait,
-      };
+
+      const activeLevel = getActiveLevel(state);
+      const prevLevelId = state.currentLevelId;
+      const handledByLevel = activeLevel.handleInteraction(
+        target.id,
+        state.player,
+        transitionCtx
+      );
+
+      if (handledByLevel) {
+        if (
+          prevLevelId === 'level-outside' &&
+          state.currentLevelId === 'level-outside'
+        ) {
+          syncLevelToOutside(state);
+        }
+        refreshInteractables(state);
+      } else if (target.dialogueLines.length > 0) {
+        state.activeDialogue = {
+          lines: target.dialogueLines,
+          currentIndex: 0,
+          speakerPortrait: target.speakerPortrait,
+        };
+      }
+    } else {
+      // No interactable Action available: Space triggers a 3D half-tile jump animation
+      triggerPlayerJump(state.player);
     }
   }
 }

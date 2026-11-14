@@ -16,6 +16,8 @@ export interface Cat {
   deceleration: number;
   mode: CatMode;
   facing: 'left' | 'right';
+  /** Continuous 3D facing yaw in radians */
+  yaw?: number;
   animTimer: number;
   hasBeenActivated: boolean;
   wallForceDirX: number;
@@ -60,6 +62,7 @@ export function createCat(
     deceleration: CAT_DECELERATION,
     mode: 'standing',
     facing: 'left',
+    yaw: Math.PI / 2,
     animTimer: 0,
     hasBeenActivated: false,
     wallForceDirX: 0,
@@ -206,6 +209,9 @@ export function updateCat(
   }
 
   if (cat.vx !== 0 || cat.vy !== 0) {
+    if (Math.hypot(cat.vx, cat.vy) > 0.5) {
+      cat.yaw = Math.atan2(cat.vy, cat.vx);
+    }
     cat.animTimer += dtSeconds;
 
     const nextX = cat.x + cat.vx * dtSeconds;

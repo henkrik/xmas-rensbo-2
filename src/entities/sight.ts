@@ -102,9 +102,10 @@ export class LineOfSight {
 
       // Check collision with wall for this box
       // "We must only spawn the i + 1 bounding box if the i-th bounding box did not collide with a wall."
+      // Map boundaries do not block LineOfSight points (allowing camera sight lines outside the map edge).
       if (
         this.map &&
-        isRectCollidingWithMap(this.map, box.x, box.y, box.width, box.height)
+        isRectCollidingWithMap(this.map, box.x, box.y, box.width, box.height, false)
       ) {
         break;
       }

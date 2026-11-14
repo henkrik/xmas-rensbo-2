@@ -3,7 +3,9 @@ import {
   CAT_RETRIGGER_FLEE_DISTANCE,
   CAT_START_X,
   CAT_START_Y,
+  createCat,
   EXTRA_ROOM_BOUNDS,
+  updateCat,
 } from '../src/entities/cat';
 import { debugConsole, debugLog } from '../src/core/debugConsole';
 import { SecretSantaDB, initSecretSantaDB } from '../src/core/secretSantaDB';
@@ -18,10 +20,13 @@ import {
   DOG_DEAGGRO_DISTANCE,
   DOG_START_X,
   DOG_START_Y,
+  updateDog,
 } from '../src/entities/dog';
 import {
   createPlayer,
   FOOTPRINT_DURATION_SECONDS,
+  PLAYER_JUMP_HEIGHT,
+  triggerPlayerJump,
   updatePlayer,
 } from '../src/entities/player';
 import { ConeOfSight, LineOfSight } from '../src/entities/sight';
@@ -30,7 +35,9 @@ import { findNearbyInteractable } from '../src/world/interaction';
 import { drawPixelText, measurePixelText } from '../src/rendering/pixelFont';
 import { wrapTextLines } from '../src/rendering/renderer';
 import {
+  computeUnobstructedCameraDistance,
   createCamera3D,
+  getMainHouseRoofElevation,
   getPlayerElevation,
   getTerrainHeight,
   getTerrainNormal,
@@ -103,7 +110,9 @@ import {
   HOUSE_DOOR_COL,
   HOUSE_DOOR_ROW,
   HOUSE_WEST_LADDER_SPOT,
+  isRectCollidingWithMap,
   LADDER_BOTTOM_Y,
+  MAIN_HOUSE_ROOF_BOUNDS,
   MAP_COLS,
   MAP_ROWS,
   MOTORCYCLE_CRASH_X,
@@ -111,13 +120,14 @@ import {
   MOTORCYCLE_START_Y,
   PLAYER_START_X,
   PLAYER_START_Y,
-  ROOF_MAX_X,
-  ROOF_MIN_X,
+  ROOF_CHIMNEY_BOUNDS,
+  ROOF_LADDER_BOUNDS,
   ROOF_WALK_Y,
   STARTER_MAP,
   TILE_SIZE,
   TileType,
 } from '../src/world/tilemap';
+import { OUTSIDE_ALEX_NPC } from '../src/world/levels/levelOutside';
 
 describe('Player walking & 2x Rensbo map layout', () => {
   it('uses a 32x28 map (2x width and height) with a large 13x7 main house and parked black motorcycle', () => {
@@ -317,17 +327,17 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.promptText).toBe('Inspect');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines[0]).toBe(
       "Hmm.. looks like there is a chimney up there, but I can't reach it"
     );
 
     // Close the inspection dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 2. Walk over the ladder on the ground next to the dog (non-colliding) and pick it up with "Pick up"
@@ -341,9 +351,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.player.x).toBeGreaterThan(GROUND_LADDER_BOUNDS.x);
     expect(state.nearbyInteractable?.promptText).toBe('Pick up');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.hasLadder).toBe(true);
     expect(state.nearbyInteractable).toBeNull();
 
@@ -353,24 +363,26 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.promptText).toBe('Place ladder');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.hasLadder).toBe(false);
     expect(state.ladderPlaced).toBe(true);
     expect(state.nearbyInteractable?.promptText).toBe('Climb ladder');
 
-    // 4. Press Z to climb the ladder -> Santa slides up onto the roof
-    applyKeyEvent(input, 'KeyZ', true);
+    // 4. Press Space to climb the ladder -> Santa climbs straight up onto the roof
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.climbing).not.toBeNull();
     expect(state.climbing?.direction).toBe('up');
 
-    // Advance partway through the climb -> Santa is sliding upward
+    // Advance partway through the climb -> Santa ascends vertically at the base X/Y
     updateGameState(state, input, CLIMB_DURATION_SECONDS * 0.5);
-    expect(state.player.y).toBeLessThan(LADDER_BOTTOM_Y);
-    expect(state.player.y).toBeGreaterThan(ROOF_WALK_Y);
+    expect(state.player.y).toBe(LADDER_BOTTOM_Y);
+    expect(getPlayerElevation(state)).toBeGreaterThan(
+      getTerrainHeight(state.player.x, state.player.y, 'level-outside')
+    );
 
     // Finish climbing onto the roof
     updateGameState(state, input, CLIMB_DURATION_SECONDS * 0.6);
@@ -379,38 +391,43 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.player.y).toBe(ROOF_WALK_Y);
     expect(state.nearbyInteractable?.promptText).toBe('Climb down ladder');
 
-    // 5. On the roof, Santa cannot walk north or south
+    // 5. On the roof, Santa can walk freely in 2D (north/south/east/west)
     input.up = true;
     updateGameState(state, input, 0.2);
     input.up = false;
-    expect(state.player.y).toBe(ROOF_WALK_Y);
+    expect(state.player.y).toBeLessThan(ROOF_WALK_Y);
 
-    input.down = true;
-    updateGameState(state, input, 0.2);
-    input.down = false;
-    expect(state.player.y).toBe(ROOF_WALK_Y);
-
-    // 6. Walk east along the roof to the chimney -> "Climb down chimney"
+    // 6. Walk north and east across the roof to the chimney -> "Climb down chimney"
+    input.up = true;
+    for (let i = 0; i < 18; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    input.up = false;
     input.right = true;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 13; i++) {
       updateGameState(state, input, 0.05);
     }
     input.right = false;
-    expect(state.player.x).toBe(ROOF_MAX_X);
+    expect(state.isOnRoof).toBe(true);
     expect(state.nearbyInteractable?.promptText).toBe('Climb down chimney');
 
-    // 7. Walk west back to the ladder and climb down first
+    // 7. Walk west and south back to the ladder and climb down first
     input.left = true;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 13; i++) {
       updateGameState(state, input, 0.05);
     }
     input.left = false;
-    expect(state.player.x).toBe(ROOF_MIN_X);
+    input.down = true;
+    for (let i = 0; i < 22; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    input.down = false;
+    expect(state.isOnRoof).toBe(true);
     expect(state.nearbyInteractable?.promptText).toBe('Climb down ladder');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.climbing?.direction).toBe('down');
 
     updateGameState(state, input, CLIMB_DURATION_SECONDS + 0.05);
@@ -418,23 +435,28 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.isOnRoof).toBe(false);
     expect(state.player.y).toBe(LADDER_BOTTOM_Y);
 
-    // 8. Climb back up to the roof, walk to the chimney, and press Z to enter level-basement!
-    applyKeyEvent(input, 'KeyZ', true);
+    // 8. Climb back up to the roof, walk to the chimney, and press Space to enter level-basement!
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     updateGameState(state, input, CLIMB_DURATION_SECONDS + 0.05);
     expect(state.isOnRoof).toBe(true);
 
+    input.up = true;
+    for (let i = 0; i < 22; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    input.up = false;
     input.right = true;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 13; i++) {
       updateGameState(state, input, 0.05);
     }
     input.right = false;
     expect(state.nearbyInteractable?.promptText).toBe('Climb down chimney');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.currentLevelId).toBe('level-basement');
     expect(state.player.x).toBe(BASEMENT_FIREPLACE_SPAWN.x);
     expect(state.player.y).toBe(BASEMENT_FIREPLACE_SPAWN.y);
@@ -446,18 +468,18 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Press Z -> Chimney intro dialogue line 2
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
       'I have to get to the Christmas tree in time for Christmas.'
     );
 
     // Press Z -> Closes dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
   });
 
@@ -476,9 +498,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe('Drive');
 
     // Press Z to drive the motorcycle
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.motorcycle.status).toBe('driving');
 
@@ -520,9 +542,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.speakerPortrait).toBe('Sylvester');
 
     // Press Z to talk to Sylvester
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.speakerPortrait).toBe('Sylvester');
@@ -531,9 +553,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Press Z again to close the single-line dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).toBeNull();
 
@@ -548,9 +570,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.speakerPortrait).toBe('Annelotte');
 
     // Press Z to talk to Annelotte
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.speakerPortrait).toBe('Annelotte');
@@ -559,9 +581,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Press Z again to close the dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).toBeNull();
 
@@ -577,9 +599,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.speakerPortrait).toBe('Alex');
 
     // Press Z to talk to Alex
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.speakerPortrait).toBe('Alex');
@@ -588,9 +610,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Press Z again to close the dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).toBeNull();
   });
@@ -608,9 +630,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe('Open door');
 
     // Press Z to try opening the locked door
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
@@ -618,9 +640,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Press Z again -> Santa responds "There has to be another way into the house..."
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
@@ -628,9 +650,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Press Z a third time -> closes the dialogue box
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).toBeNull();
   });
@@ -643,7 +665,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.elapsedTime).toBeGreaterThanOrEqual(0);
   });
 
-  it('allows mobile pointer clicks to interact with nearby objects and advance dialogue', () => {
+  it('only uses Space (not Z, E, or pointer clicks) to interact and advance dialogue', () => {
     const state = createGameState();
     const input = createEmptyInput();
 
@@ -654,24 +676,44 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.id).toBe('house-door');
 
-    // Click near the door with touch/mouse
+    // Pointer click, KeyZ, and KeyE do NOT interact anymore
     input.pointerClick = {
       worldX: HOUSE_DOOR_COL * TILE_SIZE + 6,
       worldY: HOUSE_DOOR_ROW * TILE_SIZE + 6,
     };
-
     updateGameState(state, input, 0.01);
+    expect(state.activeDialogue).toBeNull();
+
+    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'KeyE', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'KeyE', false);
+    expect(state.activeDialogue).toBeNull();
+
+    // Pressing Space opens the dialogue
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[0]).toBe("It's locked.");
 
-    // Click anywhere on screen to advance dialogue
+    // KeyZ, KeyE, and pointerClick do NOT advance active dialogue either
     input.pointerClick = { worldX: 100, worldY: 100 };
+    applyKeyEvent(input, 'KeyZ', true);
     updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'KeyZ', false);
+    expect(state.activeDialogue?.currentIndex).toBe(0);
+
+    // Pressing Space advances and closes dialogue
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.currentIndex).toBe(1);
 
-    // Click again to close dialogue
-    input.pointerClick = { worldX: 100, worldY: 100 };
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
   });
 
@@ -714,7 +756,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     const desktopState = createGameState({ isMobile: false, showIntroDialogue: true });
     expect(desktopState.activeDialogue).not.toBeNull();
     expect(desktopState.activeDialogue?.lines[0]).toBe(
-      'Use the arrow keys to move around and Z to interact. Press Z to close this window and start playing.'
+      'Use WASD to move around, the arrow keys to look around, and Space to jump and interact with things. Press Space to close this window and start playing.'
     );
     expect(desktopState.activeDialogue?.lines[1]).toBe(
       'Good luck!\nChristmas depends on you...'
@@ -722,12 +764,12 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(desktopState.activeDialogue?.currentIndex).toBe(0);
 
     const input = createEmptyInput();
-    // Press Z to advance to line 2
+    // Press Space to advance to line 2
     input.actionJustPressed = true;
     updateGameState(desktopState, input, 0.016);
     expect(desktopState.activeDialogue?.currentIndex).toBe(1);
 
-    // Press Z again to close dialogue
+    // Press Space again to close dialogue
     input.actionJustPressed = true;
     updateGameState(desktopState, input, 0.016);
     expect(desktopState.activeDialogue).toBeNull();
@@ -742,13 +784,12 @@ describe('Player walking & 2x Rensbo map layout', () => {
       'Good luck!\nChristmas depends on you...'
     );
 
-    // Click anywhere to advance to line 2
-    input.pointerClick = { worldX: 100, worldY: 100 };
+    // Advance to line 2 and close with Space
+    input.actionJustPressed = true;
     updateGameState(mobileState, input, 0.016);
     expect(mobileState.activeDialogue?.currentIndex).toBe(1);
 
-    // Click anywhere again to close dialogue
-    input.pointerClick = { worldX: 100, worldY: 100 };
+    input.actionJustPressed = true;
     updateGameState(mobileState, input, 0.016);
     expect(mobileState.activeDialogue).toBeNull();
 
@@ -947,15 +988,15 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.id).toBe('basement-hall-north-door');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines[0]).toBe("It's locked.");
 
     // Close dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // Check front door on south wall of hallway
@@ -964,14 +1005,14 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.id).toBe('basement-front-door');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines[0]).toBe("It's locked.");
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     // 3. Bathroom door is initially closed and collidable (blocks walking into bathroom)
     state.player.x = BASEMENT_BATHROOM_DOOR_BOUNDS.x + 2;
@@ -987,9 +1028,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe('Open door');
 
     // Open the bathroom door -> deletes the door and triggers toilet cutscene
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.levels['level-basement'].doors.length).toBe(0);
 
     // Toilet cutscene is active, locking player movement while exclamation mark blinks
@@ -1009,9 +1050,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.speakerPortrait).toBe('Hanneloes');
 
     // Close dialogue with KeyZ -> reloads level-basement and triggers damage blink
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
     expect(state.currentLevelId).toBe('level-basement');
     expect(state.player.blinkTimer).toBeGreaterThan(0);
@@ -1037,9 +1078,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe('Walk upstairs');
 
     // Press Z to walk upstairs -> records `usedStairs` in `player.states` and loads `level-upstairs`
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.currentLevelId).toBe('level-upstairs');
     expect(state.player.states.get(USED_STAIRS_STATE_KEY)).toBe(true);
     expect(state.player.x).toBe(UPSTAIRS_STAIRS_SPAWN.x);
@@ -1049,9 +1090,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
       'Hmm... so I believe the Christmas tree is to the left, but I must not be seen!'
     );
     // Dismiss upstairs intro dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 5. Walk back downstairs from `level-upstairs` -> spawns Santa on the stairs in `level-basement` (not by the fireplace!)
@@ -1061,9 +1102,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.id).toBe('upstairs-stairs-down');
     expect(state.nearbyInteractable?.promptText).toBe('Walk downstairs');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.currentLevelId).toBe('level-basement');
     expect(state.player.x).toBe(BASEMENT_STAIRS_SPAWN.x);
     expect(state.player.y).toBe(BASEMENT_STAIRS_SPAWN.y);
@@ -1105,16 +1146,16 @@ describe('Player walking & 2x Rensbo map layout', () => {
     state.player.y = UPSTAIRS_OFFICE_DOOR_BOUNDS.y - 14;
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.id).toBe('upstairs-office-door');
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines[0]).toBe(
       'The office is locked... hmm, where would Arjan hide a key?'
     );
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(upstairs.doors.some((d) => d.id === 'upstairs-office-door')).toBe(true);
 
     // Inspect cupboard next to dining table -> finds Arjan's key
@@ -1123,26 +1164,26 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.id).toBe('upstairs-dining-cupboard');
     expect(state.nearbyInteractable?.promptText).toBe('Inspect');
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines[0]).toBe(
       "You found a hidden compartment containing a key... it's Arjan's key!"
     );
     expect(state.player.states.get(ARJAN_KEY_STATE_KEY)).toBe(true);
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     // With the key, the office door opens
     state.player.x = UPSTAIRS_OFFICE_DOOR_BOUNDS.x + 2;
     state.player.y = UPSTAIRS_OFFICE_DOOR_BOUNDS.y - 14;
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.id).toBe('upstairs-office-door');
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(upstairs.doors.some((d) => d.id === 'upstairs-office-door')).toBe(false);
 
     // Open other doors: shower, bedroom, table room
@@ -1157,9 +1198,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
       expect(state.nearbyInteractable?.id).toBe(doorId);
       expect(state.nearbyInteractable?.promptText).toBe('Open door');
 
-      applyKeyEvent(input, 'KeyZ', true);
+      applyKeyEvent(input, 'Space', true);
       updateGameState(state, input, 0.01);
-      applyKeyEvent(input, 'KeyZ', false);
+      applyKeyEvent(input, 'Space', false);
     }
 
     expect(upstairs.doors.length).toBe(0);
@@ -1171,9 +1212,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.id).toBe('upstairs-office-pc');
     expect(state.nearbyInteractable?.promptText).toBe('Start PC');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines).toEqual([
       'Hmm... is this where Arjan pretends to work? It\'s just a bunch of pictures of Anne-Marie.',
       'Hey there\'s actually a python script here, shall we run it?',
@@ -1182,19 +1223,19 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.currentIndex).toBe(0);
 
     // Advance dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.currentIndex).toBe(1);
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.currentIndex).toBe(2);
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 2. Hallway connects directly to the Extra Room on the east without any wall or door blocking it
@@ -1242,9 +1283,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.lines[0]).toBe('... Rosanna???');
 
     // Close the "... Rosanna???" dialogue -> player regains control and can move again!
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     input.down = true;
@@ -1570,9 +1611,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(basement.intruderDetected).toBe(true);
 
     // 3. Closing the dialogue triggers player damage (reloads level-basement and starts blinking)
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).toBeNull();
     expect(state.currentLevelId).toBe('level-basement');
@@ -1608,18 +1649,18 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.speakerPortrait).toBe('Henrik');
 
     // Press Z to talk
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[0]).toBe('Henrik says hello.');
     expect(state.activeDialogue?.speakerPortrait).toBe('Henrik');
 
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 5. Test talking to Olexa
@@ -1631,9 +1672,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.id).toBe('person-olexa');
     expect(state.nearbyInteractable?.speakerPortrait).toBe('Olexa');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue?.lines[0]).toBe('Olexa says hello.');
     expect(state.activeDialogue?.speakerPortrait).toBe('Olexa');
@@ -1668,9 +1709,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(basement.intruderDetected).toBe(true);
 
     // Close dialogue with KeyZ -> reloads level-basement and starts blinking
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).toBeNull();
     expect(state.currentLevelId).toBe('level-basement');
@@ -1708,9 +1749,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(upstairs.intruderDetected).toBe(true);
 
     // Dismiss dialogue -> damages Santa & reloads level-upstairs
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).toBeNull();
     expect(state.currentLevelId).toBe('level-upstairs');
@@ -1745,9 +1786,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     expect(state.nearbyInteractable?.id).toBe('upstairs-table-room-door');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(
       upstairs.doors.some((d) => d.id === 'upstairs-table-room-door')
     ).toBe(false);
@@ -1771,9 +1812,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.speakerPortrait).toBe('Henrik');
 
     // Dismiss dialogue -> damages Santa & reloads
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.currentLevelId).toBe('level-upstairs');
     expect(state.player.blinkTimer).toBeGreaterThan(0);
 
@@ -1821,9 +1862,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
     expect(stateDiana.activeDialogue?.speakerPortrait).toBe('Diana');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(stateDiana, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(stateDiana.currentLevelId).toBe('level-upstairs');
     expect(stateDiana.player.blinkTimer).toBeGreaterThan(0);
 
@@ -1845,9 +1886,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
     expect(stateSimon.activeDialogue?.speakerPortrait).toBe('Simon');
 
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(stateSimon, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(stateSimon.currentLevelId).toBe('level-upstairs');
     expect(stateSimon.player.blinkTimer).toBeGreaterThan(0);
   });
@@ -1890,9 +1931,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.speakerPortrait).toBe('Anne-Marie');
 
     // Dismiss dialogue -> damages Santa & reloads
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.currentLevelId).toBe('level-upstairs');
     expect(state.player.blinkTimer).toBeGreaterThan(0);
   });
@@ -1914,9 +1955,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe('Inspect');
 
     // Press Z -> "Hmm... I have to find something to distract Diana with..."
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[0]).toBe(
@@ -1924,9 +1965,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 2. Approach Simon from behind without his present -> "Inspect" option appears
@@ -1938,9 +1979,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe('Inspect');
 
     // Press Z -> "Hmm... I have to find something to distract Simon with..."
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[0]).toBe(
@@ -1948,9 +1989,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 3. Take Diana's Present from the bedroom
@@ -1963,17 +2004,17 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe("Take Diana's Present");
 
     // Press Z to pick it up
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.player.states.get(DIANA_PRESENT_TAKEN_KEY)).toBe(true);
     expect(state.activeDialogue?.lines[0]).toBe("You picked up Diana's Present.");
 
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 4. Take Simon's Present from the office southeast corner
@@ -1986,17 +2027,17 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe("Take Simon's Present");
 
     // Press Z to pick it up
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.player.states.get(SIMON_PRESENT_TAKEN_KEY)).toBe(true);
     expect(state.activeDialogue?.lines[0]).toBe("You picked up Simon's present.");
 
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 5. Now return to Diana with her present -> "Give present" option appears
@@ -2008,9 +2049,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe('Give present');
 
     // Press Z to give present -> Diana distracted, cone deleted!
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.player.states.get(DIANA_DISTRACTED_KEY)).toBe(true);
     expect(upstairs.dianaCone).toBeNull();
@@ -2021,14 +2062,14 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Advance dialogue line 2
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 6. Return to Simon with his present -> "Give present" option appears
@@ -2040,9 +2081,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.nearbyInteractable?.promptText).toBe('Give present');
 
     // Press Z to give present -> Simon distracted, cone deleted!
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(state.player.states.get(SIMON_DISTRACTED_KEY)).toBe(true);
     expect(upstairs.simonCone).toBeNull();
@@ -2053,14 +2094,14 @@ describe('Player walking & 2x Rensbo map layout', () => {
     );
 
     // Advance dialogue line 2
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
 
     // Dismiss dialogue
-    applyKeyEvent(input, 'KeyZ', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'KeyZ', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
     // 7. Verify neither Diana nor Simon detects the player even right in front of them
@@ -2088,6 +2129,7 @@ Tanja -> Alex
     // Initialize with a playerId encoded for "Alex" -> btoa("Alex") = "QWxleA=="
     const alexPid = btoa('Alex');
     const db: SecretSantaDB = await initSecretSantaDB(sampleContent, alexPid);
+    db.debugLogAll();
 
     expect(db.playerId).toBe(alexPid);
     expect(db.playerName).toBe('Alex');
@@ -2513,5 +2555,254 @@ Tanja -> Alex
         expect(cam.eye.y).toBeLessThan(INDOOR_WALL_HEIGHT);
       }
     }
+  });
+
+  it('jumps half a tile on Space when no interactable or dialogue is active and lands smoothly', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+
+    // Verify no interactable is active at start on the driveway
+    updateGameState(state, input, 0.016);
+    expect(state.nearbyInteractable).toBeNull();
+    expect(state.player.jumpOffset ?? 0).toBe(0);
+
+    // Press Space -> triggers a half-tile jump (PLAYER_JUMP_HEIGHT = 8)
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.016);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.player.jumpOffset).toBeGreaterThan(0);
+
+    // Cannot double-jump mid-air
+    expect(triggerPlayerJump(state.player)).toBe(false);
+
+    let maxJumpOffset = 0;
+    for (let i = 0; i < 30; i++) {
+      updateGameState(state, input, 0.02);
+      maxJumpOffset = Math.max(maxJumpOffset, state.player.jumpOffset ?? 0);
+    }
+    expect(maxJumpOffset).toBeCloseTo(PLAYER_JUMP_HEIGHT, 0);
+    expect(state.player.jumpOffset).toBe(0);
+  });
+
+  it('supports free 2D roof walking with pitched height and falling off the roof edge', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+
+    // Place Santa on the roof at the ladder top (col 4, row 9)
+    expect(ROOF_LADDER_BOUNDS.y).toBe(9 * TILE_SIZE);
+    state.isOnRoof = true;
+    state.player.x = 10 * TILE_SIZE;
+    state.player.y = 9 * TILE_SIZE;
+
+    // Pitched height is higher near the ridge center (row 6-7) than at south eaves (row 9)
+    const southEdgeY = getPlayerElevation(state);
+    input.up = true;
+    for (let i = 0; i < 16; i++) {
+      updateGameState(state, input, 0.04);
+    }
+    input.up = false;
+    expect(state.isOnRoof).toBe(true);
+    expect(state.player.y).toBeLessThan(7 * TILE_SIZE);
+    const ridgeY = getPlayerElevation(state);
+    expect(ridgeY).toBeGreaterThan(southEdgeY + 8);
+    expect(ridgeY).toBeCloseTo(
+      getMainHouseRoofElevation(
+        state.player.x + state.player.width * 0.5,
+        state.player.y + state.player.height * 0.5
+      ),
+      2
+    );
+
+    // Chimneys still have a solid core on the roof
+    state.player.x = ROOF_CHIMNEY_BOUNDS.x - state.player.width - 1;
+    state.player.y = ROOF_CHIMNEY_BOUNDS.y + 4;
+    input.right = true;
+    updateGameState(state, input, 0.2);
+    input.right = false;
+    expect(state.player.x).toBeLessThanOrEqual(ROOF_CHIMNEY_BOUNDS.x + 3);
+
+    // Walking off the west edge of the roof exits isOnRoof, falls via jumpOffset, and re-enables house collision
+    state.player.x = MAIN_HOUSE_ROOF_BOUNDS.x + 1;
+    state.player.y = 7 * TILE_SIZE;
+    input.left = true;
+    updateGameState(state, input, 0.2);
+    input.left = false;
+    expect(state.isOnRoof).toBe(false);
+    expect(state.player.x).toBeLessThan(MAIN_HOUSE_ROOF_BOUNDS.x);
+    expect(state.player.jumpOffset).toBeGreaterThan(10);
+  });
+
+  it('smoothly turns player renderYaw and rotates Dog and Cat models to face their velocity', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+    state.player.yaw = -Math.PI / 2;
+    state.player.renderYaw = -Math.PI / 2;
+
+    // Turning East from North interpolates renderYaw gradually rather than snapping immediately
+    input.right = true;
+    updateGameState(state, input, 0.016);
+    expect(state.player.yaw).toBeCloseTo(0, 4);
+    expect(state.player.renderYaw).toBeGreaterThan(-Math.PI / 2);
+    expect(state.player.renderYaw).toBeLessThan(0);
+
+    for (let i = 0; i < 20; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    input.right = false;
+    expect(state.player.renderYaw).toBeCloseTo(0, 2);
+
+    // Dog facing direction aligns with its velocity vector when chasing
+    const dogPlayer = createPlayer(DOG_START_X - 32, DOG_START_Y + 24);
+    updateDog(state.dog, dogPlayer, 0.25, state.map, []);
+    expect(Math.hypot(state.dog.vx, state.dog.vy)).toBeGreaterThan(1);
+    expect(state.dog.yaw).toBeCloseTo(
+      Math.atan2(state.dog.vy, state.dog.vx),
+      4
+    );
+
+    // Cat facing direction aligns with its velocity vector when fleeing
+    const upstairs = state.levels['level-upstairs'] as LevelUpstairs;
+    const cat = createCat(CAT_START_X, CAT_START_Y);
+    const catChaser = createPlayer(
+      EXTRA_ROOM_BOUNDS.x + 2 * TILE_SIZE,
+      EXTRA_ROOM_BOUNDS.y + 4 * TILE_SIZE
+    );
+    updateCat(cat, catChaser, 0.25, upstairs.map, []);
+    expect(Math.hypot(cat.vx, cat.vy)).toBeGreaterThan(1);
+    expect(cat.yaw).toBeCloseTo(Math.atan2(cat.vy, cat.vx), 4);
+  });
+
+  it('allows LineOfSight camera points past map boundaries while blocking player movement at boundaries', () => {
+    // LineOfSight points outside map bounds are NOT flagged as colliding when collideWithMapBoundary=false
+    expect(
+      isRectCollidingWithMap(STARTER_MAP, 15 * TILE_SIZE, MAP_ROWS * TILE_SIZE + 8, 8, 8, false)
+    ).toBe(false);
+    expect(
+      isRectCollidingWithMap(STARTER_MAP, 15 * TILE_SIZE, MAP_ROWS * TILE_SIZE + 8, 8, 8, true)
+    ).toBe(true);
+
+    // Player at southern road edge is blocked by map boundary
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+    state.player.x = 15 * TILE_SIZE;
+    state.player.y = (MAP_ROWS - 1) * TILE_SIZE;
+    input.down = true;
+    updateGameState(state, input, 0.5);
+    input.down = false;
+    expect(state.player.y).toBeLessThanOrEqual(
+      MAP_ROWS * TILE_SIZE - state.player.height + 0.01
+    );
+
+    // Looking North from the south edge places camera points south of the map boundary,
+    // and computeUnobstructedCameraDistance preserves full distance instead of collapsing
+    const camDist = computeUnobstructedCameraDistance(
+      state.player.x + state.player.width * 0.5,
+      state.player.y + state.player.height * 0.5,
+      -Math.PI / 2,
+      0.38,
+      52,
+      STARTER_MAP
+    );
+    expect(camDist).toBeCloseTo(52, 0);
+  });
+
+  it('points camera East on the motorcycle and zooms toward north window during Rosanna cutscene', () => {
+    // 1. Motorcycle camera faces East (0) when driving
+    const outState = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+    const cam = createCamera3D();
+    outState.player.x = MOTORCYCLE_START_X + 4;
+    outState.player.y = MOTORCYCLE_START_Y - outState.player.height - 2;
+    updateGameState(outState, input, 0.01);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(outState, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+    expect(outState.motorcycle.status).toBe('driving');
+
+    input.cameraYaw = -Math.PI / 2;
+    for (let i = 0; i < 15; i++) {
+      updateCamera3D(cam, outState, input, 0.05, 256 / 224);
+    }
+    expect(input.cameraYaw).toBeCloseTo(0, 1);
+
+    // 2. Rosanna cutscene turns camera North (-Math.PI / 2) and narrows fovY to zoom in
+    const upState = createGameState({
+      initialLevelId: 'level-upstairs',
+      showIntroDialogue: false,
+    });
+    const upCam = createCamera3D();
+    const upInput = createEmptyInput();
+    upInput.cameraYaw = Math.PI / 2; // initially looking south away from window
+    upState.player.x = 13 * TILE_SIZE;
+    upState.player.y = KITCHEN_TRIGGER_BOUNDS.y + 8;
+    updateGameState(upState, upInput, 0.05);
+    expect((upState.levels['level-upstairs'] as LevelUpstairs).rosannaCutscene?.active).toBe(true);
+
+    for (let i = 0; i < 18; i++) {
+      updateGameState(upState, upInput, 0.05);
+      updateCamera3D(upCam, upState, upInput, 0.05, 256 / 224);
+    }
+    expect((upState.levels['level-upstairs'] as LevelUpstairs).rosannaCutscene?.active).toBe(true);
+    expect(upInput.cameraYaw).toBeCloseTo(-Math.PI / 2, 1);
+    expect(upCam.fovY).toBeLessThan((40 * Math.PI) / 180);
+  });
+
+  it('renders close-camera Santa at 25% opacity, animates opened doors, and checks NPC/stairwell updates', () => {
+    // 1. Close-camera Santa alpha = 0.25 in translucent mesh
+    const state = createGameState({ showIntroDialogue: false });
+    const dynClose = buildDynamicSceneMeshes(state, TILE_SIZE * 0.5);
+    const closeAlphas = new Set<number>();
+    for (let i = 0; i < dynClose.translucent.vertexCount; i++) {
+      closeAlphas.add(
+        Math.round(dynClose.translucent.vertices[i * FLOATS_PER_VERTEX + 11] * 100) / 100
+      );
+    }
+    expect(closeAlphas.has(0.25)).toBe(true);
+
+    // 2. Spawn/NPC orientations updated
+    expect(BASEMENT_FIREPLACE_SPAWN.facing).toBe('down');
+    expect(OUTSIDE_ALEX_NPC.facing).toBe('left');
+
+    // 3. Door swing animation progresses when an indoor door opens
+    const baseState = createGameState({
+      initialLevelId: 'level-basement',
+      showIntroDialogue: false,
+    });
+    const basement = baseState.levels['level-basement'] as LevelBasement;
+    const input = createEmptyInput();
+    baseState.player.x = BASEMENT_BATHROOM_DOOR_BOUNDS.x + 2;
+    baseState.player.y = BASEMENT_BATHROOM_DOOR_BOUNDS.y + TILE_SIZE + 1;
+    updateGameState(baseState, input, 0.01);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(baseState, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+    expect(basement.openedDoors.length).toBe(1);
+    expect(basement.openedDoors[0].progress).toBeLessThan(1);
+    updateGameState(baseState, input, 0.5);
+    expect(basement.openedDoors[0].progress).toBe(1);
+
+    // 4. Upstairs stairwell cutout exposes stairs descending below floor (y < -5)
+    const upState = createGameState({
+      initialLevelId: 'level-upstairs',
+      showIntroDialogue: false,
+    });
+    const upMesh = getStaticLevelMesh('level-upstairs', upState.map);
+    let hasStairwellBelowFloor = false;
+    for (let i = 0; i < upMesh.vertexCount; i++) {
+      const vx = upMesh.vertices[i * FLOATS_PER_VERTEX + 0];
+      const vy = upMesh.vertices[i * FLOATS_PER_VERTEX + 1];
+      const vz = upMesh.vertices[i * FLOATS_PER_VERTEX + 2];
+      if (
+        vx >= 15 * TILE_SIZE &&
+        vx <= 19 * TILE_SIZE &&
+        vz >= 14 * TILE_SIZE &&
+        vz <= 18 * TILE_SIZE &&
+        vy < -5
+      ) {
+        hasStairwellBelowFloor = true;
+        break;
+      }
+    }
+    expect(hasStairwellBelowFloor).toBe(true);
   });
 });

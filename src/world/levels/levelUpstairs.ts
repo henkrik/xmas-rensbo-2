@@ -7,7 +7,13 @@ import {
 } from '../../entities/sight';
 import { Interactable } from '../interaction';
 import { MAP_COLS, MAP_ROWS, TILE_SIZE, TileMap, TileType } from '../tilemap';
-import { CollidableDoor, GameLevel, LevelId, LevelTransitionContext } from './types';
+import {
+  CollidableDoor,
+  GameLevel,
+  LevelId,
+  LevelTransitionContext,
+  OpenedDoorAnimation,
+} from './types';
 
 const V = TileType.VoidBlack;
 const W = TileType.InteriorWall;
@@ -306,6 +312,7 @@ export class LevelUpstairs implements GameLevel {
   public readonly id: LevelId = 'level-upstairs';
   public readonly map: TileMap = UPSTAIRS_MAP;
   public doors: CollidableDoor[];
+  public openedDoors: OpenedDoorAnimation[] = [];
   public rosannaCutscene: RosannaCutsceneState | null = null;
   public cat: Cat;
 
@@ -419,6 +426,10 @@ export class LevelUpstairs implements GameLevel {
     player.x = UPSTAIRS_STAIRS_SPAWN.x;
     player.y = UPSTAIRS_STAIRS_SPAWN.y;
     player.facing = UPSTAIRS_STAIRS_SPAWN.facing;
+    player.yaw = -Math.PI / 2;
+    player.renderYaw = -Math.PI / 2;
+    player.jumpOffset = 0;
+    player.jumpVelocity = 0;
     player.isMoving = false;
     player.walkTimer = 0;
 
@@ -695,6 +706,12 @@ export class LevelUpstairs implements GameLevel {
       }
 
       this.doors.splice(doorIdx, 1);
+      this.openedDoors.push({
+        id: door.id,
+        bounds: { ...door.bounds },
+        progress: 0,
+        swingDirection: player.y >= door.bounds.y ? -1 : 1,
+      });
       return true;
     }
 

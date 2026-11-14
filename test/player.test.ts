@@ -2745,6 +2745,100 @@ Tanja -> Alex
     expect((upState.levels['level-upstairs'] as LevelUpstairs).rosannaCutscene?.active).toBe(true);
     expect(upInput.cameraYaw).toBeCloseTo(-Math.PI / 2, 1);
     expect(upCam.fovY).toBeLessThan((40 * Math.PI) / 180);
+
+    // Santa is rendered at 25% transparency during the Rosanna zoom cutscene even at normal camera distance
+    const dynRosanna = buildDynamicSceneMeshes(upState, 38);
+    const rosannaAlphas = new Set<number>();
+    for (let i = 0; i < dynRosanna.translucent.vertexCount; i++) {
+      rosannaAlphas.add(
+        Math.round(dynRosanna.translucent.vertices[i * FLOATS_PER_VERTEX + 11] * 100) / 100
+      );
+    }
+    expect(rosannaAlphas.has(0.25)).toBe(true);
+
+    // 3. Basement bathroom toilet cutscene zooms in toward toiletNpc with 25% transparent Santa
+    const baseState = createGameState({
+      initialLevelId: 'level-basement',
+      showIntroDialogue: false,
+    });
+    const baseCam = createCamera3D();
+    const baseInput = createEmptyInput();
+    baseInput.cameraYaw = Math.PI / 2; // initially facing away (south)
+    baseState.player.x = BASEMENT_BATHROOM_DOOR_BOUNDS.x + 2;
+    baseState.player.y = BASEMENT_BATHROOM_DOOR_BOUNDS.y + TILE_SIZE + 1;
+    updateGameState(baseState, baseInput, 0.01);
+    applyKeyEvent(baseInput, 'Space', true);
+    updateGameState(baseState, baseInput, 0.01);
+    applyKeyEvent(baseInput, 'Space', false);
+    const basement = baseState.levels['level-basement'] as LevelBasement;
+    expect(basement.toiletCutscene?.active).toBe(true);
+
+    for (let i = 0; i < 20; i++) {
+      updateGameState(baseState, baseInput, 0.05);
+      updateCamera3D(baseCam, baseState, baseInput, 0.05, 256 / 224);
+    }
+    const px = baseState.player.x + baseState.player.width * 0.5;
+    const pz = baseState.player.y + baseState.player.height * 0.5;
+    const tx = basement.toiletNpc.x + basement.toiletNpc.width * 0.5;
+    const tz = basement.toiletNpc.y + basement.toiletNpc.height * 0.5;
+    expect(baseInput.cameraYaw).toBeCloseTo(Math.atan2(tz - pz, tx - px), 1);
+    expect(baseCam.fovY).toBeLessThan((40 * Math.PI) / 180);
+
+    const dynToilet = buildDynamicSceneMeshes(baseState, 38);
+    const toiletAlphas = new Set<number>();
+    for (let i = 0; i < dynToilet.translucent.vertexCount; i++) {
+      toiletAlphas.add(
+        Math.round(dynToilet.translucent.vertices[i * FLOATS_PER_VERTEX + 11] * 100) / 100
+      );
+    }
+    expect(toiletAlphas.has(0.25)).toBe(true);
+  });
+
+  it('keeps outdoor bushes, trees, and wooden patio table solid to movement without blocking camera distance', () => {
+    // Verify Thuja (row 13, col 12), Hedge (row 12, col 5..6), PatioTable (row 14..15, col 7..8), Tree (row 0..2)
+    expect(STARTER_MAP.tiles[13][12]).toBe(TileType.Thuja);
+    expect(STARTER_MAP.tiles[12][5]).toBe(TileType.Hedge);
+    expect(STARTER_MAP.tiles[14][7]).toBe(TileType.PatioTable);
+    expect(STARTER_MAP.tiles[2][5]).toBe(TileType.Tree);
+
+    // All four remain solid for player collision
+    expect(isRectCollidingWithMap(STARTER_MAP, 12 * TILE_SIZE + 2, 13 * TILE_SIZE + 2, 12, 12, true)).toBe(true);
+    expect(isRectCollidingWithMap(STARTER_MAP, 5 * TILE_SIZE + 2, 12 * TILE_SIZE + 2, 12, 12, true)).toBe(true);
+    expect(isRectCollidingWithMap(STARTER_MAP, 7 * TILE_SIZE + 2, 14 * TILE_SIZE + 2, 12, 12, true)).toBe(true);
+
+    // Camera behind Santa passing through Thuja/Hedge/PatioTable does NOT shorten distance
+    // Santa at driveway (col 13.5, row 13.5) facing East (camera behind him to the West, through Thuja at col 12)
+    const thujaCamDist = computeUnobstructedCameraDistance(
+      13.5 * TILE_SIZE,
+      13.5 * TILE_SIZE,
+      0,
+      0.38,
+      52,
+      STARTER_MAP
+    );
+    expect(thujaCamDist).toBeGreaterThan(48);
+
+    // Santa just south of PatioTable (col 7.5, row 16.2) facing South (camera behind him to the North, through PatioTable at rows 14..15)
+    const tableCamDist = computeUnobstructedCameraDistance(
+      7.5 * TILE_SIZE,
+      16.2 * TILE_SIZE,
+      Math.PI / 2,
+      0.38,
+      52,
+      STARTER_MAP
+    );
+    expect(tableCamDist).toBeGreaterThan(48);
+
+    // Santa just north of Hedge (col 5.5, row 11.2) facing North (camera behind him to the South, through Hedge at row 12)
+    const hedgeCamDist = computeUnobstructedCameraDistance(
+      5.5 * TILE_SIZE,
+      11.2 * TILE_SIZE,
+      -Math.PI / 2,
+      0.38,
+      52,
+      STARTER_MAP
+    );
+    expect(hedgeCamDist).toBeGreaterThan(48);
   });
 
   it('renders close-camera Santa at 25% opacity, animates opened doors, and checks NPC/stairwell updates', () => {

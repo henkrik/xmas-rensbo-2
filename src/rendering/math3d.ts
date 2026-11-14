@@ -4,6 +4,7 @@ import { LineOfSight } from '../entities/sight';
 import { GameState } from '../world/gameState';
 import { LevelId } from '../world/levels/types';
 import {
+  CAMERA_NON_BLOCKING_TILES,
   isRectCollidingWithMap,
   LADDER_BOTTOM_Y,
   ROOF_WALK_Y,
@@ -446,20 +447,38 @@ export function computeUnobstructedCameraDistance(
   const lineOfSightDistance =
     (horizontalMaxDistance * CAMERA_LOS_POINTS) / (CAMERA_LOS_POINTS - 1);
 
+  const isCameraIgnoredTile = (col: number, row: number): boolean => {
+    if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
+      return false;
+    }
+    return CAMERA_NON_BLOCKING_TILES.has(map.tiles[row][col]);
+  };
+
   let lineOfSight: LineOfSight | null = new LineOfSight(
     { x: originX, y: originZ },
     oppositeYaw,
     lineOfSightDistance,
     map,
-    CAMERA_LOS_POINTS
+    CAMERA_LOS_POINTS,
+    isCameraIgnoredTile
   );
 
   // Find the n-th point within the line of sight that is furthest from the player
-  // without colliding with anything on the map (ignoring map boundaries).
+  // without colliding with anything on the map (ignoring map boundaries & camera-transparent scenery).
   let furthestValidIndex = -1;
   for (let i = lineOfSight.n - 1; i >= 0; i--) {
     const box = lineOfSight.boxes[i];
-    if (!isRectCollidingWithMap(map, box.x, box.y, box.width, box.height, false)) {
+    if (
+      !isRectCollidingWithMap(
+        map,
+        box.x,
+        box.y,
+        box.width,
+        box.height,
+        false,
+        isCameraIgnoredTile
+      )
+    ) {
       furthestValidIndex = i;
       break;
     }
@@ -601,15 +620,39 @@ export function updateCamera3D(
     z: pz,
   };
 
-  // Task 8: Upstairs Kitchen Rosanna cutscene — face north window and zoom in smoothly
+  // Dramatic cutscene zoom helper (Rosanna north-window & Basement toilet detection)
   const rosannaCutscene =
     state.currentLevelId === 'level-upstairs'
       ? state.levels['level-upstairs'].rosannaCutscene
       : null;
+  const toiletCutscene =
+    state.currentLevelId === 'level-basement'
+      ? state.levels['level-basement'].toiletCutscene
+      : null;
   let zoomEase = 0;
-  if (rosannaCutscene?.active) {
+
+  if (rosannaCutscene?.active || toiletCutscene?.active) {
+    let targetYaw = -Math.PI / 2;
+    let elapsed = 0;
+    let targetOffsetX = 0;
+    let targetOffsetY = 3.0;
+    let targetOffsetZ = -12.0;
+
+    if (toiletCutscene?.active) {
+      const toiletNpc = state.levels['level-basement'].toiletNpc;
+      const tx = toiletNpc.x + toiletNpc.width * 0.5;
+      const tz = toiletNpc.y + toiletNpc.height * 0.5;
+      targetYaw = Math.atan2(tz - pz, tx - px);
+      elapsed = toiletCutscene.timer;
+      targetOffsetX = (tx - px) * 0.45;
+      targetOffsetY = 1.5;
+      targetOffsetZ = (tz - pz) * 0.45;
+    } else if (rosannaCutscene?.active) {
+      elapsed = rosannaCutscene.elapsed;
+    }
+
     const turnBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 6) : 1;
-    cam.yaw = lerpAngle(cam.yaw, -Math.PI / 2, turnBlend);
+    cam.yaw = lerpAngle(cam.yaw, targetYaw, turnBlend);
     if (typeof input.cameraYaw === 'number') {
       input.cameraYaw = cam.yaw;
     }
@@ -618,11 +661,12 @@ export function updateCamera3D(
       input.cameraPitch = cam.pitch;
     }
 
-    const zoomT = Math.min(1, rosannaCutscene.elapsed / 1.1);
+    const zoomT = Math.min(1, elapsed / 1.1);
     zoomEase = zoomT * zoomT * (3 - 2 * zoomT);
     cam.fovY = ((55 - 23 * zoomEase) * Math.PI) / 180;
-    cam.target.y += 3.0 * zoomEase;
-    cam.target.z -= 12.0 * zoomEase;
+    cam.target.x += targetOffsetX * zoomEase;
+    cam.target.y += targetOffsetY * zoomEase;
+    cam.target.z += targetOffsetZ * zoomEase;
   } else {
     cam.fovY = (55 * Math.PI) / 180;
   }

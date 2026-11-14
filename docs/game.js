@@ -640,6 +640,12 @@
     18 /* BathroomTileFloor */,
     19 /* StairsFloor */
   ]);
+  var CAMERA_NON_BLOCKING_TILES = /* @__PURE__ */ new Set([
+    1 /* Tree */,
+    3 /* Thuja */,
+    4 /* Hedge */,
+    12 /* PatioTable */
+  ]);
   function isSolidTile(map, col, row, collideWithMapBoundary = true) {
     if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
       return collideWithMapBoundary;
@@ -881,19 +887,21 @@
   var DEFAULT_CONE_OF_SIGHT_DISTANCE = 7.5 * TILE_SIZE;
   var DEFAULT_CONE_OF_SIGHT_FOV = 45 * Math.PI / 180;
   var LineOfSight = class {
-    constructor(position, direction, distance, map, maxPoints = 10) {
+    constructor(position, direction, distance, map, maxPoints = 10, ignoreTilePred) {
       __publicField(this, "position");
       __publicField(this, "direction");
       __publicField(this, "distance");
       __publicField(this, "map");
       __publicField(this, "maxPoints");
       __publicField(this, "boxes", []);
+      __publicField(this, "ignoreTilePred");
       __publicField(this, "callbacks", []);
       this.position = { ...position };
       this.direction = direction;
       this.distance = distance;
       this.map = map;
       this.maxPoints = Math.max(1, Math.floor(maxPoints));
+      this.ignoreTilePred = ignoreTilePred;
       this.recomputeBoxes();
     }
     /**
@@ -942,7 +950,15 @@
           height: 4
         };
         this.boxes.push(box);
-        if (this.map && isRectCollidingWithMap(this.map, box.x, box.y, box.width, box.height, false)) {
+        if (this.map && isRectCollidingWithMap(
+          this.map,
+          box.x,
+          box.y,
+          box.width,
+          box.height,
+          false,
+          this.ignoreTilePred
+        )) {
           break;
         }
       }
@@ -1284,17 +1300,32 @@
     const cosPitch = Math.max(0.2, Math.cos(cameraPitch));
     const horizontalMaxDistance = maxDistance * cosPitch;
     const lineOfSightDistance = horizontalMaxDistance * CAMERA_LOS_POINTS / (CAMERA_LOS_POINTS - 1);
+    const isCameraIgnoredTile = (col, row) => {
+      if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
+        return false;
+      }
+      return CAMERA_NON_BLOCKING_TILES.has(map.tiles[row][col]);
+    };
     let lineOfSight = new LineOfSight(
       { x: originX, y: originZ },
       oppositeYaw,
       lineOfSightDistance,
       map,
-      CAMERA_LOS_POINTS
+      CAMERA_LOS_POINTS,
+      isCameraIgnoredTile
     );
     let furthestValidIndex = -1;
     for (let i = lineOfSight.n - 1; i >= 0; i--) {
       const box = lineOfSight.boxes[i];
-      if (!isRectCollidingWithMap(map, box.x, box.y, box.width, box.height, false)) {
+      if (!isRectCollidingWithMap(
+        map,
+        box.x,
+        box.y,
+        box.width,
+        box.height,
+        false,
+        isCameraIgnoredTile
+      )) {
         furthestValidIndex = i;
         break;
       }
@@ -1391,10 +1422,28 @@
       z: pz
     };
     const rosannaCutscene = state.currentLevelId === "level-upstairs" ? state.levels["level-upstairs"].rosannaCutscene : null;
+    const toiletCutscene = state.currentLevelId === "level-basement" ? state.levels["level-basement"].toiletCutscene : null;
     let zoomEase = 0;
-    if (rosannaCutscene?.active) {
+    if (rosannaCutscene?.active || toiletCutscene?.active) {
+      let targetYaw = -Math.PI / 2;
+      let elapsed = 0;
+      let targetOffsetX = 0;
+      let targetOffsetY = 3;
+      let targetOffsetZ = -12;
+      if (toiletCutscene?.active) {
+        const toiletNpc = state.levels["level-basement"].toiletNpc;
+        const tx = toiletNpc.x + toiletNpc.width * 0.5;
+        const tz = toiletNpc.y + toiletNpc.height * 0.5;
+        targetYaw = Math.atan2(tz - pz, tx - px);
+        elapsed = toiletCutscene.timer;
+        targetOffsetX = (tx - px) * 0.45;
+        targetOffsetY = 1.5;
+        targetOffsetZ = (tz - pz) * 0.45;
+      } else if (rosannaCutscene?.active) {
+        elapsed = rosannaCutscene.elapsed;
+      }
       const turnBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 6) : 1;
-      cam.yaw = lerpAngle2(cam.yaw, -Math.PI / 2, turnBlend);
+      cam.yaw = lerpAngle2(cam.yaw, targetYaw, turnBlend);
       if (typeof input.cameraYaw === "number") {
         input.cameraYaw = cam.yaw;
       }
@@ -1402,11 +1451,12 @@
       if (typeof input.cameraPitch === "number") {
         input.cameraPitch = cam.pitch;
       }
-      const zoomT = Math.min(1, rosannaCutscene.elapsed / 1.1);
+      const zoomT = Math.min(1, elapsed / 1.1);
       zoomEase = zoomT * zoomT * (3 - 2 * zoomT);
       cam.fovY = (55 - 23 * zoomEase) * Math.PI / 180;
-      cam.target.y += 3 * zoomEase;
-      cam.target.z -= 12 * zoomEase;
+      cam.target.x += targetOffsetX * zoomEase;
+      cam.target.y += targetOffsetY * zoomEase;
+      cam.target.z += targetOffsetZ * zoomEase;
     } else {
       cam.fovY = 55 * Math.PI / 180;
     }
@@ -4690,7 +4740,9 @@
         hat: rgb(220, 36, 42),
         hasBeard: true
       };
-      const isPlayerTranslucent = cameraDistance !== void 0 && cameraDistance < TILE_SIZE;
+      const rosannaCutsceneActive = levelId === "level-upstairs" && Boolean(state.levels["level-upstairs"].rosannaCutscene?.active);
+      const toiletCutsceneActive = levelId === "level-basement" && Boolean(state.levels["level-basement"].toiletCutscene?.active);
+      const isPlayerTranslucent = cameraDistance !== void 0 && cameraDistance < TILE_SIZE || rosannaCutsceneActive || toiletCutsceneActive;
       const playerTargetBuilder = isPlayerTranslucent ? translucent : opaque;
       const playerStartVertex = playerTargetBuilder.vertexCount;
       addHumanoid3D(

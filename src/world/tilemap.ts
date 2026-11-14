@@ -168,6 +168,17 @@ export const WALKABLE_TILES: ReadonlySet<TileType> = new Set([
   TileType.StairsFloor,
 ]);
 
+/**
+ * Outdoor tiles that remain solid for entity/player movement collision,
+ * but do not block camera LineOfSight distance checks.
+ */
+export const CAMERA_NON_BLOCKING_TILES: ReadonlySet<TileType> = new Set([
+  TileType.Tree,
+  TileType.Thuja,
+  TileType.Hedge,
+  TileType.PatioTable,
+]);
+
 export function isSolidTile(
   map: TileMap,
   col: number,

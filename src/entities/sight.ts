@@ -31,6 +31,7 @@ export class LineOfSight {
   public map?: TileMap;
   public maxPoints: number;
   public boxes: Rect[] = [];
+  private readonly ignoreTilePred?: (col: number, row: number) => boolean;
   private callbacks: DetectionCallback[] = [];
 
   constructor(
@@ -38,13 +39,15 @@ export class LineOfSight {
     direction: number,
     distance: number,
     map?: TileMap,
-    maxPoints: number = 10
+    maxPoints: number = 10,
+    ignoreTilePred?: (col: number, row: number) => boolean
   ) {
     this.position = { ...position };
     this.direction = direction;
     this.distance = distance;
     this.map = map;
     this.maxPoints = Math.max(1, Math.floor(maxPoints));
+    this.ignoreTilePred = ignoreTilePred;
     this.recomputeBoxes();
   }
 
@@ -105,7 +108,15 @@ export class LineOfSight {
       // Map boundaries do not block LineOfSight points (allowing camera sight lines outside the map edge).
       if (
         this.map &&
-        isRectCollidingWithMap(this.map, box.x, box.y, box.width, box.height, false)
+        isRectCollidingWithMap(
+          this.map,
+          box.x,
+          box.y,
+          box.width,
+          box.height,
+          false,
+          this.ignoreTilePred
+        )
       ) {
         break;
       }

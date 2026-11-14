@@ -2610,8 +2610,16 @@ export function buildDynamicSceneMeshes(
           hasBeard: true,
         };
 
+    const rosannaCutsceneActive =
+      levelId === 'level-upstairs' &&
+      Boolean(state.levels['level-upstairs'].rosannaCutscene?.active);
+    const toiletCutsceneActive =
+      levelId === 'level-basement' &&
+      Boolean(state.levels['level-basement'].toiletCutscene?.active);
     const isPlayerTranslucent =
-      cameraDistance !== undefined && cameraDistance < TILE_SIZE;
+      (cameraDistance !== undefined && cameraDistance < TILE_SIZE) ||
+      rosannaCutsceneActive ||
+      toiletCutsceneActive;
     const playerTargetBuilder = isPlayerTranslucent ? translucent : opaque;
     const playerStartVertex = playerTargetBuilder.vertexCount;
 

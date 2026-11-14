@@ -651,7 +651,6 @@
       }
     }
     const db = new SecretSantaDB(content, pid);
-    db.debugLogAll();
     return db;
   }
 

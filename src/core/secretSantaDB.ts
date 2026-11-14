@@ -125,6 +125,6 @@ export async function initSecretSantaDB(
   }
 
   const db = new SecretSantaDB(content, pid);
-  db.debugLogAll();
+  // db.debugLogAll();
   return db;
 }

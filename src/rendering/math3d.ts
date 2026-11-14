@@ -453,6 +453,37 @@ export function updateCamera3D(
   }
   cam.wasOnRoof = state.isOnRoof;
 
+  // Apply arrow-key camera rotation in 3D mode (keyboard-only fallback without mouse)
+  if (typeof input.cameraYaw === 'number' && dtSeconds > 0) {
+    const yawSpeed = 2.2;
+    const pitchSpeed = 1.5;
+    if (input.camLeft) {
+      input.cameraYaw = wrapAngle(input.cameraYaw - yawSpeed * dtSeconds);
+    }
+    if (input.camRight) {
+      input.cameraYaw = wrapAngle(input.cameraYaw + yawSpeed * dtSeconds);
+    }
+    const basePitch =
+      typeof input.cameraPitch === 'number'
+        ? input.cameraPitch
+        : DEFAULT_CAMERA_PITCH;
+    if (input.camUp) {
+      input.cameraPitch = Math.max(
+        MIN_CAMERA_PITCH,
+        basePitch - pitchSpeed * dtSeconds
+      );
+    }
+    if (input.camDown) {
+      input.cameraPitch = Math.min(
+        MAX_CAMERA_PITCH,
+        (typeof input.cameraPitch === 'number'
+          ? input.cameraPitch
+          : basePitch) +
+          pitchSpeed * dtSeconds
+      );
+    }
+  }
+
   // Sync from mouse-look yaw/pitch on InputState if active
   if (typeof input.cameraYaw === 'number') {
     cam.yaw = wrapAngle(input.cameraYaw);

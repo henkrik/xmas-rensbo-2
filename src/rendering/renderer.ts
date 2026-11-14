@@ -115,30 +115,46 @@ function drawSnesFrame(
   ctx.fillRect(x + w - 3, y + h - 3, 2, 2);
 }
 
+function drawSpaceKeyBadge(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+): void {
+  ctx.fillStyle = '#182238';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#e8f0ff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  drawPixelText(ctx, 'SPACE', x + 4, y + Math.round((h - 8) / 2), '#ffffff', '#0c101a');
+}
+
 function drawInteractionPrompt(
   ctx: CanvasRenderingContext2D,
   promptText: string,
-  zKeySprite: HTMLImageElement
+  _zKeySprite: HTMLImageElement
 ): void {
   ctx.save();
   const textWidth = measurePixelText(promptText);
-  const iconSize = 16;
+  const badgeW = measurePixelText('SPACE') + 8;
+  const badgeH = 14;
   const gap = 6;
   const padX = 8;
   const boxHeight = 22;
-  const boxWidth = padX * 2 + iconSize + gap + textWidth;
+  const boxWidth = padX * 2 + badgeW + gap + textWidth;
   const boxX = Math.round((ctx.canvas.width - boxWidth) / 2);
   const boxY = ctx.canvas.height - boxHeight - 6;
 
   drawSnesFrame(ctx, boxX, boxY, boxWidth, boxHeight);
 
-  // Draw Z key icon
+  // Draw SPACE key badge
   const iconX = boxX + padX;
-  const iconY = boxY + Math.round((boxHeight - iconSize) / 2);
-  ctx.drawImage(zKeySprite, iconX, iconY, iconSize, iconSize);
+  const iconY = boxY + Math.round((boxHeight - badgeH) / 2);
+  drawSpaceKeyBadge(ctx, iconX, iconY, badgeW, badgeH);
 
   // Draw unaliased prompt label with 1px drop shadow
-  const textX = iconX + iconSize + gap;
+  const textX = iconX + badgeW + gap;
   const textY = boxY + Math.round((boxHeight - 8) / 2);
   drawPixelText(ctx, promptText, textX, textY, '#ffd166', '#0c101a');
   ctx.restore();

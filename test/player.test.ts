@@ -2429,4 +2429,29 @@ Tanja -> Alex
       expect(dyn.opaque.vertexCount % 3).toBe(0);
     }
   });
+
+  it('turns the 3D camera with arrow keys when cameraYaw is active', () => {
+    const state = createGameState();
+    const input = createEmptyInput();
+    input.cameraYaw = -Math.PI / 2;
+    input.cameraPitch = 0.42;
+
+    const cam = createCamera3D();
+    updateCamera3D(cam, state, input, 0.016, 256 / 224);
+
+    const initialYaw = input.cameraYaw;
+    applyKeyEvent(input, 'ArrowRight', true);
+    expect(input.camRight).toBe(true);
+    expect(input.right).toBe(false);
+    updateCamera3D(cam, state, input, 0.25, 256 / 224);
+    expect(input.cameraYaw).toBeGreaterThan(initialYaw);
+    applyKeyEvent(input, 'ArrowRight', false);
+
+    const initialPitch = input.cameraPitch;
+    applyKeyEvent(input, 'ArrowDown', true);
+    expect(input.camDown).toBe(true);
+    updateCamera3D(cam, state, input, 0.25, 256 / 224);
+    expect(input.cameraPitch).toBeGreaterThan(initialPitch);
+    applyKeyEvent(input, 'ArrowDown', false);
+  });
 });

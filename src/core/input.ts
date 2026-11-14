@@ -5,11 +5,16 @@ export interface InputState {
   right: boolean;
   action: boolean;
   actionJustPressed: boolean;
+  camUp?: boolean;
+  camDown?: boolean;
+  camLeft?: boolean;
+  camRight?: boolean;
   pointerClick?: { worldX: number; worldY: number } | null;
   moveVector?: { x: number; y: number } | null;
   /**
    * 3D camera horizontal look yaw in radians (`-Math.PI / 2` = looking North / -Y).
-   * When set to a number, WASD / directional keys move Santa relative to the camera look direction.
+   * When set to a number, WASD / directional keys move Santa relative to the camera look direction,
+   * and arrow keys turn the 3D camera.
    * When `null` or `undefined`, directional keys move along fixed 2D axes (preserving 2D unit tests).
    */
   cameraYaw?: number | null;
@@ -27,6 +32,10 @@ export function createEmptyInput(): InputState {
     right: false,
     action: false,
     actionJustPressed: false,
+    camUp: false,
+    camDown: false,
+    camLeft: false,
+    camRight: false,
     pointerClick: null,
     moveVector: null,
     cameraYaw: null,
@@ -64,6 +73,16 @@ const KEY_TO_BUTTON: Record<
   ' ': 'action',
 };
 
+const ARROW_TO_CAM: Record<
+  string,
+  'camUp' | 'camDown' | 'camLeft' | 'camRight'
+> = {
+  ArrowUp: 'camUp',
+  ArrowDown: 'camDown',
+  ArrowLeft: 'camLeft',
+  ArrowRight: 'camRight',
+};
+
 export interface KeyboardListenersOptions {
   onToggleJoystick?: () => void;
 }
@@ -76,6 +95,13 @@ export function applyKeyEvent(
 ): boolean {
   if (isPressed && (codeOrKey === 'KeyJ' || codeOrKey === 'j' || codeOrKey === 'J')) {
     options?.onToggleJoystick?.();
+    return true;
+  }
+
+  // In 3D mode (cameraYaw is active), arrow keys turn the camera so keyboard-only play works without a mouse.
+  const camBtn = ARROW_TO_CAM[codeOrKey];
+  if (camBtn && typeof state.cameraYaw === 'number') {
+    state[camBtn] = isPressed;
     return true;
   }
 

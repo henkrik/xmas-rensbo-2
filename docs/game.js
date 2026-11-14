@@ -110,6 +110,10 @@
       right: false,
       action: false,
       actionJustPressed: false,
+      camUp: false,
+      camDown: false,
+      camLeft: false,
+      camRight: false,
       pointerClick: null,
       moveVector: null,
       cameraYaw: null,
@@ -142,9 +146,20 @@
     Space: "action",
     " ": "action"
   };
+  var ARROW_TO_CAM = {
+    ArrowUp: "camUp",
+    ArrowDown: "camDown",
+    ArrowLeft: "camLeft",
+    ArrowRight: "camRight"
+  };
   function applyKeyEvent(state, codeOrKey, isPressed, options) {
     if (isPressed && (codeOrKey === "KeyJ" || codeOrKey === "j" || codeOrKey === "J")) {
       options?.onToggleJoystick?.();
+      return true;
+    }
+    const camBtn = ARROW_TO_CAM[codeOrKey];
+    if (camBtn && typeof state.cameraYaw === "number") {
+      state[camBtn] = isPressed;
       return true;
     }
     const btn = KEY_TO_BUTTON[codeOrKey];
@@ -1047,6 +1062,29 @@
       }
     }
     cam.wasOnRoof = state.isOnRoof;
+    if (typeof input.cameraYaw === "number" && dtSeconds > 0) {
+      const yawSpeed = 2.2;
+      const pitchSpeed = 1.5;
+      if (input.camLeft) {
+        input.cameraYaw = wrapAngle(input.cameraYaw - yawSpeed * dtSeconds);
+      }
+      if (input.camRight) {
+        input.cameraYaw = wrapAngle(input.cameraYaw + yawSpeed * dtSeconds);
+      }
+      const basePitch = typeof input.cameraPitch === "number" ? input.cameraPitch : DEFAULT_CAMERA_PITCH;
+      if (input.camUp) {
+        input.cameraPitch = Math.max(
+          MIN_CAMERA_PITCH,
+          basePitch - pitchSpeed * dtSeconds
+        );
+      }
+      if (input.camDown) {
+        input.cameraPitch = Math.min(
+          MAX_CAMERA_PITCH,
+          (typeof input.cameraPitch === "number" ? input.cameraPitch : basePitch) + pitchSpeed * dtSeconds
+        );
+      }
+    }
     if (typeof input.cameraYaw === "number") {
       cam.yaw = wrapAngle(input.cameraYaw);
     } else if (player.isMoving && dtSeconds > 0) {
@@ -4492,21 +4530,30 @@
     ctx.fillRect(x + 1, y + h - 3, 2, 2);
     ctx.fillRect(x + w - 3, y + h - 3, 2, 2);
   }
-  function drawInteractionPrompt(ctx, promptText, zKeySprite) {
+  function drawSpaceKeyBadge(ctx, x, y, w, h) {
+    ctx.fillStyle = "#182238";
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "#e8f0ff";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    drawPixelText(ctx, "SPACE", x + 4, y + Math.round((h - 8) / 2), "#ffffff", "#0c101a");
+  }
+  function drawInteractionPrompt(ctx, promptText, _zKeySprite) {
     ctx.save();
     const textWidth = measurePixelText(promptText);
-    const iconSize = 16;
+    const badgeW = measurePixelText("SPACE") + 8;
+    const badgeH = 14;
     const gap = 6;
     const padX = 8;
     const boxHeight = 22;
-    const boxWidth = padX * 2 + iconSize + gap + textWidth;
+    const boxWidth = padX * 2 + badgeW + gap + textWidth;
     const boxX = Math.round((ctx.canvas.width - boxWidth) / 2);
     const boxY = ctx.canvas.height - boxHeight - 6;
     drawSnesFrame(ctx, boxX, boxY, boxWidth, boxHeight);
     const iconX = boxX + padX;
-    const iconY = boxY + Math.round((boxHeight - iconSize) / 2);
-    ctx.drawImage(zKeySprite, iconX, iconY, iconSize, iconSize);
-    const textX = iconX + iconSize + gap;
+    const iconY = boxY + Math.round((boxHeight - badgeH) / 2);
+    drawSpaceKeyBadge(ctx, iconX, iconY, badgeW, badgeH);
+    const textX = iconX + badgeW + gap;
     const textY = boxY + Math.round((boxHeight - 8) / 2);
     drawPixelText(ctx, promptText, textX, textY, "#ffd166", "#0c101a");
     ctx.restore();

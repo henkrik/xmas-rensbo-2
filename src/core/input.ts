@@ -7,6 +7,16 @@ export interface InputState {
   actionJustPressed: boolean;
   pointerClick?: { worldX: number; worldY: number } | null;
   moveVector?: { x: number; y: number } | null;
+  /**
+   * 3D camera horizontal look yaw in radians (`-Math.PI / 2` = looking North / -Y).
+   * When set to a number, WASD / directional keys move Santa relative to the camera look direction.
+   * When `null` or `undefined`, directional keys move along fixed 2D axes (preserving 2D unit tests).
+   */
+  cameraYaw?: number | null;
+  /**
+   * 3D camera vertical pitch angle in radians (`0.1` = shallow behind-the-back, `1.1` = higher overhead).
+   */
+  cameraPitch?: number;
 }
 
 export function createEmptyInput(): InputState {
@@ -19,6 +29,8 @@ export function createEmptyInput(): InputState {
     actionJustPressed: false,
     pointerClick: null,
     moveVector: null,
+    cameraYaw: null,
+    cameraPitch: 0.38,
   };
 }
 
@@ -30,9 +42,26 @@ const KEY_TO_BUTTON: Record<
   ArrowDown: 'down',
   ArrowLeft: 'left',
   ArrowRight: 'right',
+  KeyW: 'up',
+  w: 'up',
+  W: 'up',
+  KeyS: 'down',
+  s: 'down',
+  S: 'down',
+  KeyA: 'left',
+  a: 'left',
+  A: 'left',
+  KeyD: 'right',
+  d: 'right',
+  D: 'right',
   KeyZ: 'action',
   z: 'action',
   Z: 'action',
+  KeyE: 'action',
+  e: 'action',
+  E: 'action',
+  Space: 'action',
+  ' ': 'action',
 };
 
 export interface KeyboardListenersOptions {
@@ -423,3 +452,138 @@ export function createVirtualJoystick(
     },
   };
 }
+
+export interface MouseLookControlsOptions {
+  element: HTMLElement;
+  input: InputState;
+  sensitivity?: number;
+  isDialogueActive?: () => boolean;
+}
+
+/**
+ * Attaches 3D mouse-look listeners (Pointer Lock + fallback mouse movement/drag)
+ * to control the behind-the-back 3D camera yaw and pitch around Santa.
+ */
+export function attachMouseLookListeners(
+  options: MouseLookControlsOptions
+): () => void {
+  const {
+    element,
+    input,
+    sensitivity = 0.0042,
+    isDialogueActive,
+  } = options;
+
+  if (typeof input.cameraYaw !== 'number') {
+    input.cameraYaw = -Math.PI / 2;
+  }
+  if (typeof input.cameraPitch !== 'number') {
+    input.cameraPitch = 0.38;
+  }
+
+  let lastClientX: number | null = null;
+  let lastClientY: number | null = null;
+
+  const applyDelta = (dx: number, dy: number) => {
+    const currentYaw =
+      typeof input.cameraYaw === 'number' ? input.cameraYaw : -Math.PI / 2;
+    const currentPitch =
+      typeof input.cameraPitch === 'number' ? input.cameraPitch : 0.38;
+
+    let nextYaw = currentYaw + dx * sensitivity;
+    while (nextYaw > Math.PI) nextYaw -= Math.PI * 2;
+    while (nextYaw < -Math.PI) nextYaw += Math.PI * 2;
+
+    const nextPitch = Math.max(
+      0.12,
+      Math.min(1.12, currentPitch + dy * sensitivity * 0.75)
+    );
+
+    input.cameraYaw = nextYaw;
+    input.cameraPitch = nextPitch;
+  };
+
+  const onMouseMove = (e: MouseEvent) => {
+    const doc = typeof document !== 'undefined' ? document : null;
+    const isLocked =
+      doc &&
+      (doc.pointerLockElement === element ||
+        (doc.pointerLockElement && element.contains(doc.pointerLockElement)));
+
+    if (isLocked) {
+      applyDelta(e.movementX || 0, e.movementY || 0);
+      return;
+    }
+
+    const isOverElement =
+      e.target === element || element.contains(e.target as Node);
+    if (!isOverElement && e.buttons === 0) {
+      lastClientX = null;
+      lastClientY = null;
+      return;
+    }
+
+    let dx = e.movementX;
+    let dy = e.movementY;
+    if (
+      (typeof dx !== 'number' || (dx === 0 && dy === 0)) &&
+      lastClientX !== null &&
+      lastClientY !== null
+    ) {
+      dx = e.clientX - lastClientX;
+      dy = e.clientY - lastClientY;
+    }
+    lastClientX = e.clientX;
+    lastClientY = e.clientY;
+
+    if (dx || dy) {
+      applyDelta(dx || 0, dy || 0);
+    }
+  };
+
+  const onMouseDown = (e: MouseEvent) => {
+    const isTarget =
+      e.target === element || element.contains(e.target as Node);
+    if (!isTarget) return;
+
+    lastClientX = e.clientX;
+    lastClientY = e.clientY;
+
+    const doc = typeof document !== 'undefined' ? document : null;
+    const isLocked =
+      doc &&
+      (doc.pointerLockElement === element ||
+        (doc.pointerLockElement && element.contains(doc.pointerLockElement)));
+
+    if (isDialogueActive?.()) {
+      input.actionJustPressed = true;
+      return;
+    }
+
+    if (!isLocked && typeof element.requestPointerLock === 'function') {
+      try {
+        const lockPromise = element.requestPointerLock() as unknown as
+          | Promise<void>
+          | undefined;
+        if (lockPromise && typeof lockPromise.catch === 'function') {
+          lockPromise.catch(() => {
+            // Ignore pointer lock rejection in headless or sandboxed browsers
+          });
+        }
+      } catch {
+        // Ignore pointer lock errors
+      }
+    } else if (isLocked && e.button === 0) {
+      input.actionJustPressed = true;
+    }
+  };
+
+  window.addEventListener('mousemove', onMouseMove);
+  element.addEventListener('mousedown', onMouseDown);
+
+  return () => {
+    window.removeEventListener('mousemove', onMouseMove);
+    element.removeEventListener('mousedown', onMouseDown);
+  };
+}
+

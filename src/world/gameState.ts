@@ -349,6 +349,7 @@ export function resetAfterSnowballHit(state: GameState): void {
   state.player.x = PLAYER_START_X;
   state.player.y = PLAYER_START_Y;
   state.player.facing = 'up';
+  state.player.yaw = -Math.PI / 2;
   state.player.isMoving = false;
   state.player.walkTimer = 0;
   state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
@@ -383,6 +384,18 @@ function updateRoofMovement(
   let dx = 0;
   if (input.moveVector) {
     dx = input.moveVector.x;
+  } else if (typeof input.cameraYaw === 'number') {
+    const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
+    const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    const rawLen = Math.hypot(forward, strafe);
+    if (rawLen > 0) {
+      const nf = forward / rawLen;
+      const ns = strafe / rawLen;
+      const cosY = Math.cos(input.cameraYaw);
+      const sinY = Math.sin(input.cameraYaw);
+      const worldDx = nf * cosY - ns * sinY;
+      dx = Math.abs(worldDx) > 0.15 ? Math.sign(worldDx) : strafe;
+    }
   } else {
     if (input.left) dx -= 1;
     if (input.right) dx += 1;
@@ -399,6 +412,7 @@ function updateRoofMovement(
   player.isMoving = true;
   player.walkTimer += dtSeconds;
   player.facing = dx < 0 ? 'left' : 'right';
+  player.yaw = dx < 0 ? Math.PI : 0;
 
   const nextX = player.x + dx * player.speed * dtSeconds;
   player.x = Math.max(ROOF_MIN_X, Math.min(ROOF_MAX_X, nextX));

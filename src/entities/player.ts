@@ -29,6 +29,8 @@ export interface Player {
   height: number;
   speed: number;
   facing: Direction;
+  /** Continuous 3D facing yaw in radians (`-Math.PI / 2` = North / up) */
+  yaw?: number;
   isMoving: boolean;
   walkTimer: number;
   blinkTimer: number;
@@ -45,6 +47,7 @@ export function createPlayer(x: number, y: number): Player {
     height: 12,
     speed: 75, // pixels per second
     facing: 'up',
+    yaw: -Math.PI / 2,
     isMoving: false,
     walkTimer: 0,
     blinkTimer: 0,
@@ -132,6 +135,18 @@ export function updatePlayer(
   if (input.moveVector) {
     dx = input.moveVector.x;
     dy = input.moveVector.y;
+  } else if (typeof input.cameraYaw === 'number') {
+    const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
+    const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    const rawLen = Math.hypot(forward, strafe);
+    if (rawLen > 0) {
+      const nf = forward / rawLen;
+      const ns = strafe / rawLen;
+      const cosY = Math.cos(input.cameraYaw);
+      const sinY = Math.sin(input.cameraYaw);
+      dx = nf * cosY - ns * sinY;
+      dy = nf * sinY + ns * cosY;
+    }
   } else {
     if (input.left) dx -= 1;
     if (input.right) dx += 1;
@@ -154,6 +169,7 @@ export function updatePlayer(
 
   player.isMoving = true;
   player.walkTimer += dtSeconds;
+  player.yaw = Math.atan2(dy, dx);
 
   if (Math.abs(dy) > Math.abs(dx)) {
     player.facing = dy < 0 ? 'up' : 'down';

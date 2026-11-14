@@ -1,6 +1,7 @@
 import { loadAllAssets } from './assets';
 import {
   attachKeyboardListeners,
+  attachMouseLookListeners,
   attachPointerListeners,
   computeViewportLayout,
   createEmptyInput,
@@ -9,7 +10,9 @@ import {
 import { attachDebugConsole } from './core/debugConsole';
 import { initSecretSantaDB } from './core/secretSantaDB';
 import secretText from '../inspiration/secret.txt';
+import { createCamera3D, updateCamera3D } from './rendering/math3d';
 import { computeCamera, renderGame } from './rendering/renderer';
+import { WebGPURenderer } from './rendering/webgpuRenderer';
 import {
   createGameState,
   parseLevelQueryParam,
@@ -57,10 +60,24 @@ async function startGame(): Promise<void> {
     throw new Error('Could not find #game-canvas element');
   }
 
+  let webgpuCanvas = document.getElementById('webgpu-canvas') as HTMLCanvasElement | null;
+  if (!webgpuCanvas && gameContainer) {
+    webgpuCanvas = document.createElement('canvas');
+    webgpuCanvas.id = 'webgpu-canvas';
+    webgpuCanvas.width = 768;
+    webgpuCanvas.height = 672;
+    gameContainer.insertBefore(webgpuCanvas, canvas);
+  }
+
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     throw new Error('Could not get 2D rendering context');
   }
+
+  const webgpuRenderer = webgpuCanvas
+    ? await WebGPURenderer.create(webgpuCanvas)
+    : null;
+  const camera3d = createCamera3D();
 
   const joystickContainer = document.getElementById('virtual-joystick-container');
   const joystickStick = document.getElementById('virtual-joystick-stick');
@@ -131,6 +148,10 @@ async function startGame(): Promise<void> {
 
     canvas.style.width = `${layout.canvasWidth}px`;
     canvas.style.height = `${layout.canvasHeight}px`;
+    if (webgpuCanvas) {
+      webgpuCanvas.style.width = `${layout.canvasWidth}px`;
+      webgpuCanvas.style.height = `${layout.canvasHeight}px`;
+    }
 
     if (joystickContainer) {
       joystickContainer.style.width = `${layout.joystickSize}px`;
@@ -271,6 +292,12 @@ async function startGame(): Promise<void> {
     isDialogueActive: () => state.activeDialogue !== null,
   });
 
+  attachMouseLookListeners({
+    element: canvas,
+    input,
+    isDialogueActive: () => state.activeDialogue !== null,
+  });
+
   let lastTimestamp: number | null = null;
 
   function frame(now: number): void {
@@ -287,7 +314,8 @@ async function startGame(): Promise<void> {
     state.joystickActive = isJoystickShown;
 
     updateGameState(state, input, dtSeconds);
-    renderGame(ctx!, state, assets);
+    updateCamera3D(camera3d, state, input, dtSeconds, canvas!.width / canvas!.height);
+    renderGame(ctx!, state, assets, { webgpuRenderer, camera3d });
 
     // Sync mobile action button visibility and text with nearby interactable
     if (mobileActionBtn) {

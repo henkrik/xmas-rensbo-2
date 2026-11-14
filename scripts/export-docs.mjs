@@ -21,6 +21,7 @@ const indexHtml = `<!DOCTYPE html>
   <body>
     <div id="viewport-frame">
       <div id="game-container">
+        <canvas id="webgpu-canvas" width="768" height="672"></canvas>
         <canvas id="game-canvas" width="256" height="224"></canvas>
         <div id="virtual-joystick-container" style="display: none;">
           <div id="virtual-joystick-base">

@@ -111,7 +111,9 @@
       action: false,
       actionJustPressed: false,
       pointerClick: null,
-      moveVector: null
+      moveVector: null,
+      cameraYaw: null,
+      cameraPitch: 0.38
     };
   }
   var KEY_TO_BUTTON = {
@@ -119,9 +121,26 @@
     ArrowDown: "down",
     ArrowLeft: "left",
     ArrowRight: "right",
+    KeyW: "up",
+    w: "up",
+    W: "up",
+    KeyS: "down",
+    s: "down",
+    S: "down",
+    KeyA: "left",
+    a: "left",
+    A: "left",
+    KeyD: "right",
+    d: "right",
+    D: "right",
     KeyZ: "action",
     z: "action",
-    Z: "action"
+    Z: "action",
+    KeyE: "action",
+    e: "action",
+    E: "action",
+    Space: "action",
+    " ": "action"
   };
   function applyKeyEvent(state, codeOrKey, isPressed, options) {
     if (isPressed && (codeOrKey === "KeyJ" || codeOrKey === "j" || codeOrKey === "J")) {
@@ -373,6 +392,90 @@
         win?.removeEventListener("pointerup", onPointerUp);
         win?.removeEventListener("pointercancel", onPointerCancel);
       }
+    };
+  }
+  function attachMouseLookListeners(options) {
+    const {
+      element,
+      input,
+      sensitivity = 42e-4,
+      isDialogueActive
+    } = options;
+    if (typeof input.cameraYaw !== "number") {
+      input.cameraYaw = -Math.PI / 2;
+    }
+    if (typeof input.cameraPitch !== "number") {
+      input.cameraPitch = 0.38;
+    }
+    let lastClientX = null;
+    let lastClientY = null;
+    const applyDelta = (dx, dy) => {
+      const currentYaw = typeof input.cameraYaw === "number" ? input.cameraYaw : -Math.PI / 2;
+      const currentPitch = typeof input.cameraPitch === "number" ? input.cameraPitch : 0.38;
+      let nextYaw = currentYaw + dx * sensitivity;
+      while (nextYaw > Math.PI) nextYaw -= Math.PI * 2;
+      while (nextYaw < -Math.PI) nextYaw += Math.PI * 2;
+      const nextPitch = Math.max(
+        0.12,
+        Math.min(1.12, currentPitch + dy * sensitivity * 0.75)
+      );
+      input.cameraYaw = nextYaw;
+      input.cameraPitch = nextPitch;
+    };
+    const onMouseMove = (e) => {
+      const doc = typeof document !== "undefined" ? document : null;
+      const isLocked = doc && (doc.pointerLockElement === element || doc.pointerLockElement && element.contains(doc.pointerLockElement));
+      if (isLocked) {
+        applyDelta(e.movementX || 0, e.movementY || 0);
+        return;
+      }
+      const isOverElement = e.target === element || element.contains(e.target);
+      if (!isOverElement && e.buttons === 0) {
+        lastClientX = null;
+        lastClientY = null;
+        return;
+      }
+      let dx = e.movementX;
+      let dy = e.movementY;
+      if ((typeof dx !== "number" || dx === 0 && dy === 0) && lastClientX !== null && lastClientY !== null) {
+        dx = e.clientX - lastClientX;
+        dy = e.clientY - lastClientY;
+      }
+      lastClientX = e.clientX;
+      lastClientY = e.clientY;
+      if (dx || dy) {
+        applyDelta(dx || 0, dy || 0);
+      }
+    };
+    const onMouseDown = (e) => {
+      const isTarget = e.target === element || element.contains(e.target);
+      if (!isTarget) return;
+      lastClientX = e.clientX;
+      lastClientY = e.clientY;
+      const doc = typeof document !== "undefined" ? document : null;
+      const isLocked = doc && (doc.pointerLockElement === element || doc.pointerLockElement && element.contains(doc.pointerLockElement));
+      if (isDialogueActive?.()) {
+        input.actionJustPressed = true;
+        return;
+      }
+      if (!isLocked && typeof element.requestPointerLock === "function") {
+        try {
+          const lockPromise = element.requestPointerLock();
+          if (lockPromise && typeof lockPromise.catch === "function") {
+            lockPromise.catch(() => {
+            });
+          }
+        } catch {
+        }
+      } else if (isLocked && e.button === 0) {
+        input.actionJustPressed = true;
+      }
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    element.addEventListener("mousedown", onMouseDown);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      element.removeEventListener("mousedown", onMouseDown);
     };
   }
 
@@ -683,6 +786,328 @@
     return false;
   }
 
+  // src/rendering/math3d.ts
+  var MAIN_HOUSE_WALL_HEIGHT = 34;
+  var MAIN_HOUSE_ROOF_WALK_HEIGHT = 36;
+  var INDOOR_WALL_HEIGHT = 22;
+  function sub3(a, b) {
+    return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+  }
+  function dot3(a, b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+  }
+  function cross3(a, b) {
+    return {
+      x: a.y * b.z - a.z * b.y,
+      y: a.z * b.x - a.x * b.z,
+      z: a.x * b.y - a.y * b.x
+    };
+  }
+  function length3(v) {
+    return Math.hypot(v.x, v.y, v.z);
+  }
+  function normalize3(v) {
+    const len = Math.hypot(v.x, v.y, v.z);
+    if (len < 1e-6) return { x: 0, y: 1, z: 0 };
+    return { x: v.x / len, y: v.y / len, z: v.z / len };
+  }
+  function wrapAngle(angle) {
+    let a = (angle + Math.PI) % (Math.PI * 2);
+    if (a < 0) a += Math.PI * 2;
+    return a - Math.PI;
+  }
+  function lerpAngle(from, to, t) {
+    const diff = wrapAngle(to - from);
+    return wrapAngle(from + diff * Math.max(0, Math.min(1, t)));
+  }
+  function directionToYaw(facing) {
+    switch (facing) {
+      case "up":
+        return -Math.PI / 2;
+      case "down":
+        return Math.PI / 2;
+      case "left":
+        return Math.PI;
+      case "right":
+        return 0;
+    }
+  }
+  function mat4Perspective(fovYRadians, aspect, near, far) {
+    const f = 1 / Math.tan(fovYRadians / 2);
+    const rangeInv = 1 / (near - far);
+    const out = new Float32Array(16);
+    out[0] = f / Math.max(0.01, aspect);
+    out[5] = f;
+    out[10] = far * rangeInv;
+    out[11] = -1;
+    out[14] = near * far * rangeInv;
+    out[15] = 0;
+    return out;
+  }
+  function mat4LookAt(eye, target, up) {
+    const zAxis = normalize3(sub3(eye, target));
+    let xAxis = cross3(up, zAxis);
+    if (length3(xAxis) < 1e-5) {
+      xAxis = { x: 1, y: 0, z: 0 };
+    } else {
+      xAxis = normalize3(xAxis);
+    }
+    const yAxis = cross3(zAxis, xAxis);
+    const out = new Float32Array(16);
+    out[0] = xAxis.x;
+    out[1] = yAxis.x;
+    out[2] = zAxis.x;
+    out[3] = 0;
+    out[4] = xAxis.y;
+    out[5] = yAxis.y;
+    out[6] = zAxis.y;
+    out[7] = 0;
+    out[8] = xAxis.z;
+    out[9] = yAxis.z;
+    out[10] = zAxis.z;
+    out[11] = 0;
+    out[12] = -dot3(xAxis, eye);
+    out[13] = -dot3(yAxis, eye);
+    out[14] = -dot3(zAxis, eye);
+    out[15] = 1;
+    return out;
+  }
+  function mat4Multiply(a, b) {
+    const out = new Float32Array(16);
+    for (let col = 0; col < 4; col++) {
+      const b0 = b[col * 4 + 0];
+      const b1 = b[col * 4 + 1];
+      const b2 = b[col * 4 + 2];
+      const b3 = b[col * 4 + 3];
+      out[col * 4 + 0] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+      out[col * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+      out[col * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+      out[col * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+    }
+    return out;
+  }
+  function projectWorldToScreen(pt, viewProj, viewportW, viewportH) {
+    const x = pt.x;
+    const y = pt.y;
+    const z = pt.z;
+    const cx = viewProj[0] * x + viewProj[4] * y + viewProj[8] * z + viewProj[12];
+    const cy = viewProj[1] * x + viewProj[5] * y + viewProj[9] * z + viewProj[13];
+    const cz = viewProj[2] * x + viewProj[6] * y + viewProj[10] * z + viewProj[14];
+    const cw = viewProj[3] * x + viewProj[7] * y + viewProj[11] * z + viewProj[15];
+    if (cw <= 0.05) {
+      return { x: 0, y: 0, z: cz, w: cw, visible: false };
+    }
+    const invW = 1 / cw;
+    const ndcX = cx * invW;
+    const ndcY = cy * invW;
+    const ndcZ = cz * invW;
+    return {
+      x: (ndcX * 0.5 + 0.5) * viewportW,
+      y: (0.5 - ndcY * 0.5) * viewportH,
+      z: ndcZ,
+      w: cw,
+      visible: ndcZ >= -0.1 && ndcZ <= 1.05 && Math.abs(ndcX) <= 1.6 && Math.abs(ndcY) <= 1.6
+    };
+  }
+  function smoothPlateauWeight(x, z, minX, maxX, minZ, maxZ, margin) {
+    const dx = Math.max(0, minX - x, x - maxX);
+    const dz = Math.max(0, minZ - z, z - maxZ);
+    const dist = Math.hypot(dx, dz);
+    if (dist >= margin) return 0;
+    const t = 1 - dist / margin;
+    return t * t * (3 - 2 * t);
+  }
+  function getTerrainHeight(x, z, levelId = "level-outside") {
+    if (levelId !== "level-outside") {
+      return 0;
+    }
+    const northProgress = Math.max(0, Math.min(1, (432 - z) / 384));
+    let h = Math.pow(northProgress, 1.08) * 24;
+    const hills = Math.sin(x * 0.016 + z * 0.012) * 2.2 + Math.cos(x * 0.024 - z * 0.019) * 1.6 + Math.sin((x - 240) * 0.01) * 1.8;
+    h += hills;
+    const eastHill = smoothPlateauWeight(x, z, 18 * 16, 30 * 16, 3 * 16, 11 * 16, 56);
+    h += eastHill * 5.5;
+    if (z < 4.5 * 16) {
+      const ridgeT = Math.max(0, (4.5 * 16 - z) / (4.5 * 16));
+      h += ridgeT * ridgeT * 14;
+    }
+    const nwCliff = smoothPlateauWeight(x, z, 0, 4.2 * 16, 0, 3.8 * 16, 36);
+    h += nwCliff * 9;
+    const wHouse = smoothPlateauWeight(x, z, 3.6 * 16, 17.2 * 16, 3 * 16, 11.2 * 16, 28);
+    h = h * (1 - wHouse) + 21.5 * wHouse;
+    const wStuga1 = smoothPlateauWeight(x, z, 19 * 16, 23 * 16, 5 * 16, 9 * 16, 20);
+    h = h * (1 - wStuga1) + 25 * wStuga1;
+    const wStuga2 = smoothPlateauWeight(x, z, 25 * 16, 29 * 16, 5 * 16, 9 * 16, 20);
+    h = h * (1 - wStuga2) + 26.5 * wStuga2;
+    const wPatio = smoothPlateauWeight(x, z, 7 * 16, 9 * 16, 14 * 16, 16 * 16, 18);
+    h = h * (1 - wPatio) + 14 * wPatio;
+    const wShed = smoothPlateauWeight(x, z, 25 * 16, 30 * 16, 16 * 16, 20 * 16, 22);
+    h = h * (1 - wShed) + 11.5 * wShed;
+    const wGarage = smoothPlateauWeight(x, z, 2 * 16, 9 * 16, 21 * 16, 26 * 16, 24);
+    h = h * (1 - wGarage) + 5.5 * wGarage;
+    return h;
+  }
+  function getTerrainNormal(x, z, levelId = "level-outside") {
+    if (levelId !== "level-outside") {
+      return { x: 0, y: 1, z: 0 };
+    }
+    const eps = 2;
+    const hL = getTerrainHeight(x - eps, z, levelId);
+    const hR = getTerrainHeight(x + eps, z, levelId);
+    const hD = getTerrainHeight(x, z - eps, levelId);
+    const hU = getTerrainHeight(x, z + eps, levelId);
+    return normalize3({
+      x: hL - hR,
+      y: 2 * eps,
+      z: hD - hU
+    });
+  }
+  function getPlayerElevation(state) {
+    const px = state.player.x + state.player.width / 2;
+    const pz = state.player.y + state.player.height / 2;
+    if (state.currentLevelId === "level-outside") {
+      const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
+      const roofWalkElevation = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
+      if (state.climbing) {
+        const groundY = getTerrainHeight(px, LADDER_BOTTOM_Y + 6, "level-outside");
+        const t = Math.max(0, Math.min(1, state.climbing.progress));
+        return state.climbing.direction === "up" ? groundY + (roofWalkElevation - groundY) * t : roofWalkElevation + (groundY - roofWalkElevation) * t;
+      }
+      if (state.isOnRoof) {
+        return roofWalkElevation;
+      }
+      return getTerrainHeight(px, pz, "level-outside");
+    }
+    if (state.currentLevelId === "level-basement") {
+      if (px >= 18 * TILE_SIZE && px <= 22 * TILE_SIZE && pz >= 15 * TILE_SIZE && pz <= 19 * TILE_SIZE) {
+        const stairProgress = Math.max(0, Math.min(1, (px - 18 * TILE_SIZE) / (3 * TILE_SIZE)));
+        return stairProgress * 12;
+      }
+      return 0;
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      if (px >= 15 * TILE_SIZE && px <= 19 * TILE_SIZE && pz >= 13 * TILE_SIZE && pz <= 18 * TILE_SIZE) {
+        const stairProgress = Math.max(0, Math.min(1, (pz - 13.5 * TILE_SIZE) / (4 * TILE_SIZE)));
+        return -stairProgress * 10;
+      }
+      return 0;
+    }
+    return 0;
+  }
+  var DEFAULT_CAMERA_PITCH = 0.42;
+  var MIN_CAMERA_PITCH = 0.08;
+  var MAX_CAMERA_PITCH = 1.18;
+  function createCamera3D(initialYaw = -Math.PI / 2) {
+    const eye = { x: 232, y: 28, z: 450 };
+    const target = { x: 232, y: 12, z: 408 };
+    const up = { x: 0, y: 1, z: 0 };
+    const viewMatrix = mat4LookAt(eye, target, up);
+    const projMatrix = mat4Perspective(55 * Math.PI / 180, 256 / 224, 2, 900);
+    const viewProjMatrix = mat4Multiply(projMatrix, viewMatrix);
+    return {
+      yaw: initialYaw,
+      pitch: DEFAULT_CAMERA_PITCH,
+      distance: 52,
+      eye,
+      target,
+      up,
+      fovY: 55 * Math.PI / 180,
+      near: 2,
+      far: 900,
+      viewMatrix,
+      projMatrix,
+      viewProjMatrix,
+      lastLevelId: null,
+      wasOnRoof: false
+    };
+  }
+  function isWallTileAt(map, worldX, worldZ) {
+    const col = Math.floor(worldX / map.tileSize);
+    const row = Math.floor(worldZ / map.tileSize);
+    if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) return false;
+    const t = map.tiles[row][col];
+    return t === 21 /* InteriorWall */ || t === 20 /* VoidBlack */;
+  }
+  function updateCamera3D(cam, state, input, dtSeconds, aspect = 256 / 224) {
+    const player = state.player;
+    if (cam.lastLevelId !== state.currentLevelId) {
+      cam.lastLevelId = state.currentLevelId;
+      const spawnYaw = directionToYaw(player.facing);
+      cam.yaw = spawnYaw;
+      player.yaw = spawnYaw;
+      if (input.cameraYaw !== null && input.cameraYaw !== void 0) {
+        input.cameraYaw = spawnYaw;
+      }
+    }
+    if (state.isOnRoof && !cam.wasOnRoof) {
+      cam.yaw = 0;
+      player.yaw = 0;
+      if (input.cameraYaw !== null && input.cameraYaw !== void 0) {
+        input.cameraYaw = 0;
+      }
+    }
+    cam.wasOnRoof = state.isOnRoof;
+    if (typeof input.cameraYaw === "number") {
+      cam.yaw = wrapAngle(input.cameraYaw);
+    } else if (player.isMoving && dtSeconds > 0) {
+      const targetYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+      cam.yaw = lerpAngle(cam.yaw, targetYaw, Math.min(1, dtSeconds * 6));
+    }
+    if (typeof input.cameraPitch === "number") {
+      cam.pitch = Math.max(
+        MIN_CAMERA_PITCH,
+        Math.min(MAX_CAMERA_PITCH, input.cameraPitch)
+      );
+    }
+    const px = player.x + player.width / 2;
+    let pz = player.y + player.height / 2;
+    if (state.isOnRoof && state.currentLevelId === "level-outside") {
+      pz = ROOF_WALK_Y + player.height / 2;
+    }
+    const py = getPlayerElevation(state);
+    const isOutdoor = state.currentLevelId === "level-outside";
+    const baseDist = isOutdoor ? state.isOnRoof ? 44 : 52 : 38;
+    cam.distance = baseDist;
+    const targetHeightOffset = isOutdoor ? 13.5 : 12.5;
+    cam.target = {
+      x: px,
+      y: py + targetHeightOffset,
+      z: pz
+    };
+    const cosPitch = Math.cos(cam.pitch);
+    const sinPitch = Math.sin(cam.pitch);
+    const backX = -Math.cos(cam.yaw) * cosPitch;
+    const backZ = -Math.sin(cam.yaw) * cosPitch;
+    const backY = sinPitch;
+    let actualDist = cam.distance;
+    if (!isOutdoor && cam.pitch < 0.52) {
+      const steps = 12;
+      for (let i = 1; i <= steps; i++) {
+        const testD = cam.distance * i / steps;
+        const tx = cam.target.x + backX * testD;
+        const tz = cam.target.z + backZ * testD;
+        const ty = cam.target.y + backY * testD;
+        if (ty < INDOOR_WALL_HEIGHT + 3 && isWallTileAt(state.map, tx, tz)) {
+          actualDist = Math.max(16, testD - 4);
+          break;
+        }
+      }
+    }
+    let eyeX = cam.target.x + backX * actualDist;
+    let eyeY = cam.target.y + backY * actualDist;
+    let eyeZ = cam.target.z + backZ * actualDist;
+    if (isOutdoor) {
+      const groundAtEye = getTerrainHeight(eyeX, eyeZ, "level-outside");
+      if (eyeY < groundAtEye + 8) {
+        eyeY = groundAtEye + 8;
+      }
+    }
+    cam.eye = { x: eyeX, y: eyeY, z: eyeZ };
+    cam.viewMatrix = mat4LookAt(cam.eye, cam.target, cam.up);
+    cam.projMatrix = mat4Perspective(cam.fovY, aspect, cam.near, cam.far);
+    cam.viewProjMatrix = mat4Multiply(cam.projMatrix, cam.viewMatrix);
+  }
+
   // src/entities/player.ts
   var FOOTPRINT_DURATION_SECONDS = 3;
   var FOOTPRINT_STEP_INTERVAL_SECONDS = 0.14;
@@ -695,6 +1120,7 @@
       speed: 75,
       // pixels per second
       facing: "up",
+      yaw: -Math.PI / 2,
       isMoving: false,
       walkTimer: 0,
       blinkTimer: 0,
@@ -756,6 +1182,18 @@
     if (input.moveVector) {
       dx = input.moveVector.x;
       dy = input.moveVector.y;
+    } else if (typeof input.cameraYaw === "number") {
+      const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
+      const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      const rawLen = Math.hypot(forward, strafe);
+      if (rawLen > 0) {
+        const nf = forward / rawLen;
+        const ns = strafe / rawLen;
+        const cosY = Math.cos(input.cameraYaw);
+        const sinY = Math.sin(input.cameraYaw);
+        dx = nf * cosY - ns * sinY;
+        dy = nf * sinY + ns * cosY;
+      }
     } else {
       if (input.left) dx -= 1;
       if (input.right) dx += 1;
@@ -775,6 +1213,7 @@
     }
     player.isMoving = true;
     player.walkTimer += dtSeconds;
+    player.yaw = Math.atan2(dy, dx);
     if (Math.abs(dy) > Math.abs(dx)) {
       player.facing = dy < 0 ? "up" : "down";
     } else if (Math.abs(dx) > 0) {
@@ -2054,6 +2493,1976 @@
     ctx.restore();
   }
 
+  // src/rendering/textures3d.ts
+  var ATLAS_COLS = 4;
+  var ATLAS_ROWS = 5;
+  var TILE_RES = 128;
+  var ATLAS_WIDTH = ATLAS_COLS * TILE_RES;
+  var ATLAS_HEIGHT = ATLAS_ROWS * TILE_RES;
+  var TexId = {
+    SOLID: 0,
+    SNOW: 1,
+    GRAVEL: 2,
+    HOUSE_SIDING: 3,
+    ROOF_SLATE: 4,
+    LOG_WALL: 5,
+    BRICK_RED: 6,
+    BLUE_SIDING: 7,
+    WOOD_FLOOR: 8,
+    STONE_FLOOR: 9,
+    BATHROOM_TILE: 10,
+    INTERIOR_WALL: 11,
+    PINE_FOLIAGE: 12,
+    WOOD_GRAIN: 13,
+    BIRCH_BARK: 14,
+    FABRIC: 15,
+    WINDOW_GLOW: 16,
+    BOOKSHELF: 17,
+    CHESSBOARD: 18,
+    GIFT_WRAP: 19
+  };
+  function hash2d(ix, iy, seed = 0) {
+    let n = ix * 374761393 + iy * 668265263 + seed * 1442695041;
+    n = (n ^ n >> 13) * 1274126177;
+    return ((n ^ n >> 16) >>> 0) / 4294967295;
+  }
+  function setTilePixel(data, tileId, x, y, r, g2, b, a = 255) {
+    const col = tileId % ATLAS_COLS;
+    const row = Math.floor(tileId / ATLAS_COLS);
+    const px = col * TILE_RES + (x & TILE_RES - 1);
+    const py = row * TILE_RES + (y & TILE_RES - 1);
+    const idx = (py * ATLAS_WIDTH + px) * 4;
+    data[idx] = Math.max(0, Math.min(255, Math.round(r)));
+    data[idx + 1] = Math.max(0, Math.min(255, Math.round(g2)));
+    data[idx + 2] = Math.max(0, Math.min(255, Math.round(b)));
+    data[idx + 3] = Math.max(0, Math.min(255, Math.round(a)));
+  }
+  var cachedAtlas = null;
+  function getProceduralTextureAtlas() {
+    if (cachedAtlas) {
+      return cachedAtlas;
+    }
+    const data = new Uint8Array(ATLAS_WIDTH * ATLAS_HEIGHT * 4);
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        setTilePixel(data, TexId.SOLID, x, y, 255, 255, 255, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        const u = x / TILE_RES * Math.PI * 2;
+        const v = y / TILE_RES * Math.PI * 2;
+        const swirl = Math.sin(u * 2 + Math.sin(v * 2) * 1.4) * 0.5 + Math.cos(v * 2 - Math.cos(u) * 1.3) * 0.5;
+        let shade = 250;
+        let blueTint = 255;
+        if (swirl > 0.58) {
+          shade = 255;
+          blueTint = 255;
+        } else if (swirl < -0.52) {
+          shade = 228;
+          blueTint = 248;
+        } else {
+          shade = 242;
+          blueTint = 252;
+        }
+        setTilePixel(data, TexId.SNOW, x, y, shade, shade + 2, blueTint, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        const cellX = Math.floor(x / 8);
+        const cellY = Math.floor(y / 8);
+        const lx = x % 8 - 4;
+        const ly = y % 8 - 4;
+        const dist = Math.hypot(lx, ly);
+        const rnd = hash2d(cellX, cellY, 2);
+        let v = 225;
+        if (dist < 3.1) {
+          v = rnd > 0.65 ? 245 : rnd > 0.3 ? 212 : 194;
+        } else if (dist < 3.8) {
+          v = 176;
+        }
+        setTilePixel(data, TexId.GRAVEL, x, y, v, v, v + 4, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const plankRow = y % 16;
+      const plankIdx = Math.floor(y / 16);
+      for (let x = 0; x < TILE_RES; x++) {
+        const grain = Math.sin(x / TILE_RES * Math.PI * 6 + plankIdx * 1.7) * 4;
+        let v = 246 + grain;
+        if (plankRow === 0 || plankRow === 1) {
+          v = 192;
+        } else if (plankRow === 2) {
+          v = 255;
+        }
+        setTilePixel(data, TexId.HOUSE_SIDING, x, y, v, v, v, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const row = Math.floor(y / 16);
+      const ry = y % 16;
+      for (let x = 0; x < TILE_RES; x++) {
+        const offsetX = (x + row % 2 * 16) % 32;
+        const cx = offsetX - 16;
+        const arch = Math.sqrt(Math.max(0, 16 * 16 - cx * cx)) * 0.35;
+        let v = 232;
+        if (ry < 2 || Math.abs(cx) >= 15) {
+          v = 165;
+        } else if (ry > 12 - arch * 0.3) {
+          v = 252;
+        } else if ((row + Math.floor((x + row % 2 * 16) / 32)) % 3 === 0) {
+          v = 216;
+        }
+        setTilePixel(data, TexId.ROOF_SLATE, x, y, v, v + 2, v + 6, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const ry = y % 21;
+      const logIdx = Math.floor(y / 21);
+      for (let x = 0; x < TILE_RES; x++) {
+        const normY = (ry - 10.5) / 10.5;
+        const cyl = Math.sqrt(Math.max(0, 1 - normY * normY));
+        const whorl = Math.sin(x / TILE_RES * Math.PI * 4 + logIdx * 2.1) * Math.cos(normY * 2.5) * 8;
+        let v = 185 + cyl * 62 + whorl;
+        if (ry <= 1 || ry >= 20) {
+          v = 135;
+        }
+        setTilePixel(data, TexId.LOG_WALL, x, y, v, v * 0.95, v * 0.88, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const row = Math.floor(y / 16);
+      const ry = y % 16;
+      for (let x = 0; x < TILE_RES; x++) {
+        const bx = (x + row % 2 * 16) % 32;
+        const brickId = Math.floor((x + row % 2 * 16) / 32);
+        const isMortar = ry < 2 || bx < 2;
+        if (isMortar) {
+          setTilePixel(data, TexId.BRICK_RED, x, y, 228, 222, 214, 255);
+        } else {
+          const rnd = hash2d(brickId, row, 6);
+          const shade = rnd > 0.6 ? 248 : rnd > 0.25 ? 226 : 204;
+          setTilePixel(
+            data,
+            TexId.BRICK_RED,
+            x,
+            y,
+            shade,
+            shade * 0.85,
+            shade * 0.8,
+            255
+          );
+        }
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        const rx = x % 16;
+        let v = 240;
+        if (rx === 0 || rx === 1) {
+          v = 180;
+        } else if (rx === 2 || rx === 3) {
+          v = 255;
+        }
+        setTilePixel(data, TexId.BLUE_SIDING, x, y, v, v, v, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const plankCol = Math.floor(y / 16);
+      const py = y % 16;
+      for (let x = 0; x < TILE_RES; x++) {
+        const jointX = (x + plankCol % 2 * 48) % 96;
+        const isSeam = py === 0 || jointX === 0;
+        if (isSeam) {
+          setTilePixel(data, TexId.WOOD_FLOOR, x, y, 172, 160, 148, 255);
+        } else {
+          const wave = Math.sin(x / TILE_RES * Math.PI * 6 + plankCol * 1.9 + py * 0.25) * 8;
+          const plankTone = (plankCol % 3 === 0 ? 246 : plankCol % 3 === 1 ? 236 : 228) + wave;
+          setTilePixel(
+            data,
+            TexId.WOOD_FLOOR,
+            x,
+            y,
+            plankTone,
+            plankTone * 0.97,
+            plankTone * 0.93,
+            255
+          );
+        }
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const ty = y % 32;
+      const row = Math.floor(y / 32);
+      for (let x = 0; x < TILE_RES; x++) {
+        const tx = x % 32;
+        const col = Math.floor(x / 32);
+        if (tx < 2 || ty < 2) {
+          setTilePixel(data, TexId.STONE_FLOOR, x, y, 175, 170, 165, 255);
+        } else if (tx === 2 || ty === 2) {
+          setTilePixel(data, TexId.STONE_FLOOR, x, y, 252, 250, 246, 255);
+        } else {
+          const checker = (row + col) % 2 === 0 ? 238 : 226;
+          setTilePixel(data, TexId.STONE_FLOOR, x, y, checker, checker, checker, 255);
+        }
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const ty = y % 16;
+      for (let x = 0; x < TILE_RES; x++) {
+        const tx = x % 16;
+        if (tx === 0 || ty === 0) {
+          setTilePixel(data, TexId.BATHROOM_TILE, x, y, 200, 220, 225, 255);
+        } else if (tx >= 3 && tx <= 6 && ty >= 3 && ty <= 5) {
+          setTilePixel(data, TexId.BATHROOM_TILE, x, y, 255, 255, 255, 255);
+        } else {
+          setTilePixel(data, TexId.BATHROOM_TILE, x, y, 236, 246, 248, 255);
+        }
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        const stripe = Math.floor(x / 16) % 2 === 0 ? 248 : 240;
+        let v = stripe;
+        if (y > 96 && y < 102) {
+          v = 210;
+        } else if (y >= 102) {
+          v = x % 32 < 3 || y > 123 ? 205 : 232;
+        }
+        setTilePixel(data, TexId.INTERIOR_WALL, x, y, v, v, v, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const row = Math.floor(y / 24);
+      const ry = y % 24;
+      for (let x = 0; x < TILE_RES; x++) {
+        const ox = (x + row % 2 * 16) % 32;
+        const dx = ox - 16;
+        const scallop = 18 - dx * dx / 18;
+        let v = 235;
+        if (ry > scallop && ry <= scallop + 3) {
+          v = 175;
+        } else if (ry > scallop - 4 && ry <= scallop) {
+          v = 255;
+        } else if ((x + y) % 7 === 0) {
+          v = 220;
+        }
+        setTilePixel(data, TexId.PINE_FOLIAGE, x, y, v, v, v, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        const nx = (x - 64) / 64;
+        const ny = (y - 64) / 64;
+        const ring = Math.sin(Math.hypot(nx * 0.7, ny * 1.8) * 18 + Math.sin(ny * 4) * 1.5);
+        const v = ring > 0.55 ? 212 : ring < -0.55 ? 252 : 236;
+        setTilePixel(data, TexId.WOOD_GRAIN, x, y, v, v * 0.96, v * 0.9, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const band = Math.floor(y / 6);
+      for (let x = 0; x < TILE_RES; x++) {
+        const rnd = hash2d(Math.floor(x / 20), band, 14);
+        const isKnot = rnd > 0.76 && (y % 6 >= 1 && y % 6 <= 4);
+        const v = isKnot ? 110 : 248;
+        setTilePixel(data, TexId.BIRCH_BARK, x, y, v, v, v, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        const d = (x + y) % 16 < 8 !== (x - y + 128) % 16 < 8;
+        const stitch = x % 8 === 0 || y % 8 === 0;
+        const v = stitch ? 218 : d ? 248 : 234;
+        setTilePixel(data, TexId.FABRIC, x, y, v, v, v, 255);
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        const isBorder = x < 10 || x >= TILE_RES - 10 || y < 10 || y >= TILE_RES - 10;
+        const isCrossbar = Math.abs(x - 64) < 5 || Math.abs(y - 64) < 5;
+        if (isBorder || isCrossbar) {
+          setTilePixel(data, TexId.WINDOW_GLOW, x, y, 75, 52, 38, 255);
+        } else {
+          const dist = Math.hypot(x - 64, y - 64) / 75;
+          const glow = Math.max(0, 1 - dist * 0.35);
+          setTilePixel(
+            data,
+            TexId.WINDOW_GLOW,
+            x,
+            y,
+            255,
+            Math.round(230 * glow + 20),
+            Math.round(145 * glow + 15),
+            255
+          );
+        }
+      }
+    }
+    const bookColors = [
+      [196, 48, 43],
+      [46, 118, 178],
+      [52, 146, 84],
+      [214, 158, 46],
+      [136, 78, 160],
+      [184, 92, 56]
+    ];
+    for (let y = 0; y < TILE_RES; y++) {
+      const shelfRow = Math.floor(y / 32);
+      const sy = y % 32;
+      for (let x = 0; x < TILE_RES; x++) {
+        if (sy >= 27 || x < 6 || x >= TILE_RES - 6) {
+          setTilePixel(data, TexId.BOOKSHELF, x, y, 142, 92, 52, 255);
+        } else {
+          const bookIdx = Math.floor(x / 12) + shelfRow * 7;
+          const bx = x % 12;
+          const topHeight = 3 + Math.floor(hash2d(bookIdx, shelfRow, 17) * 5);
+          if (sy < topHeight) {
+            setTilePixel(data, TexId.BOOKSHELF, x, y, 54, 34, 22, 255);
+          } else if (bx === 0) {
+            setTilePixel(data, TexId.BOOKSHELF, x, y, 42, 28, 18, 255);
+          } else if (sy === topHeight + 3 || sy === 23) {
+            setTilePixel(data, TexId.BOOKSHELF, x, y, 245, 212, 92, 255);
+          } else {
+            const [br, bg, bb] = bookColors[bookIdx % bookColors.length];
+            setTilePixel(data, TexId.BOOKSHELF, x, y, br, bg, bb, 255);
+          }
+        }
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      const cy = Math.floor(y / 16);
+      for (let x = 0; x < TILE_RES; x++) {
+        const cx = Math.floor(x / 16);
+        const isLight = (cx + cy) % 2 === 0;
+        if (isLight) {
+          setTilePixel(data, TexId.CHESSBOARD, x, y, 248, 236, 208, 255);
+        } else {
+          setTilePixel(data, TexId.CHESSBOARD, x, y, 88, 52, 32, 255);
+        }
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
+      for (let x = 0; x < TILE_RES; x++) {
+        const isRibbon = Math.abs(x - 64) < 11 || Math.abs(y - 64) < 11;
+        if (isRibbon) {
+          const isEdge = Math.abs(Math.abs(x - 64) - 10) <= 1 || Math.abs(Math.abs(y - 64) - 10) <= 1;
+          setTilePixel(
+            data,
+            TexId.GIFT_WRAP,
+            x,
+            y,
+            255,
+            isEdge ? 200 : 232,
+            isEdge ? 40 : 95,
+            255
+          );
+        } else {
+          const stripe = (x + y) % 24 < 12 ? 252 : 222;
+          setTilePixel(data, TexId.GIFT_WRAP, x, y, stripe, stripe, stripe, 255);
+        }
+      }
+    }
+    cachedAtlas = {
+      width: ATLAS_WIDTH,
+      height: ATLAS_HEIGHT,
+      data
+    };
+    return cachedAtlas;
+  }
+
+  // src/rendering/models3d.ts
+  var FLOATS_PER_VERTEX = 14;
+  function rgb(r, g2, b, a = 1) {
+    return [r / 255, g2 / 255, b / 255, a];
+  }
+  function hexToColor4(hex, a = 1) {
+    const clean = hex.replace("#", "");
+    const num = parseInt(clean, 16);
+    const r = num >> 16 & 255;
+    const g2 = num >> 8 & 255;
+    const b = num & 255;
+    return [r / 255, g2 / 255, b / 255, a];
+  }
+  var MeshBuilder = class {
+    constructor() {
+      __publicField(this, "data", []);
+    }
+    get vertexCount() {
+      return this.data.length / FLOATS_PER_VERTEX;
+    }
+    pushVertex(x, y, z, nx, ny, nz, u, v, color, texId, outlineScale) {
+      this.data.push(
+        x,
+        y,
+        z,
+        nx,
+        ny,
+        nz,
+        u,
+        v,
+        color[0],
+        color[1],
+        color[2],
+        color[3],
+        texId,
+        outlineScale
+      );
+    }
+    addTriangle(p0, p1, p2, color, texId = TexId.SOLID, outlineScale = 0.7, customNormal) {
+      let nx = 0;
+      let ny = 1;
+      let nz = 0;
+      if (customNormal) {
+        [nx, ny, nz] = customNormal;
+      } else {
+        const ux = p1[0] - p0[0];
+        const uy = p1[1] - p0[1];
+        const uz = p1[2] - p0[2];
+        const vx = p2[0] - p0[0];
+        const vy = p2[1] - p0[1];
+        const vz = p2[2] - p0[2];
+        nx = uy * vz - uz * vy;
+        ny = uz * vx - ux * vz;
+        nz = ux * vy - uy * vx;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len;
+        ny /= len;
+        nz /= len;
+      }
+      this.pushVertex(p0[0], p0[1], p0[2], nx, ny, nz, 0, 0, color, texId, outlineScale);
+      this.pushVertex(p1[0], p1[1], p1[2], nx, ny, nz, 1, 0, color, texId, outlineScale);
+      this.pushVertex(p2[0], p2[1], p2[2], nx, ny, nz, 1, 1, color, texId, outlineScale);
+    }
+    addQuad(p0, p1, p2, p3, normal, color, texId = TexId.SOLID, outlineScale = 0.7, uvScaleU = 1, uvScaleV = 1) {
+      const [nx, ny, nz] = normal;
+      this.pushVertex(p0[0], p0[1], p0[2], nx, ny, nz, 0, uvScaleV, color, texId, outlineScale);
+      this.pushVertex(p1[0], p1[1], p1[2], nx, ny, nz, uvScaleU, uvScaleV, color, texId, outlineScale);
+      this.pushVertex(p2[0], p2[1], p2[2], nx, ny, nz, uvScaleU, 0, color, texId, outlineScale);
+      this.pushVertex(p0[0], p0[1], p0[2], nx, ny, nz, 0, uvScaleV, color, texId, outlineScale);
+      this.pushVertex(p2[0], p2[1], p2[2], nx, ny, nz, uvScaleU, 0, color, texId, outlineScale);
+      this.pushVertex(p3[0], p3[1], p3[2], nx, ny, nz, 0, 0, color, texId, outlineScale);
+    }
+    addBox(cx, baseY, cz, w, h, d, color, texId = TexId.SOLID, outlineScale = 0.75) {
+      const hx = w * 0.5;
+      const hy = h * 0.5;
+      const hz = d * 0.5;
+      const cy = baseY + hy;
+      const pushCornerQuad = (c0, c1, c2, c3, fn) => {
+        const blendNormal = (pt) => {
+          const dx = (pt[0] - cx) / (hx || 1);
+          const dy = (pt[1] - cy) / (hy || 1);
+          const dz = (pt[2] - cz) / (hz || 1);
+          const clen = Math.hypot(dx, dy, dz) || 1;
+          const bnx = fn[0] * 0.68 + dx / clen * 0.32;
+          const bny = fn[1] * 0.68 + dy / clen * 0.32;
+          const bnz = fn[2] * 0.68 + dz / clen * 0.32;
+          const nlen = Math.hypot(bnx, bny, bnz) || 1;
+          return [bnx / nlen, bny / nlen, bnz / nlen];
+        };
+        const n0 = blendNormal(c0);
+        const n1 = blendNormal(c1);
+        const n2 = blendNormal(c2);
+        const n3 = blendNormal(c3);
+        this.pushVertex(c0[0], c0[1], c0[2], n0[0], n0[1], n0[2], 0, 1, color, texId, outlineScale);
+        this.pushVertex(c1[0], c1[1], c1[2], n1[0], n1[1], n1[2], 1, 1, color, texId, outlineScale);
+        this.pushVertex(c2[0], c2[1], c2[2], n2[0], n2[1], n2[2], 1, 0, color, texId, outlineScale);
+        this.pushVertex(c0[0], c0[1], c0[2], n0[0], n0[1], n0[2], 0, 1, color, texId, outlineScale);
+        this.pushVertex(c2[0], c2[1], c2[2], n2[0], n2[1], n2[2], 1, 0, color, texId, outlineScale);
+        this.pushVertex(c3[0], c3[1], c3[2], n3[0], n3[1], n3[2], 0, 0, color, texId, outlineScale);
+      };
+      const x0 = cx - hx;
+      const x1 = cx + hx;
+      const y0 = baseY;
+      const y1 = baseY + h;
+      const z0 = cz - hz;
+      const z1 = cz + hz;
+      pushCornerQuad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0, 0, 1]);
+      pushCornerQuad([x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [0, 0, -1]);
+      pushCornerQuad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [1, 0, 0]);
+      pushCornerQuad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [-1, 0, 0]);
+      pushCornerQuad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], [0, 1, 0]);
+      pushCornerQuad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0, -1, 0]);
+    }
+    addOrientedBox(cx, cy, cz, w, h, d, yaw, pitch, color, texId = TexId.SOLID, outlineScale = 0.65) {
+      const hx = w * 0.5;
+      const hy = h * 0.5;
+      const hz = d * 0.5;
+      const cyaw = Math.cos(yaw);
+      const syaw = Math.sin(yaw);
+      const cp = Math.cos(pitch);
+      const sp = Math.sin(pitch);
+      const xform = (lx, ly, lz) => {
+        const px = lx * cp - ly * sp;
+        const py = lx * sp + ly * cp;
+        const pz = lz;
+        const wx = px * cyaw - pz * syaw;
+        const wy = py;
+        const wz = px * syaw + pz * cyaw;
+        return [cx + wx, cy + wy, cz + wz];
+      };
+      const rotN = (nx, ny, nz) => {
+        const px = nx * cp - ny * sp;
+        const py = nx * sp + ny * cp;
+        const pz = nz;
+        return [px * cyaw - pz * syaw, py, px * syaw + pz * cyaw];
+      };
+      const faces = [
+        { corners: [[-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]], n: [0, 0, 1] },
+        { corners: [[hx, -hy, -hz], [-hx, -hy, -hz], [-hx, hy, -hz], [hx, hy, -hz]], n: [0, 0, -1] },
+        { corners: [[hx, -hy, hz], [hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz]], n: [1, 0, 0] },
+        { corners: [[-hx, -hy, -hz], [-hx, -hy, hz], [-hx, hy, hz], [-hx, hy, -hz]], n: [-1, 0, 0] },
+        { corners: [[-hx, hy, hz], [hx, hy, hz], [hx, hy, -hz], [-hx, hy, -hz]], n: [0, 1, 0] },
+        { corners: [[-hx, -hy, -hz], [hx, -hy, -hz], [hx, -hy, hz], [-hx, -hy, hz]], n: [0, -1, 0] }
+      ];
+      for (const f of faces) {
+        const p0 = xform(...f.corners[0]);
+        const p1 = xform(...f.corners[1]);
+        const p2 = xform(...f.corners[2]);
+        const p3 = xform(...f.corners[3]);
+        const wn = rotN(...f.n);
+        this.addQuad(p0, p1, p2, p3, wn, color, texId, outlineScale);
+      }
+    }
+    addCylinder(cx, baseY, cz, radiusBottom, radiusTop, height, segments, color, texId = TexId.SOLID, outlineScale = 0.7) {
+      const topY = baseY + height;
+      const slopeY = (radiusBottom - radiusTop) / (height || 1);
+      for (let i = 0; i < segments; i++) {
+        const a0 = i / segments * Math.PI * 2;
+        const a1 = (i + 1) / segments * Math.PI * 2;
+        const c0 = Math.cos(a0);
+        const s0 = Math.sin(a0);
+        const c1 = Math.cos(a1);
+        const s1 = Math.sin(a1);
+        const n0Len = Math.hypot(c0, slopeY, s0) || 1;
+        const n1Len = Math.hypot(c1, slopeY, s1) || 1;
+        const n0 = [c0 / n0Len, slopeY / n0Len, s0 / n0Len];
+        const n1 = [c1 / n1Len, slopeY / n1Len, s1 / n1Len];
+        const b0 = [cx + c0 * radiusBottom, baseY, cz + s0 * radiusBottom];
+        const b1 = [cx + c1 * radiusBottom, baseY, cz + s1 * radiusBottom];
+        const t1 = [cx + c1 * radiusTop, topY, cz + s1 * radiusTop];
+        const t0 = [cx + c0 * radiusTop, topY, cz + s0 * radiusTop];
+        const u0 = i / segments;
+        const u1 = (i + 1) / segments;
+        this.pushVertex(b0[0], b0[1], b0[2], n0[0], n0[1], n0[2], u0, 1, color, texId, outlineScale);
+        this.pushVertex(b1[0], b1[1], b1[2], n1[0], n1[1], n1[2], u1, 1, color, texId, outlineScale);
+        this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
+        this.pushVertex(b0[0], b0[1], b0[2], n0[0], n0[1], n0[2], u0, 1, color, texId, outlineScale);
+        this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
+        this.pushVertex(t0[0], t0[1], t0[2], n0[0], n0[1], n0[2], u0, 0, color, texId, outlineScale);
+        if (radiusTop > 0.01) {
+          this.pushVertex(cx, topY, cz, 0, 1, 0, 0.5, 0.5, color, texId, outlineScale);
+          this.pushVertex(t0[0], t0[1], t0[2], n0[0], 0.8, n0[2], 0.5 + c0 * 0.5, 0.5 + s0 * 0.5, color, texId, outlineScale);
+          this.pushVertex(t1[0], t1[1], t1[2], n1[0], 0.8, n1[2], 0.5 + c1 * 0.5, 0.5 + s1 * 0.5, color, texId, outlineScale);
+        }
+        if (radiusBottom > 0.01) {
+          this.pushVertex(cx, baseY, cz, 0, -1, 0, 0.5, 0.5, color, texId, outlineScale);
+          this.pushVertex(b1[0], b1[1], b1[2], n1[0], -0.8, n1[2], 0.5 + c1 * 0.5, 0.5 + s1 * 0.5, color, texId, outlineScale);
+          this.pushVertex(b0[0], b0[1], b0[2], n0[0], -0.8, n0[2], 0.5 + c0 * 0.5, 0.5 + s0 * 0.5, color, texId, outlineScale);
+        }
+      }
+    }
+    addCone(cx, baseY, cz, radius, height, segments, color, texId = TexId.SOLID, outlineScale = 0.75) {
+      this.addCylinder(cx, baseY, cz, radius, 0.02, height, segments, color, texId, outlineScale);
+    }
+    addSphere(cx, cy, cz, rx, ry, rz, latBands, lonBands, color, texId = TexId.SOLID, outlineScale = 0.75) {
+      for (let lat = 0; lat < latBands; lat++) {
+        const theta0 = lat / latBands * Math.PI;
+        const theta1 = (lat + 1) / latBands * Math.PI;
+        const sinT0 = Math.sin(theta0);
+        const cosT0 = Math.cos(theta0);
+        const sinT1 = Math.sin(theta1);
+        const cosT1 = Math.cos(theta1);
+        for (let lon = 0; lon < lonBands; lon++) {
+          const phi0 = lon / lonBands * Math.PI * 2;
+          const phi1 = (lon + 1) / lonBands * Math.PI * 2;
+          const cosP0 = Math.cos(phi0);
+          const sinP0 = Math.sin(phi0);
+          const cosP1 = Math.cos(phi1);
+          const sinP1 = Math.sin(phi1);
+          const n00 = [sinT0 * cosP0, cosT0, sinT0 * sinP0];
+          const n10 = [sinT1 * cosP0, cosT1, sinT1 * sinP0];
+          const n11 = [sinT1 * cosP1, cosT1, sinT1 * sinP1];
+          const n01 = [sinT0 * cosP1, cosT0, sinT0 * sinP1];
+          const p00 = [cx + n00[0] * rx, cy + n00[1] * ry, cz + n00[2] * rz];
+          const p10 = [cx + n10[0] * rx, cy + n10[1] * ry, cz + n10[2] * rz];
+          const p11 = [cx + n11[0] * rx, cy + n11[1] * ry, cz + n11[2] * rz];
+          const p01 = [cx + n01[0] * rx, cy + n01[1] * ry, cz + n01[2] * rz];
+          const u0 = lon / lonBands;
+          const u1 = (lon + 1) / lonBands;
+          const v0 = lat / latBands;
+          const v1 = (lat + 1) / latBands;
+          this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], u0, v0, color, texId, outlineScale);
+          this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], u1, v1, color, texId, outlineScale);
+          this.pushVertex(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], u0, v1, color, texId, outlineScale);
+          this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], u0, v0, color, texId, outlineScale);
+          this.pushVertex(p01[0], p01[1], p01[2], n01[0], n01[1], n01[2], u1, v0, color, texId, outlineScale);
+          this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], u1, v1, color, texId, outlineScale);
+        }
+      }
+    }
+    addGableRoof(cx, baseY, cz, w, h, d, ridgeAlongX, roofColor, gableColor, texId = TexId.ROOF_SLATE, outlineScale = 0.85) {
+      const hx = w * 0.5;
+      const hz = d * 0.5;
+      const topY = baseY + h;
+      if (ridgeAlongX) {
+        const swL = [cx - hx, baseY, cz + hz];
+        const seL = [cx + hx, baseY, cz + hz];
+        const nwL = [cx - hx, baseY, cz - hz];
+        const neL = [cx + hx, baseY, cz - hz];
+        const rW = [cx - hx, topY, cz];
+        const rE = [cx + hx, topY, cz];
+        const nlen = Math.hypot(h, hz) || 1;
+        this.addQuad(swL, seL, rE, rW, [0, hz / nlen, h / nlen], roofColor, texId, outlineScale);
+        this.addQuad(neL, nwL, rW, rE, [0, hz / nlen, -h / nlen], roofColor, texId, outlineScale);
+        this.addTriangle(nwL, swL, rW, gableColor, TexId.HOUSE_SIDING, outlineScale, [-1, 0, 0]);
+        this.addTriangle(seL, neL, rE, gableColor, TexId.HOUSE_SIDING, outlineScale, [1, 0, 0]);
+        this.addQuad(nwL, neL, seL, swL, [0, -1, 0], gableColor, TexId.SOLID, 0);
+        this.addBox(cx, topY - 1.5, cz, w + 1.5, 2.2, 4.5, rgb(244, 249, 255), TexId.SNOW, 0.5);
+      } else {
+        const swL = [cx - hx, baseY, cz + hz];
+        const seL = [cx + hx, baseY, cz + hz];
+        const nwL = [cx - hx, baseY, cz - hz];
+        const neL = [cx + hx, baseY, cz - hz];
+        const rN = [cx, topY, cz - hz];
+        const rS = [cx, topY, cz + hz];
+        const nlen = Math.hypot(h, hx) || 1;
+        this.addQuad(nwL, swL, rS, rN, [-h / nlen, hx / nlen, 0], roofColor, texId, outlineScale);
+        this.addQuad(seL, neL, rN, rS, [h / nlen, hx / nlen, 0], roofColor, texId, outlineScale);
+        this.addTriangle(swL, seL, rS, gableColor, TexId.HOUSE_SIDING, outlineScale, [0, 0, 1]);
+        this.addTriangle(neL, nwL, rN, gableColor, TexId.HOUSE_SIDING, outlineScale, [0, 0, -1]);
+        this.addQuad(nwL, neL, seL, swL, [0, -1, 0], gableColor, TexId.SOLID, 0);
+        this.addBox(cx, topY - 1.5, cz, 4.5, 2.2, d + 1.5, rgb(244, 249, 255), TexId.SNOW, 0.5);
+      }
+    }
+    build() {
+      const arr = new Float32Array(this.data);
+      return {
+        vertices: arr,
+        vertexCount: arr.length / FLOATS_PER_VERTEX
+      };
+    }
+  };
+  function addPineTree3D(mb, cx, baseY, cz, variant, scale = 1) {
+    if (variant === 0) {
+      mb.addCylinder(cx, baseY, cz, 2.2 * scale, 1.5 * scale, 9 * scale, 7, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.65);
+      mb.addCone(cx, baseY + 5 * scale, cz, 8.8 * scale, 11 * scale, 8, rgb(29, 92, 51), TexId.PINE_FOLIAGE, 0.8);
+      mb.addCone(cx, baseY + 11 * scale, cz, 7 * scale, 10 * scale, 8, rgb(39, 117, 65), TexId.PINE_FOLIAGE, 0.8);
+      mb.addCone(cx, baseY + 17 * scale, cz, 5 * scale, 9 * scale, 8, rgb(52, 138, 79), TexId.PINE_FOLIAGE, 0.8);
+      mb.addCone(cx, baseY + 21.5 * scale, cz, 3 * scale, 5.2 * scale, 8, rgb(242, 248, 255), TexId.SNOW, 0.6);
+    } else if (variant === 1) {
+      addPineTree3D(mb, cx - 3.2 * scale, baseY, cz + 1.5 * scale, 0, 0.72 * scale);
+      addPineTree3D(mb, cx + 3.2 * scale, baseY, cz - 1.2 * scale, 2, 0.85 * scale);
+    } else if (variant === 2) {
+      mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.3 * scale, 7 * scale, 6, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.65);
+      mb.addCone(cx, baseY + 4 * scale, cz, 7.4 * scale, 14 * scale, 8, rgb(36, 108, 78), TexId.PINE_FOLIAGE, 0.8);
+      mb.addCone(cx, baseY + 11 * scale, cz, 5.4 * scale, 12 * scale, 8, rgb(54, 134, 98), TexId.PINE_FOLIAGE, 0.8);
+      mb.addCone(cx, baseY + 18 * scale, cz, 3.2 * scale, 6 * scale, 8, rgb(240, 248, 255), TexId.SNOW, 0.6);
+    } else if (variant === 3) {
+      mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.4 * scale, 18 * scale, 7, rgb(146, 78, 42), TexId.WOOD_GRAIN, 0.7);
+      mb.addSphere(cx - 2 * scale, baseY + 18 * scale, cz, 6.2 * scale, 4 * scale, 6.2 * scale, 5, 7, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.8);
+      mb.addSphere(cx + 2.5 * scale, baseY + 20 * scale, cz - 1 * scale, 5.8 * scale, 3.8 * scale, 5.8 * scale, 5, 7, rgb(44, 118, 64), TexId.PINE_FOLIAGE, 0.8);
+      mb.addSphere(cx, baseY + 22 * scale, cz, 5.2 * scale, 2.4 * scale, 5.2 * scale, 4, 7, rgb(242, 248, 255), TexId.SNOW, 0.6);
+    } else {
+      mb.addCylinder(cx, baseY, cz, 1.7 * scale, 1.1 * scale, 16 * scale, 7, rgb(242, 240, 236), TexId.BIRCH_BARK, 0.7);
+      mb.addOrientedBox(cx - 2.5 * scale, baseY + 13 * scale, cz, 1 * scale, 7 * scale, 1 * scale, 0.3, 0.55, rgb(235, 232, 228), TexId.BIRCH_BARK, 0.55);
+      mb.addOrientedBox(cx + 2.5 * scale, baseY + 14 * scale, cz, 1 * scale, 6.5 * scale, 1 * scale, -0.4, -0.5, rgb(235, 232, 228), TexId.BIRCH_BARK, 0.55);
+      mb.addSphere(cx, baseY + 17.5 * scale, cz, 5.5 * scale, 4.2 * scale, 5.5 * scale, 5, 7, rgb(228, 238, 250), TexId.SNOW, 0.7);
+    }
+  }
+  function addThujaTree3D(mb, cx, baseY, cz) {
+    mb.addCylinder(cx, baseY, cz, 1.5, 1, 4.5, 6, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.6);
+    mb.addCone(cx, baseY + 3, cz, 5.2, 18, 8, rgb(42, 126, 68), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(cx, baseY + 14.5, cz, 2.5, 6.8, 8, rgb(240, 248, 255), TexId.SNOW, 0.55);
+  }
+  function addHedgeTile3D(mb, cx, baseY, cz) {
+    mb.addBox(cx, baseY, cz, 15.5, 8.5, 15.5, rgb(38, 112, 58), TexId.PINE_FOLIAGE, 0.75);
+    mb.addBox(cx, baseY + 7.8, cz, 16, 2.2, 16, rgb(242, 248, 255), TexId.SNOW, 0.55);
+  }
+  function addGraniteCliff3D(mb, cx, baseY, cz, seed) {
+    const h = 14 + seed % 5 * 3;
+    const rx = 10 + seed % 3 * 1.5;
+    mb.addCylinder(cx, baseY - 2, cz, rx, rx * 0.7, h, 7, rgb(108, 116, 128), TexId.STONE_FLOOR, 0.85);
+    mb.addSphere(cx, baseY + h - 2.2, cz, rx * 0.68, 2.5, rx * 0.68, 4, 7, rgb(242, 248, 255), TexId.SNOW, 0.6);
+  }
+  function buildOutsideStaticMesh(map) {
+    const mb = new MeshBuilder();
+    const ts = map.tileSize;
+    const step = 8;
+    const gridCols = Math.floor(map.cols * ts / step);
+    const gridRows = Math.floor(map.rows * ts / step);
+    for (let gz = 0; gz < gridRows; gz++) {
+      for (let gx = 0; gx < gridCols; gx++) {
+        const x0 = gx * step;
+        const z0 = gz * step;
+        const x1 = x0 + step;
+        const z1 = z0 + step;
+        const tileCol = Math.min(map.cols - 1, Math.floor((x0 + step * 0.5) / ts));
+        const tileRow = Math.min(map.rows - 1, Math.floor((z0 + step * 0.5) / ts));
+        const tile = map.tiles[tileRow][tileCol];
+        let color = rgb(238, 245, 255);
+        let texId = TexId.SNOW;
+        let yOffset = 0;
+        if (tile === 2 /* Road */ || tile === 14 /* ElectricCar */ || tile === 15 /* Motorcycle */) {
+          color = rgb(166, 174, 188);
+          texId = TexId.GRAVEL;
+          yOffset = -0.25;
+        }
+        const y00 = getTerrainHeight(x0, z0, "level-outside") + yOffset;
+        const y10 = getTerrainHeight(x1, z0, "level-outside") + yOffset;
+        const y11 = getTerrainHeight(x1, z1, "level-outside") + yOffset;
+        const y01 = getTerrainHeight(x0, z1, "level-outside") + yOffset;
+        const n00 = getTerrainNormal(x0, z0, "level-outside");
+        const n10 = getTerrainNormal(x1, z0, "level-outside");
+        const n11 = getTerrainNormal(x1, z1, "level-outside");
+        const n01 = getTerrainNormal(x0, z1, "level-outside");
+        const u0 = gx % 2 * 0.5;
+        const u1 = u0 + 0.5;
+        const v0 = gz % 2 * 0.5;
+        const v1 = v0 + 0.5;
+        mb.pushVertex(x0, y00, z0, n00.x, n00.y, n00.z, u0, v0, color, texId, 0);
+        mb.pushVertex(x0, y01, z1, n01.x, n01.y, n01.z, u0, v1, color, texId, 0);
+        mb.pushVertex(x1, y11, z1, n11.x, n11.y, n11.z, u1, v1, color, texId, 0);
+        mb.pushVertex(x0, y00, z0, n00.x, n00.y, n00.z, u0, v0, color, texId, 0);
+        mb.pushVertex(x1, y11, z1, n11.x, n11.y, n11.z, u1, v1, color, texId, 0);
+        mb.pushVertex(x1, y10, z0, n10.x, n10.y, n10.z, u1, v0, color, texId, 0);
+      }
+    }
+    for (let r = 0; r < map.rows; r++) {
+      for (let c = 0; c < map.cols; c++) {
+        const tile = map.tiles[r][c];
+        const cx = c * ts + ts * 0.5;
+        const cz = r * ts + ts * 0.5;
+        const baseY = getTerrainHeight(cx, cz, "level-outside");
+        const seed = (c * 31 + r * 17) % 10;
+        if (tile === 1 /* Tree */) {
+          if (r <= 2 && c <= 3) {
+            addGraniteCliff3D(mb, cx, baseY, cz, seed);
+          }
+          const variant = seed < 3 ? 0 : seed < 5 ? 1 : seed < 7 ? 2 : seed < 9 ? 3 : 4;
+          addPineTree3D(mb, cx, baseY, cz, variant, 1);
+        } else if (tile === 3 /* Thuja */) {
+          addThujaTree3D(mb, cx, baseY, cz);
+        } else if (tile === 4 /* Hedge */) {
+          addHedgeTile3D(mb, cx, baseY, cz);
+        }
+      }
+    }
+    {
+      const x0 = 4 * ts;
+      const x1 = 17 * ts;
+      const z0 = 3 * ts;
+      const z1 = 10 * ts;
+      const cx = (x0 + x1) * 0.5;
+      const cz = (z0 + z1) * 0.5;
+      const w = x1 - x0;
+      const d = z1 - z0;
+      const baseY = getTerrainHeight(5 * ts, 9 * ts, "level-outside");
+      mb.addBox(cx, baseY - 4, cz, w + 4, 6, d + 4, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.85);
+      const wallH = MAIN_HOUSE_WALL_HEIGHT;
+      mb.addBox(cx, baseY + 2, cz, w, wallH, d, rgb(246, 222, 166), TexId.HOUSE_SIDING, 1);
+      for (const [tx, tz] of [
+        [x0, z0],
+        [x1, z0],
+        [x0, z1],
+        [x1, z1]
+      ]) {
+        mb.addBox(tx, baseY + 2, tz, 4, wallH + 0.5, 4, rgb(248, 248, 252), TexId.SOLID, 0.6);
+      }
+      const roofBaseY = baseY + 2 + wallH;
+      mb.addGableRoof(
+        cx,
+        roofBaseY,
+        cz,
+        w + 8,
+        16,
+        d + 8,
+        true,
+        rgb(62, 74, 94),
+        rgb(238, 212, 152),
+        TexId.ROOF_SLATE,
+        1
+      );
+      const roofWalkY = baseY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
+      mb.addBox(96, roofWalkY - 1.5, ROOF_WALK_Y + 6, 76, 2.2, 14, rgb(242, 248, 255), TexId.SNOW, 0.55);
+      const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
+      const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
+      mb.addBox(chimX, roofWalkY - 4, chimZ, 16, 18, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.9);
+      mb.addBox(chimX, roofWalkY + 13.5, chimZ, 18, 2.4, 18, rgb(245, 250, 255), TexId.SNOW, 0.6);
+      mb.addBox(chimX, roofWalkY + 15, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
+      for (const winCol of [5.5, 14.5]) {
+        const wx = (winCol + 0.5) * ts;
+        mb.addBox(wx, baseY + 8, z1 + 0.5, 22, 10, 1.4, rgb(255, 228, 135), TexId.WINDOW_GLOW, 0.45);
+        mb.addBox(wx, baseY + 22, z1 + 0.5, 22, 10, 1.4, rgb(255, 228, 135), TexId.WINDOW_GLOW, 0.45);
+      }
+      mb.addBox(168, baseY, z1 + 5, 48, 4, 12, rgb(164, 114, 68), TexId.WOOD_FLOOR, 0.7);
+      mb.addCylinder(148, baseY + 4, z1 + 9, 1.4, 1.4, 20, 6, rgb(248, 248, 252), TexId.SOLID, 0.55);
+      mb.addCylinder(188, baseY + 4, z1 + 9, 1.4, 1.4, 20, 6, rgb(248, 248, 252), TexId.SOLID, 0.55);
+      mb.addGableRoof(168, baseY + 24, z1 + 5, 52, 7, 14, false, rgb(62, 74, 94), rgb(246, 222, 166), TexId.ROOF_SLATE, 0.75);
+      mb.addBox(168, baseY + 9, z1 + 0.6, 36, 12, 1.4, rgb(255, 232, 145), TexId.WINDOW_GLOW, 0.45);
+      const doorX = 13.5 * ts;
+      mb.addBox(doorX, baseY + 2, z1 + 0.6, 13, 18, 1.8, rgb(124, 64, 34), TexId.WOOD_GRAIN, 0.65);
+      mb.addSphere(doorX, baseY + 13, z1 + 1.8, 3, 3, 0.9, 5, 7, rgb(36, 128, 56), TexId.PINE_FOLIAGE, 0.4);
+    }
+    {
+      const cx = 21 * ts;
+      const cz = 7 * ts;
+      const w = 4 * ts;
+      const d = 4 * ts;
+      const baseY = getTerrainHeight(cx, cz, "level-outside");
+      mb.addBox(cx, baseY - 3, cz, w + 2, 4, d + 2, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.75);
+      mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(172, 106, 58), TexId.LOG_WALL, 0.9);
+      mb.addGableRoof(cx, baseY + 21, cz, w + 6, 12, d + 6, true, rgb(58, 68, 86), rgb(156, 94, 48), TexId.ROOF_SLATE, 0.9);
+      mb.addBox(cx - 10, baseY + 1, cz + d * 0.5 + 0.5, 10, 15, 1.4, rgb(112, 62, 32), TexId.WOOD_GRAIN, 0.55);
+      mb.addBox(cx + 12, baseY + 7, cz + d * 0.5 + 0.5, 12, 9, 1.4, rgb(255, 226, 130), TexId.WINDOW_GLOW, 0.4);
+    }
+    {
+      const cx = 27 * ts;
+      const cz = 7 * ts;
+      const w = 4 * ts;
+      const d = 4 * ts;
+      const baseY = getTerrainHeight(cx, cz, "level-outside");
+      mb.addBox(cx, baseY - 3, cz, w + 2, 4, d + 2, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.75);
+      mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(164, 98, 52), TexId.LOG_WALL, 0.9);
+      mb.addGableRoof(cx, baseY + 21, cz, w + 6, 12, d + 6, true, rgb(58, 68, 86), rgb(148, 88, 44), TexId.ROOF_SLATE, 0.9);
+      mb.addBox(cx - 10, baseY + 1, cz + d * 0.5 + 0.5, 10, 15, 1.4, rgb(112, 62, 32), TexId.WOOD_GRAIN, 0.55);
+      mb.addBox(cx + 12, baseY + 7, cz + d * 0.5 + 0.5, 12, 9, 1.4, rgb(255, 226, 130), TexId.WINDOW_GLOW, 0.4);
+    }
+    {
+      const cx = 27.5 * ts;
+      const cz = 18 * ts;
+      const w = 5 * ts;
+      const d = 4 * ts;
+      const baseY = getTerrainHeight(cx, cz, "level-outside");
+      mb.addBox(cx, baseY - 2, cz, w + 2, 3, d + 2, rgb(114, 118, 126), TexId.STONE_FLOOR, 0.75);
+      mb.addBox(cx, baseY + 1, cz, w, 18, d, rgb(236, 238, 244), TexId.HOUSE_SIDING, 0.9);
+      mb.addGableRoof(cx, baseY + 19, cz, w + 5, 10, d + 5, true, rgb(64, 72, 86), rgb(224, 228, 236), TexId.ROOF_SLATE, 0.9);
+      mb.addBox(cx, baseY + 1, cz + d * 0.5 + 0.5, 24, 15, 1.5, rgb(214, 38, 38), TexId.WOOD_GRAIN, 0.7);
+    }
+    {
+      const cx = 5 * ts;
+      const cz = 23.5 * ts;
+      const w = 6 * ts;
+      const d = 5 * ts;
+      const baseY = getTerrainHeight(cx, cz, "level-outside");
+      mb.addBox(cx, baseY - 2, cz, w + 2, 3, d + 2, rgb(118, 122, 130), TexId.STONE_FLOOR, 0.75);
+      mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(68, 124, 196), TexId.BLUE_SIDING, 0.9);
+      mb.addGableRoof(cx, baseY + 21, cz, w + 6, 11, d + 6, true, rgb(54, 64, 82), rgb(58, 108, 176), TexId.ROOF_SLATE, 0.9);
+      const wbY = getTerrainHeight(128, 358, "level-outside");
+      mb.addBox(129, wbY + 8, 358, 3, 6.5, 5, rgb(42, 48, 58), TexId.SOLID, 0.6);
+      mb.addSphere(130.8, wbY + 12, 358, 0.8, 0.8, 0.8, 4, 5, rgb(64, 245, 128), TexId.SOLID, 0.25);
+    }
+    {
+      const carX = 18.5 * ts;
+      const carZ = 22 * ts;
+      const baseY = getTerrainHeight(carX, carZ, "level-outside");
+      for (const [wx, wz] of [
+        [-14, -9],
+        [14, -9],
+        [-14, 9],
+        [14, 9]
+      ]) {
+        mb.addCylinder(carX + wx, baseY, carZ + wz, 3.6, 3.6, 3.6, 8, rgb(32, 34, 40), TexId.SOLID, 0.55);
+      }
+      mb.addBox(carX, baseY + 2.4, carZ, 44, 7, 22, rgb(44, 138, 158), TexId.SOLID, 0.85);
+      mb.addBox(carX - 2, baseY + 9, carZ, 24, 6, 18, rgb(56, 158, 178), TexId.WINDOW_GLOW, 0.8);
+      mb.addBox(carX - 2, baseY + 14.8, carZ, 22, 1.5, 16, rgb(242, 248, 255), TexId.SNOW, 0.5);
+      for (let segX = 132; segX < 272; segX += 12) {
+        const cy = getTerrainHeight(segX, 358, "level-outside");
+        mb.addBox(segX + 6, cy + 0.5, 358, 12.5, 1.3, 1.6, rgb(28, 32, 38), TexId.SOLID, 0.45);
+      }
+      const hx = DAMAGED_WIRE_HAZARD.x + DAMAGED_WIRE_HAZARD.width * 0.5;
+      const hz = DAMAGED_WIRE_HAZARD.y + DAMAGED_WIRE_HAZARD.height * 0.5;
+      const hy = getTerrainHeight(hx, hz, "level-outside");
+      mb.addBox(hx, hy + 0.7, hz, 8, 1.8, 2.8, rgb(235, 136, 42), TexId.SOLID, 0.55);
+    }
+    {
+      const px = 8 * ts;
+      const pz = 15 * ts;
+      const baseY = getTerrainHeight(px, pz, "level-outside");
+      mb.addBox(px, baseY, pz, 22, 6, 14, rgb(146, 94, 48), TexId.WOOD_GRAIN, 0.75);
+      mb.addBox(px, baseY + 5.8, pz, 24, 1.4, 15, rgb(242, 248, 255), TexId.SNOW, 0.5);
+      mb.addBox(px, baseY, pz - 10, 20, 3.5, 4, rgb(136, 86, 42), TexId.WOOD_GRAIN, 0.6);
+      mb.addBox(px, baseY, pz + 10, 20, 3.5, 4, rgb(136, 86, 42), TexId.WOOD_GRAIN, 0.6);
+    }
+    return mb;
+  }
+  function addIndoorTilesAndWalls(mb, map, wallHeight = INDOOR_WALL_HEIGHT) {
+    const ts = map.tileSize;
+    for (let r = 0; r < map.rows; r++) {
+      for (let c = 0; c < map.cols; c++) {
+        const tile = map.tiles[r][c];
+        if (tile === 20 /* VoidBlack */) continue;
+        const cx = c * ts + ts * 0.5;
+        const cz = r * ts + ts * 0.5;
+        if (tile === 21 /* InteriorWall */) {
+          const southTile = r + 1 < map.rows ? map.tiles[r + 1][c] : 20 /* VoidBlack */;
+          const h = southTile === 20 /* VoidBlack */ ? 9 : wallHeight;
+          mb.addBox(cx, 0, cz, ts, h, ts, rgb(232, 222, 204), TexId.INTERIOR_WALL, 0.75);
+          mb.addBox(cx, h, cz, ts + 0.3, 1.2, ts + 0.3, rgb(92, 62, 40), TexId.WOOD_GRAIN, 0.5);
+        } else {
+          let floorColor = rgb(194, 142, 88);
+          let floorTex = TexId.WOOD_FLOOR;
+          if (tile === 17 /* StoneTileFloor */) {
+            floorColor = rgb(178, 166, 156);
+            floorTex = TexId.STONE_FLOOR;
+          } else if (tile === 18 /* BathroomTileFloor */) {
+            floorColor = rgb(212, 236, 242);
+            floorTex = TexId.BATHROOM_TILE;
+          } else if (tile === 19 /* StairsFloor */) {
+            floorColor = rgb(168, 116, 68);
+            floorTex = TexId.WOOD_GRAIN;
+          }
+          mb.addQuad(
+            [c * ts, 0, (r + 1) * ts],
+            [(c + 1) * ts, 0, (r + 1) * ts],
+            [(c + 1) * ts, 0, r * ts],
+            [c * ts, 0, r * ts],
+            [0, 1, 0],
+            floorColor,
+            floorTex,
+            0
+          );
+        }
+      }
+    }
+  }
+  function buildBasementStaticMesh(map) {
+    const mb = new MeshBuilder();
+    const ts = map.tileSize;
+    addIndoorTilesAndWalls(mb, map, 16);
+    mb.addBox(10 * ts, 0, 7.5 * ts, 6 * ts, 16, 12, rgb(132, 82, 44), TexId.BOOKSHELF, 0.8);
+    mb.addBox(12.5 * ts, 0, 9 * ts, 14, 11, 2 * ts, rgb(148, 92, 48), TexId.LOG_WALL, 0.75);
+    mb.addBox(7.5 * ts, 0, 10.5 * ts, 14, 5.5, 3 * ts, rgb(168, 152, 134), TexId.FABRIC, 0.75);
+    mb.addBox(7.2 * ts, 5.2, 10.5 * ts, 4.5, 6, 3 * ts, rgb(148, 132, 114), TexId.FABRIC, 0.75);
+    mb.addBox(12 * ts, 0, 12 * ts, 2 * ts, 19, 2 * ts, rgb(186, 62, 48), TexId.BRICK_RED, 0.85);
+    mb.addBox(12 * ts, 18.5, 12 * ts, 2 * ts + 3, 2.2, 2 * ts + 3, rgb(112, 72, 42), TexId.WOOD_GRAIN, 0.7);
+    mb.addBox(11 * ts - 0.5, 1, 12 * ts, 1.5, 10, 16, rgb(28, 22, 22), TexId.SOLID, 0);
+    mb.addBox(9.5 * ts, 0, 14.5 * ts, 3 * ts, 5.5, 15, rgb(168, 152, 134), TexId.FABRIC, 0.75);
+    mb.addBox(9.5 * ts, 5.2, 14.2 * ts, 3 * ts, 6, 4.5, rgb(148, 132, 114), TexId.FABRIC, 0.75);
+    mb.addBox(9 * ts, 0, 17.5 * ts, 22, 6.2, 16, rgb(128, 78, 42), TexId.WOOD_GRAIN, 0.75);
+    mb.addBox(9 * ts, 6.1, 17.5 * ts, 14, 0.8, 14, rgb(245, 236, 212), TexId.CHESSBOARD, 0.4);
+    mb.addCone(9 * ts - 3, 6.9, 17.5 * ts - 3, 1.1, 3, 5, rgb(246, 214, 92), TexId.SOLID, 0.35);
+    mb.addCone(9 * ts + 3, 6.9, 17.5 * ts + 3, 1.1, 3, 5, rgb(72, 76, 88), TexId.SOLID, 0.35);
+    mb.addBox(8.5 * ts, 3, 20.2 * ts, 2.6 * ts, 8, 2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
+    mb.addBox(11.5 * ts, 3, 20.2 * ts, 2.6 * ts, 8, 2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
+    mb.addCylinder(14.5 * ts, 0, 18 * ts, 3.5, 1, 14, 6, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.65);
+    mb.addSphere(14.5 * ts, 10.5, 18 * ts, 3.6, 4, 3.6, 4, 6, rgb(186, 48, 48), TexId.FABRIC, 0.55);
+    mb.addBox(16 * ts, 0, 12.5 * ts, 2 * ts, 15, 6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.7);
+    mb.addBox(16 * ts, 0, 20.5 * ts, 2 * ts, 11, 6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.7);
+    for (let s = 0; s < 8; s++) {
+      const sx = 18 * ts + s * 8 + 4;
+      const sh = (s + 1) * 1.6;
+      mb.addBox(sx, 0, 17 * ts, 8.2, sh, 4 * ts - 4, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.65);
+    }
+    mb.addBox(19.5 * ts, 0, 10 * ts, 13, 7.5, 22, rgb(242, 246, 252), TexId.SOLID, 0.7);
+    mb.addBox(21.7 * ts, 0, 9.5 * ts, 5, 10.5, 10, rgb(246, 250, 255), TexId.SOLID, 0.7);
+    mb.addCylinder(21.3 * ts, 0, 9.5 * ts, 4.4, 4.8, 5.5, 8, rgb(246, 250, 255), TexId.SOLID, 0.7);
+    return mb;
+  }
+  function buildUpstairsStaticMesh(map) {
+    const mb = new MeshBuilder();
+    const ts = map.tileSize;
+    addIndoorTilesAndWalls(mb, map, 16);
+    mb.addBox(2.5 * ts, 0, 7 * ts, 14, 15, 2 * ts, rgb(134, 82, 42), TexId.WOOD_GRAIN, 0.8);
+    mb.addBox(5 * ts, 0, 8 * ts, 2 * ts - 2, 6.8, 4 * ts - 4, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.8);
+    mb.addBox(5 * ts, 6.7, 8 * ts, 10, 0.5, 4 * ts - 10, rgb(248, 244, 240), TexId.FABRIC, 0.35);
+    mb.addBox(11 * ts, 0, 7 * ts, 2 * ts - 2, 8.2, 2 * ts - 2, rgb(232, 228, 218), TexId.SOLID, 0.75);
+    mb.addBox(11 * ts, 8, 7 * ts, 2 * ts, 1.4, 2 * ts, rgb(168, 114, 66), TexId.WOOD_GRAIN, 0.65);
+    mb.addBox(15.5 * ts, 0, 7 * ts, 14, 8.5, 4 * ts - 2, rgb(224, 228, 234), TexId.SOLID, 0.75);
+    mb.addBox(11 * ts, 0, 10.5 * ts, 2 * ts - 2, 10, 14, rgb(138, 44, 44), TexId.WOOD_GRAIN, 0.75);
+    mb.addCylinder(10.5 * ts, 10, 10.5 * ts, 1.1, 1.1, 3.8, 6, rgb(255, 224, 110), TexId.SOLID, 0.35);
+    mb.addCylinder(11.5 * ts, 10, 10.5 * ts, 1.1, 1.1, 3.8, 6, rgb(255, 224, 110), TexId.SOLID, 0.35);
+    mb.addBox(5.5 * ts, 0, 11.5 * ts, 3 * ts - 2, 5.8, 15, rgb(214, 84, 58), TexId.FABRIC, 0.8);
+    mb.addBox(5.5 * ts, 5.5, 11.2 * ts, 3 * ts - 2, 6.2, 4.5, rgb(64, 134, 188), TexId.FABRIC, 0.8);
+    mb.addBox(2.5 * ts, 0, 12.5 * ts, 14, 7.5, 14, rgb(236, 178, 52), TexId.FABRIC, 0.75);
+    mb.addBox(7.5 * ts, 0, 13.5 * ts, 14, 7.5, 14, rgb(68, 156, 124), TexId.FABRIC, 0.75);
+    {
+      const tx = 3 * ts;
+      const tz = 15.5 * ts;
+      mb.addCylinder(tx, 0.2, tz, 14, 13.5, 0.9, 12, rgb(198, 36, 42), TexId.FABRIC, 0.45);
+      mb.addCylinder(tx, 0.9, tz, 2.8, 2, 9, 7, rgb(96, 58, 32), TexId.WOOD_GRAIN, 0.65);
+      mb.addCone(tx, 6, tz, 13, 11.5, 10, rgb(26, 108, 48), TexId.PINE_FOLIAGE, 0.85);
+      mb.addCone(tx, 12.5, tz, 10.4, 10.5, 10, rgb(34, 128, 58), TexId.PINE_FOLIAGE, 0.85);
+      mb.addCone(tx, 18.5, tz, 7.6, 9.5, 10, rgb(44, 146, 68), TexId.PINE_FOLIAGE, 0.85);
+      mb.addCone(tx, 24, tz, 4.8, 7.5, 10, rgb(54, 162, 78), TexId.PINE_FOLIAGE, 0.85);
+      const ornamentPalette = [
+        rgb(238, 44, 48),
+        rgb(252, 212, 62),
+        rgb(56, 152, 245),
+        rgb(236, 92, 214)
+      ];
+      for (let i = 0; i < 12; i++) {
+        const ang = i / 12 * Math.PI * 2;
+        const tier = i % 3;
+        const rad = tier === 0 ? 10.2 : tier === 1 ? 8 : 5.4;
+        const oy = tier === 0 ? 8.5 : tier === 1 ? 15 : 21;
+        mb.addSphere(
+          tx + Math.cos(ang) * rad,
+          oy,
+          tz + Math.sin(ang) * rad,
+          1.45,
+          1.45,
+          1.45,
+          4,
+          6,
+          ornamentPalette[i % ornamentPalette.length],
+          TexId.SOLID,
+          0.4
+        );
+      }
+      mb.addSphere(tx, 32.2, tz, 3, 3, 1.5, 5, 8, rgb(255, 232, 75), TexId.SOLID, 0.65);
+      mb.addOrientedBox(tx, 32.2, tz, 5.6, 5.6, 1.5, 0, Math.PI * 0.25, rgb(255, 238, 95), TexId.SOLID, 0.55);
+      mb.addBox(tx - 8, 0.8, tz + 8, 6, 5, 6, rgb(218, 44, 48), TexId.GIFT_WRAP, 0.6);
+      mb.addBox(tx + 7, 0.8, tz + 8, 5.5, 4.5, 5.5, rgb(48, 128, 214), TexId.GIFT_WRAP, 0.6);
+    }
+    mb.addBox(12 * ts, 0, 18 * ts, 2 * ts - 2, 6.8, 2 * ts - 2, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.75);
+    mb.addBox(17.5 * ts, 0, 8 * ts, 13, 7.5, 22, rgb(242, 246, 252), TexId.SOLID, 0.7);
+    mb.addCylinder(19.5 * ts, 0, 8.5 * ts, 4.4, 4.8, 5.5, 8, rgb(246, 250, 255), TexId.SOLID, 0.7);
+    mb.addBox(27 * ts, 0, 7 * ts, 2 * ts - 2, 5.5, 2 * ts - 2, rgb(132, 82, 42), TexId.WOOD_GRAIN, 0.75);
+    mb.addBox(27 * ts, 5.2, 7 * ts, 2 * ts - 4, 2.2, 2 * ts - 4, rgb(198, 52, 58), TexId.FABRIC, 0.55);
+    mb.addBox(21.5 * ts, 0, 16.5 * ts, 3 * ts - 4, 6.8, 2 * ts - 2, rgb(142, 90, 48), TexId.WOOD_GRAIN, 0.75);
+    mb.addBox(21.5 * ts, 6.8, 16.5 * ts, 9.5, 7, 2, rgb(42, 46, 56), TexId.WINDOW_GLOW, 0.55);
+    return mb;
+  }
+  function buildPeopleStaticMesh(map) {
+    const mb = new MeshBuilder();
+    addIndoorTilesAndWalls(mb, map, 15);
+    return mb;
+  }
+  var staticMeshCache = /* @__PURE__ */ new Map();
+  function getStaticLevelMesh(levelId, map) {
+    const cached = staticMeshCache.get(levelId);
+    if (cached) {
+      return cached;
+    }
+    let builder;
+    if (levelId === "level-outside") {
+      builder = buildOutsideStaticMesh(map);
+    } else if (levelId === "level-basement") {
+      builder = buildBasementStaticMesh(map);
+    } else if (levelId === "level-upstairs") {
+      builder = buildUpstairsStaticMesh(map);
+    } else {
+      builder = buildPeopleStaticMesh(map);
+    }
+    const mesh = builder.build();
+    staticMeshCache.set(levelId, mesh);
+    return mesh;
+  }
+  function addHumanoid3D(mb, cx, baseY, cz, yaw, walkPhase, isMoving, style, isSanta = false, carryingLadder = false) {
+    const cyaw = Math.cos(yaw);
+    const syaw = Math.sin(yaw);
+    const fx = cyaw;
+    const fz = syaw;
+    const rx = -syaw;
+    const rz = cyaw;
+    const swing = isMoving ? Math.sin(walkPhase * 11) * 0.55 : 0;
+    const bob = isMoving ? Math.abs(Math.sin(walkPhase * 11)) * 0.8 : 0;
+    const y0 = baseY + bob;
+    const legSpread = 1.65;
+    const legSwingDist = style.sitting ? 1.8 : Math.sin(swing) * 1.8;
+    mb.addOrientedBox(
+      cx + rx * legSpread + fx * legSwingDist,
+      y0 + 2.2,
+      cz + rz * legSpread + fz * legSwingDist,
+      2.4,
+      4.4,
+      2.4,
+      yaw,
+      style.sitting ? 0.9 : swing,
+      style.pants,
+      TexId.SOLID,
+      0.75
+    );
+    mb.addOrientedBox(
+      cx - rx * legSpread - fx * legSwingDist,
+      y0 + 2.2,
+      cz - rz * legSpread - fz * legSwingDist,
+      2.4,
+      4.4,
+      2.4,
+      yaw,
+      style.sitting ? 0.9 : -swing,
+      style.pants,
+      TexId.SOLID,
+      0.75
+    );
+    mb.addCylinder(cx, y0 + 3.8, cz, 4.2, 3.4, 6.8, 8, style.coat, TexId.FABRIC, 0.85);
+    if (isSanta) {
+      mb.addCylinder(cx, y0 + 3.6, cz, 4.45, 4.35, 1.4, 8, style.trim, TexId.SNOW, 0.5);
+      mb.addCylinder(cx, y0 + 5.8, cz, 4.05, 3.95, 1.3, 8, rgb(32, 32, 38), TexId.SOLID, 0.45);
+      mb.addOrientedBox(
+        cx + fx * 3.9,
+        y0 + 6.4,
+        cz + fz * 3.9,
+        0.8,
+        1.5,
+        1.8,
+        yaw,
+        0,
+        rgb(250, 212, 64),
+        TexId.SOLID,
+        0.35
+      );
+    }
+    const armSpread = 4.4;
+    mb.addOrientedBox(
+      cx + rx * armSpread - fx * legSwingDist * 0.7,
+      y0 + 7.5,
+      cz + rz * armSpread - fz * legSwingDist * 0.7,
+      2.1,
+      5,
+      2.1,
+      yaw,
+      -swing * 0.9,
+      style.coat,
+      TexId.FABRIC,
+      0.7
+    );
+    mb.addOrientedBox(
+      cx - rx * armSpread + fx * legSwingDist * 0.7,
+      y0 + 7.5,
+      cz - rz * armSpread + fz * legSwingDist * 0.7,
+      2.1,
+      5,
+      2.1,
+      yaw,
+      swing * 0.9,
+      style.coat,
+      TexId.FABRIC,
+      0.7
+    );
+    const headY = y0 + 13;
+    mb.addSphere(cx, headY, cz, 3.6, 3.5, 3.6, 6, 8, style.skin, TexId.SOLID, 0.85);
+    const eyeForward = 3.25;
+    const eyeSpread = 1.25;
+    mb.addSphere(
+      cx + fx * eyeForward + rx * eyeSpread,
+      headY + 0.4,
+      cz + fz * eyeForward + rz * eyeSpread,
+      0.58,
+      0.72,
+      0.58,
+      4,
+      5,
+      rgb(24, 28, 38),
+      TexId.SOLID,
+      0.2
+    );
+    mb.addSphere(
+      cx + fx * eyeForward - rx * eyeSpread,
+      headY + 0.4,
+      cz + fz * eyeForward - rz * eyeSpread,
+      0.58,
+      0.72,
+      0.58,
+      4,
+      5,
+      rgb(24, 28, 38),
+      TexId.SOLID,
+      0.2
+    );
+    if (style.hasBeard || isSanta) {
+      mb.addSphere(
+        cx + fx * 2.2,
+        headY - 1.5,
+        cz + fz * 2.2,
+        3.1,
+        2.6,
+        2.6,
+        5,
+        7,
+        rgb(250, 252, 255),
+        TexId.SNOW,
+        0.7
+      );
+    }
+    if (style.hat || isSanta) {
+      const hatColor = style.hat ?? rgb(220, 36, 42);
+      mb.addCylinder(cx, headY + 2, cz, 3.9, 3.8, 1.4, 8, style.trim, TexId.SNOW, 0.65);
+      mb.addCone(cx - fx * 0.6, headY + 3.2, cz - fz * 0.6, 3.5, 5.8, 8, hatColor, TexId.FABRIC, 0.8);
+      mb.addSphere(
+        cx - fx * 1.8,
+        headY + 8.6,
+        cz - fz * 1.8,
+        1.45,
+        1.45,
+        1.45,
+        5,
+        6,
+        rgb(252, 254, 255),
+        TexId.SNOW,
+        0.65
+      );
+    } else {
+      mb.addSphere(cx, headY + 1.2, cz, 3.75, 2.8, 3.75, 5, 8, style.hair, TexId.SOLID, 0.75);
+    }
+    if (style.holdingClub) {
+      mb.addOrientedBox(
+        cx + fx * 4.5 + rx * 2.5,
+        y0 + 4.5,
+        cz + fz * 4.5 + rz * 2.5,
+        0.8,
+        9,
+        0.8,
+        yaw,
+        0.35,
+        rgb(212, 218, 228),
+        TexId.SOLID,
+        0.5
+      );
+    }
+    if (style.holdingBook) {
+      mb.addOrientedBox(
+        cx + fx * 4.2,
+        y0 + 7.2,
+        cz + fz * 4.2,
+        3,
+        2.4,
+        3.8,
+        yaw,
+        0.4,
+        rgb(192, 48, 52),
+        TexId.BOOKSHELF,
+        0.5
+      );
+    }
+    if (style.hasPresentInLap) {
+      mb.addBox(
+        cx + fx * 4.2,
+        y0 + 5,
+        cz + fz * 4.2,
+        5.2,
+        4.6,
+        5.2,
+        rgb(220, 42, 48),
+        TexId.GIFT_WRAP,
+        0.65
+      );
+    }
+    if (carryingLadder) {
+      mb.addOrientedBox(
+        cx - fx * 3.2,
+        y0 + 8.5,
+        cz - fz * 3.2,
+        1.4,
+        12,
+        5.2,
+        yaw,
+        0.2,
+        rgb(168, 112, 58),
+        TexId.WOOD_GRAIN,
+        0.65
+      );
+    }
+  }
+  function addWoodenLadder3D(mb, cx, baseY, cz, height, standingVertical) {
+    const wood = rgb(176, 118, 62);
+    if (standingVertical) {
+      mb.addBox(cx - 2.6, baseY, cz, 1.4, height, 1.4, wood, TexId.WOOD_GRAIN, 0.7);
+      mb.addBox(cx + 2.6, baseY, cz, 1.4, height, 1.4, wood, TexId.WOOD_GRAIN, 0.7);
+      const rungs = 8;
+      for (let i = 0; i < rungs; i++) {
+        const ry = baseY + 3 + i / (rungs - 1) * (height - 5);
+        mb.addBox(cx, ry, cz, 5.8, 1.1, 1.2, wood, TexId.WOOD_GRAIN, 0.55);
+      }
+    } else {
+      mb.addBox(cx, baseY + 0.6, cz - 2.5, 24, 1.5, 1.4, wood, TexId.WOOD_GRAIN, 0.65);
+      mb.addBox(cx, baseY + 0.6, cz + 2.5, 24, 1.5, 1.4, wood, TexId.WOOD_GRAIN, 0.65);
+      for (let i = -9; i <= 9; i += 3.6) {
+        mb.addBox(cx + i, baseY + 0.8, cz, 1.2, 1.3, 5.6, wood, TexId.WOOD_GRAIN, 0.55);
+      }
+    }
+  }
+  function addDog3D(mb, translucentMb, dog, elapsedTime) {
+    const cx = dog.x + dog.width * 0.5;
+    const cz = dog.y + dog.height * 0.5;
+    const baseY = getTerrainHeight(cx, cz, "level-outside");
+    const yaw = directionToYaw(dog.facing);
+    const cyaw = Math.cos(yaw);
+    const syaw = Math.sin(yaw);
+    const fx = cyaw;
+    const fz = syaw;
+    const rx = -syaw;
+    const rz = cyaw;
+    const isRunning = dog.mode === "chasing" || Math.hypot(dog.vx, dog.vy) > 2;
+    const legBounce = isRunning ? Math.sin(elapsedTime * 16) * 1.2 : 0;
+    const bodyColor = rgb(198, 134, 68);
+    const earColor = rgb(128, 76, 34);
+    for (const [fSign, rSign] of [
+      [1, 1],
+      [1, -1],
+      [-1, 1],
+      [-1, -1]
+    ]) {
+      mb.addBox(
+        cx + fx * fSign * 3 + rx * rSign * 1.8,
+        baseY + Math.max(0, fSign * legBounce * 0.4),
+        cz + fz * fSign * 3 + rz * rSign * 1.8,
+        1.6,
+        3.2,
+        1.6,
+        bodyColor,
+        TexId.SOLID,
+        0.6
+      );
+    }
+    mb.addOrientedBox(cx, baseY + 4, cz, 8.2, 3.8, 4.4, yaw, 0, bodyColor, TexId.FABRIC, 0.75);
+    mb.addOrientedBox(cx + fx * 3.2, baseY + 4.8, cz + fz * 3.2, 1.4, 4.2, 4.6, yaw, 0, rgb(220, 38, 42), TexId.SOLID, 0.5);
+    mb.addSphere(cx + fx * 4.6, baseY + 6.8, cz + fz * 4.6, 2.8, 2.6, 2.8, 5, 7, bodyColor, TexId.SOLID, 0.75);
+    mb.addSphere(cx + fx * 6.8, baseY + 6.2, cz + fz * 6.8, 1.5, 1.2, 1.5, 4, 5, earColor, TexId.SOLID, 0.55);
+    mb.addSphere(cx + fx * 4.2 + rx * 2.6, baseY + 6.2, cz + fz * 4.2 + rz * 2.6, 1, 2.2, 1.2, 4, 5, earColor, TexId.SOLID, 0.55);
+    mb.addSphere(cx + fx * 4.2 - rx * 2.6, baseY + 6.2, cz + fz * 4.2 - rz * 2.6, 1, 2.2, 1.2, 4, 5, earColor, TexId.SOLID, 0.55);
+    const wag = Math.sin(elapsedTime * 18) * 1.4;
+    mb.addOrientedBox(
+      cx - fx * 4.6 + rx * wag,
+      baseY + 5.8,
+      cz - fz * 4.6 + rz * wag,
+      3.2,
+      1.2,
+      1.2,
+      yaw,
+      0.55,
+      earColor,
+      TexId.SOLID,
+      0.55
+    );
+    if (dog.mode === "chasing" || dog.hearts.length > 0) {
+      const hy = baseY + 12.5 + Math.sin(elapsedTime * 6) * 1.2;
+      translucentMb.addSphere(cx - 1.1, hy, cz, 1.5, 1.5, 1.2, 4, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
+      translucentMb.addSphere(cx + 1.1, hy, cz, 1.5, 1.5, 1.2, 4, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
+      translucentMb.addCone(cx, hy - 2.4, cz, 2.2, 2.6, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
+    }
+  }
+  function addCat3D(mb, cat) {
+    const cx = cat.x + cat.width * 0.5;
+    const cz = cat.y + cat.height * 0.5;
+    const catBlack = rgb(28, 30, 38);
+    mb.addCylinder(cx, 0, cz, 3, 2.4, 5.2, 7, catBlack, TexId.SOLID, 0.75);
+    mb.addSphere(cx, 6.5, cz + 1, 2.5, 2.3, 2.5, 5, 7, catBlack, TexId.SOLID, 0.75);
+    mb.addCone(cx - 1.5, 8.2, cz + 1, 0.9, 2.2, 4, catBlack, TexId.SOLID, 0.55);
+    mb.addCone(cx + 1.5, 8.2, cz + 1, 0.9, 2.2, 4, catBlack, TexId.SOLID, 0.55);
+    mb.addSphere(cx - 0.9, 6.8, cz + 3.2, 0.45, 0.45, 0.45, 4, 4, rgb(84, 245, 112), TexId.SOLID, 0.2);
+    mb.addSphere(cx + 0.9, 6.8, cz + 3.2, 0.45, 0.45, 0.45, 4, 4, rgb(84, 245, 112), TexId.SOLID, 0.2);
+  }
+  function addMotorcycle3D(mb, motorcycle, elapsedTime) {
+    const cx = motorcycle.x + motorcycle.width * 0.5;
+    const cz = motorcycle.y + motorcycle.height * 0.5;
+    const baseY = getTerrainHeight(cx, cz, "level-outside");
+    if (motorcycle.status === "crashed") {
+      mb.addOrientedBox(cx, baseY + 2.5, cz, 18, 3.8, 7, 0.4, 1.1, rgb(42, 46, 56), TexId.SOLID, 0.75);
+      for (let i = 0; i < 3; i++) {
+        const p = (elapsedTime * 0.9 + i * 0.33) % 1;
+        mb.addSphere(
+          cx + Math.sin(elapsedTime * 3 + i) * 2.5,
+          baseY + 5 + p * 14,
+          cz,
+          2 + p * 2.5,
+          1.8 + p * 2,
+          2 + p * 2.5,
+          4,
+          6,
+          rgb(168, 174, 184),
+          TexId.SOLID,
+          0.4
+        );
+      }
+      return;
+    }
+    mb.addCylinder(cx - 6.5, baseY, cz, 3.5, 3.5, 2.4, 8, rgb(28, 30, 36), TexId.SOLID, 0.65);
+    mb.addCylinder(cx + 6.5, baseY, cz, 3.5, 3.5, 2.4, 8, rgb(28, 30, 36), TexId.SOLID, 0.65);
+    mb.addBox(cx, baseY + 3, cz, 14, 4, 4, rgb(46, 52, 64), TexId.SOLID, 0.75);
+    mb.addBox(cx + 5, baseY + 6.5, cz, 1.5, 3.5, 7.5, rgb(192, 198, 210), TexId.SOLID, 0.55);
+    mb.addSphere(cx + 6.8, baseY + 6.8, cz, 1.5, 1.5, 1.5, 4, 5, rgb(255, 242, 156), TexId.SOLID, 0.35);
+  }
+  function addConeOfSight3D(translucentMb, cone) {
+    if (!cone || cone.sightPolygon.length < 3) return;
+    const poly = cone.sightPolygon;
+    const ox = poly[0].x;
+    const oz = poly[0].y;
+    const y = 0.42;
+    const beamColor = ConeOfSight.cheatMode ? rgb(82, 224, 128, 0.28) : rgb(255, 232, 92, 0.32);
+    const edgeColor = ConeOfSight.cheatMode ? rgb(82, 245, 140, 0.62) : rgb(255, 112, 48, 0.68);
+    for (let i = 1; i < poly.length - 1; i++) {
+      const p1 = poly[i];
+      const p2 = poly[i + 1];
+      translucentMb.addTriangle(
+        [ox, y, oz],
+        [p1.x, y, p1.y],
+        [p2.x, y, p2.y],
+        beamColor,
+        TexId.SOLID,
+        0,
+        [0, 1, 0]
+      );
+      translucentMb.addQuad(
+        [p1.x, y, p1.y],
+        [p2.x, y, p2.y],
+        [p2.x, y + 1.5, p2.y],
+        [p1.x, y + 1.5, p1.y],
+        [0, 1, 0],
+        edgeColor,
+        TexId.SOLID,
+        0
+      );
+    }
+  }
+  function addDoorAndFog3D(opaqueMb, door) {
+    const b = door.bounds;
+    opaqueMb.addBox(
+      b.x + b.width * 0.5,
+      0,
+      b.y + b.height * 0.5,
+      b.width,
+      15.5,
+      b.height,
+      rgb(132, 78, 40),
+      TexId.WOOD_GRAIN,
+      0.8
+    );
+    opaqueMb.addSphere(
+      b.x + b.width * 0.75,
+      7.5,
+      b.y + b.height * 0.5 + 2.5,
+      1,
+      1,
+      1,
+      4,
+      5,
+      rgb(248, 212, 72),
+      TexId.SOLID,
+      0.35
+    );
+    for (const hr of door.hiddenRegions) {
+      opaqueMb.addBox(
+        hr.x + hr.width * 0.5,
+        0.2,
+        hr.y + hr.height * 0.5,
+        hr.width,
+        16.8,
+        hr.height,
+        rgb(12, 14, 22),
+        TexId.SOLID,
+        0
+      );
+    }
+  }
+  function addExclamationBadge3D(opaqueMb, cx, baseY, cz) {
+    const ay = baseY + 19;
+    opaqueMb.addBox(cx - 1.5, ay + 2.5, cz, 1.5, 5.2, 1.5, rgb(255, 42, 42), TexId.SOLID, 0.55);
+    opaqueMb.addSphere(cx - 1.5, ay + 0.8, cz, 0.9, 0.9, 0.9, 4, 5, rgb(255, 42, 42), TexId.SOLID, 0.45);
+    opaqueMb.addBox(cx + 1.5, ay + 2.5, cz, 1.5, 5.2, 1.5, rgb(255, 42, 42), TexId.SOLID, 0.55);
+    opaqueMb.addSphere(cx + 1.5, ay + 0.8, cz, 0.9, 0.9, 0.9, 4, 5, rgb(255, 42, 42), TexId.SOLID, 0.45);
+  }
+  function buildDynamicSceneMeshes(state) {
+    const opaque = new MeshBuilder();
+    const translucent = new MeshBuilder();
+    const pointLights = [];
+    const t = state.elapsedTime;
+    const levelId = state.currentLevelId;
+    const playerVisible = state.player.blinkTimer <= 0 || Math.floor(state.player.blinkTimer * 12) % 2 === 0;
+    const px = state.player.x + state.player.width * 0.5;
+    const pz = state.isOnRoof && levelId === "level-outside" ? ROOF_WALK_Y + state.player.height * 0.5 : state.player.y + state.player.height * 0.5;
+    const py = getPlayerElevation(state);
+    const playerYaw = typeof state.player.yaw === "number" ? state.player.yaw : directionToYaw(state.player.facing);
+    if (playerVisible) {
+      const electrocutedFlash = state.electrocutionTimer > 0 && Math.floor(t * 20) % 2 === 0;
+      const santaStyle = electrocutedFlash ? {
+        coat: rgb(245, 250, 120),
+        trim: rgb(255, 255, 255),
+        pants: rgb(245, 250, 120),
+        skin: rgb(255, 255, 255),
+        hair: rgb(255, 255, 255),
+        hat: rgb(245, 250, 120),
+        hasBeard: true
+      } : {
+        coat: rgb(216, 34, 42),
+        trim: rgb(248, 250, 255),
+        pants: rgb(186, 28, 36),
+        skin: rgb(250, 208, 176),
+        hair: rgb(250, 252, 255),
+        hat: rgb(220, 36, 42),
+        hasBeard: true
+      };
+      addHumanoid3D(
+        opaque,
+        px,
+        py,
+        pz,
+        playerYaw,
+        state.player.walkTimer,
+        state.player.isMoving,
+        santaStyle,
+        true,
+        state.hasLadder && !state.ladderPlaced
+      );
+    }
+    if (levelId === "level-outside") {
+      const outside = state.levels["level-outside"];
+      for (const fp of state.footprints) {
+        const alpha = Math.max(0, 1 - fp.age / fp.maxAge) * 0.65;
+        const fy = getTerrainHeight(fp.x, fp.y, "level-outside") + 0.15;
+        translucent.addBox(fp.x, fy, fp.y, 2.2, 0.3, 2.8, rgb(138, 162, 198, alpha), TexId.SOLID, 0);
+      }
+      if (!state.hasLadder && !state.ladderPlaced) {
+        const lx = GROUND_LADDER_BOUNDS.x + GROUND_LADDER_BOUNDS.width * 0.5;
+        const lz = GROUND_LADDER_BOUNDS.y + GROUND_LADDER_BOUNDS.height * 0.5;
+        const ly = getTerrainHeight(lx, lz, "level-outside");
+        addWoodenLadder3D(opaque, lx, ly, lz, 24, false);
+      } else if (state.ladderPlaced) {
+        const lx = LADDER_CLIMB_X + 6;
+        const lz = LADDER_BOTTOM_Y;
+        const ly = getTerrainHeight(lx, lz, "level-outside");
+        const houseGroundY2 = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
+        const roofY = houseGroundY2 + MAIN_HOUSE_ROOF_WALK_HEIGHT;
+        addWoodenLadder3D(opaque, lx, ly, lz - 4, roofY - ly + 2, true);
+      }
+      addMotorcycle3D(opaque, state.motorcycle, t);
+      addDog3D(opaque, translucent, state.dog, t);
+      if (outside.alexNpc) {
+        const ax = outside.alexNpc.x + outside.alexNpc.width * 0.5;
+        const az = outside.alexNpc.y + outside.alexNpc.height * 0.5;
+        const ay = getTerrainHeight(ax, az, "level-outside");
+        addHumanoid3D(
+          opaque,
+          ax,
+          ay,
+          az,
+          directionToYaw(outside.alexNpc.facing),
+          t,
+          false,
+          {
+            coat: rgb(156, 56, 50),
+            trim: rgb(238, 238, 244),
+            pants: rgb(52, 58, 72),
+            skin: rgb(248, 206, 174),
+            hair: rgb(168, 176, 160),
+            holdingClub: true
+          }
+        );
+      }
+      state.throwers.forEach((th, idx) => {
+        const tx = th.x + th.width * 0.5;
+        const tz = th.y + th.height * 0.5;
+        const ty = getTerrainHeight(tx, tz, "level-outside");
+        const throwYaw = directionToYaw(th.facing);
+        const isThrowing = th.throwTimer < 0.25 || th.throwTimer > th.throwInterval - 0.35;
+        const style = idx === 0 ? {
+          coat: rgb(176, 88, 50),
+          trim: rgb(242, 248, 255),
+          pants: rgb(44, 54, 72),
+          skin: rgb(248, 208, 176),
+          hair: rgb(74, 44, 30),
+          hat: rgb(176, 88, 50)
+        } : {
+          coat: rgb(128, 64, 112),
+          trim: rgb(242, 248, 255),
+          pants: rgb(44, 54, 72),
+          skin: rgb(250, 210, 178),
+          hair: rgb(176, 104, 48),
+          hat: rgb(128, 64, 112)
+        };
+        addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style);
+      });
+      for (const sb of state.snowballs) {
+        const sx = sb.x + sb.width * 0.5;
+        const sz = sb.y + sb.height * 0.5;
+        const sy = getTerrainHeight(sx, sz, "level-outside") + 7.5;
+        opaque.addSphere(sx, sy, sz, 3.2, 3.2, 3.2, 5, 7, rgb(248, 252, 255), TexId.SNOW, 0.65);
+      }
+      const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
+      const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 14;
+      const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
+      const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
+      for (let i = 0; i < 4; i++) {
+        const phase = (t * 0.45 + i * 0.25) % 1;
+        const sx = chimX + Math.sin(t * 1.8 + i * 2) * 3.5 * phase;
+        const sz = chimZ - phase * 6;
+        const sy = chimTopY + phase * 22;
+        const r = 2.2 + phase * 3.2;
+        translucent.addSphere(sx, sy, sz, r, r * 0.85, r, 4, 6, rgb(228, 236, 248, (1 - phase) * 0.55), TexId.SOLID, 0);
+      }
+      const sparkX = DAMAGED_WIRE_HAZARD.x + DAMAGED_WIRE_HAZARD.width * 0.5;
+      const sparkZ = DAMAGED_WIRE_HAZARD.y + DAMAGED_WIRE_HAZARD.height * 0.5;
+      const sparkBaseY = getTerrainHeight(sparkX, sparkZ, "level-outside") + 1.5;
+      for (let i = 0; i < 3; i++) {
+        const ang = t * 14 + i * 2.1;
+        translucent.addOrientedBox(
+          sparkX + Math.cos(ang) * 2.2,
+          sparkBaseY + 1.2 + Math.abs(Math.sin(ang * 1.7)) * 2.8,
+          sparkZ + Math.sin(ang) * 2.2,
+          4,
+          0.6,
+          0.6,
+          ang,
+          0.6,
+          rgb(120, 235, 255, 0.95),
+          TexId.SOLID,
+          0.3
+        );
+      }
+      pointLights.push({
+        x: sparkX,
+        y: sparkBaseY + 3,
+        z: sparkZ,
+        r: 0.4,
+        g: 0.9,
+        b: 1,
+        radius: 48,
+        intensity: 0.55 + Math.sin(t * 24) * 0.35
+      });
+      pointLights.push({
+        x: 168,
+        y: houseGroundY + 14,
+        z: 164,
+        r: 1,
+        g: 0.82,
+        b: 0.42,
+        radius: 85,
+        intensity: 0.8
+      });
+      for (let i = 0; i < 28; i++) {
+        const seedX = i * 73 % 140 - 70;
+        const seedZ = i * 47 % 140 - 70;
+        const fall = (t * 14 + i * 9.3) % 42;
+        const fx = px + seedX + Math.sin(t * 1.5 + i) * 4;
+        const fz = pz + seedZ + Math.cos(t * 1.3 + i) * 4;
+        const fy = py + 38 - fall;
+        translucent.addSphere(fx, fy, fz, 0.65, 0.65, 0.65, 3, 4, rgb(252, 254, 255, 0.85), TexId.SOLID, 0);
+      }
+    } else if (levelId === "level-basement") {
+      const basement = state.levels["level-basement"];
+      for (let i = 0; i < 4; i++) {
+        const flicker = Math.sin(t * 14 + i * 1.8) * 1.4;
+        const flameH = 5 + flicker;
+        translucent.addCone(
+          11 * TILE_SIZE - 1,
+          1.5,
+          11.5 * TILE_SIZE + i * 3.2,
+          1.8,
+          flameH,
+          6,
+          i % 2 === 0 ? rgb(255, 146, 36, 0.92) : rgb(255, 224, 68, 0.92),
+          TexId.SOLID,
+          0
+        );
+      }
+      pointLights.push({
+        x: 10.5 * TILE_SIZE,
+        y: 8,
+        z: 12 * TILE_SIZE,
+        r: 1,
+        g: 0.62,
+        b: 0.22,
+        radius: 120,
+        intensity: 1.05 + Math.sin(t * 13) * 0.18
+      });
+      addHumanoid3D(
+        opaque,
+        basement.windowNpc.x + basement.windowNpc.width * 0.5,
+        0,
+        basement.windowNpc.y + basement.windowNpc.height * 0.5,
+        basement.coneOfSight ? basement.coneOfSight.direction : directionToYaw(basement.windowNpc.facing),
+        t,
+        false,
+        {
+          coat: hexToColor4("#423933"),
+          trim: rgb(224, 220, 214),
+          pants: rgb(44, 52, 68),
+          skin: rgb(248, 206, 174),
+          hair: hexToColor4("#4e433c")
+        }
+      );
+      addHumanoid3D(
+        opaque,
+        basement.olexaNpc.x + basement.olexaNpc.width * 0.5,
+        0,
+        basement.olexaNpc.y + basement.olexaNpc.height * 0.5,
+        basement.olexaConeOfSight ? basement.olexaConeOfSight.direction : directionToYaw(basement.olexaNpc.facing),
+        t,
+        false,
+        {
+          coat: hexToColor4("#52446a"),
+          trim: rgb(232, 228, 240),
+          pants: rgb(44, 52, 68),
+          skin: rgb(248, 206, 174),
+          hair: hexToColor4("#342618")
+        }
+      );
+      const isBathroomClosed = basement.doors.some((d) => d.id === "basement-bathroom-door");
+      if (!isBathroomClosed) {
+        const tx = basement.toiletNpc.x + basement.toiletNpc.width * 0.5;
+        const tz = basement.toiletNpc.y + basement.toiletNpc.height * 0.5;
+        addHumanoid3D(
+          opaque,
+          tx,
+          2,
+          tz,
+          directionToYaw(basement.toiletNpc.facing),
+          t,
+          false,
+          {
+            coat: hexToColor4("#2d7862"),
+            trim: rgb(238, 244, 242),
+            pants: rgb(52, 56, 74),
+            skin: rgb(250, 208, 176),
+            hair: hexToColor4("#8a4822"),
+            sitting: true
+          }
+        );
+        if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) {
+          addExclamationBadge3D(opaque, tx, 2, tz);
+        }
+      }
+      addConeOfSight3D(translucent, basement.coneOfSight);
+      addConeOfSight3D(translucent, basement.olexaConeOfSight);
+      for (const door of basement.doors) {
+        addDoorAndFog3D(opaque, door);
+      }
+    } else if (levelId === "level-upstairs") {
+      const upstairs = state.levels["level-upstairs"];
+      pointLights.push({
+        x: 3 * TILE_SIZE,
+        y: 18,
+        z: 15.5 * TILE_SIZE,
+        r: 1,
+        g: 0.86,
+        b: 0.42,
+        radius: 130,
+        intensity: 1 + Math.sin(t * 4) * 0.1
+      });
+      addCat3D(opaque, upstairs.cat);
+      if (upstairs.rosannaCutscene?.active) {
+        const cs = upstairs.rosannaCutscene;
+        addHumanoid3D(
+          opaque,
+          cs.santaX + 8,
+          0,
+          cs.santaY + 8,
+          0,
+          // running East
+          cs.walkTimer,
+          true,
+          {
+            coat: rgb(216, 34, 42),
+            trim: rgb(248, 250, 255),
+            pants: rgb(186, 28, 36),
+            skin: rgb(250, 208, 176),
+            hair: rgb(250, 252, 255),
+            hat: rgb(220, 36, 42),
+            hasBeard: true
+          },
+          true
+        );
+        if (Math.floor(cs.elapsed * 10) % 2 === 0) {
+          addExclamationBadge3D(opaque, px, py, pz);
+        }
+      }
+      const isTableRoomDoorOpen = !upstairs.doors.some(
+        (d) => d.id === "upstairs-table-room-door"
+      );
+      const isBedroomDoorOpen = !upstairs.doors.some(
+        (d) => d.id === "upstairs-bedroom-door"
+      );
+      const isOfficeDoorOpen = !upstairs.doors.some(
+        (d) => d.id === "upstairs-office-door"
+      );
+      if (isBedroomDoorOpen && !state.player.states.get(DIANA_PRESENT_TAKEN_KEY)) {
+        const pr = UPSTAIRS_DIANA_PRESENT_BOUNDS;
+        const gx = pr.x + pr.width * 0.5;
+        const gz = pr.y + pr.height * 0.5;
+        opaque.addBox(gx, 0, gz, 8, 7, 8, rgb(214, 40, 40), TexId.GIFT_WRAP, 0.75);
+        opaque.addSphere(gx, 7.5, gz, 2.2, 1.4, 2.2, 4, 6, rgb(255, 209, 102), TexId.SOLID, 0.5);
+      }
+      if (isOfficeDoorOpen && !state.player.states.get(SIMON_PRESENT_TAKEN_KEY)) {
+        const pr = UPSTAIRS_SIMON_PRESENT_BOUNDS;
+        const gx = pr.x + pr.width * 0.5;
+        const gz = pr.y + pr.height * 0.5;
+        opaque.addBox(gx, 0, gz, 8, 7, 8, rgb(42, 117, 211), TexId.GIFT_WRAP, 0.75);
+        opaque.addSphere(gx, 7.5, gz, 2.2, 1.4, 2.2, 4, 6, rgb(255, 238, 84), TexId.SOLID, 0.5);
+      }
+      addHumanoid3D(
+        opaque,
+        UPSTAIRS_ALBIN_X + 6,
+        0,
+        upstairs.albinY + 6,
+        upstairs.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2,
+        t,
+        true,
+        {
+          coat: hexToColor4("#285890"),
+          trim: rgb(236, 240, 248),
+          pants: rgb(42, 48, 62),
+          skin: rgb(248, 206, 174),
+          hair: hexToColor4("#7a421c")
+        }
+      );
+      const isDianaDistracted = Boolean(state.player.states.get(DIANA_DISTRACTED_KEY));
+      addHumanoid3D(
+        opaque,
+        upstairs.dianaNpc.x + upstairs.dianaNpc.width * 0.5,
+        0,
+        upstairs.dianaNpc.y + upstairs.dianaNpc.height * 0.5,
+        upstairs.dianaCone ? upstairs.dianaCone.direction : Math.PI / 2,
+        t,
+        false,
+        {
+          coat: hexToColor4("#3a6288"),
+          trim: rgb(238, 242, 248),
+          pants: rgb(44, 52, 68),
+          skin: rgb(250, 208, 176),
+          hair: hexToColor4("#2a1a14"),
+          sitting: isDianaDistracted,
+          hasPresentInLap: isDianaDistracted
+        }
+      );
+      const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY));
+      addHumanoid3D(
+        opaque,
+        upstairs.simonNpc.x + upstairs.simonNpc.width * 0.5,
+        0,
+        upstairs.simonNpc.y + upstairs.simonNpc.height * 0.5,
+        upstairs.simonCone ? upstairs.simonCone.direction : Math.PI,
+        t,
+        false,
+        {
+          coat: hexToColor4("#647038"),
+          trim: rgb(238, 242, 232),
+          pants: rgb(44, 52, 68),
+          skin: rgb(248, 204, 172),
+          hair: hexToColor4("#583822"),
+          sitting: isSimonDistracted,
+          hasPresentInLap: isSimonDistracted
+        }
+      );
+      if (isTableRoomDoorOpen) {
+        addHumanoid3D(
+          opaque,
+          upstairs.henrikNpc.x + upstairs.henrikNpc.width * 0.5,
+          0,
+          upstairs.henrikNpc.y + upstairs.henrikNpc.height * 0.5,
+          upstairs.henrikCone ? upstairs.henrikCone.direction : Math.PI / 2,
+          t,
+          false,
+          {
+            coat: hexToColor4("#324a78"),
+            trim: rgb(236, 240, 248),
+            pants: rgb(42, 48, 62),
+            skin: rgb(248, 206, 174),
+            hair: hexToColor4("#6e4624")
+          }
+        );
+        addHumanoid3D(
+          opaque,
+          upstairs.tanjaNpc.x + upstairs.tanjaNpc.width * 0.5,
+          0,
+          upstairs.tanjaNpc.y + upstairs.tanjaNpc.height * 0.5,
+          upstairs.tanjaCone ? upstairs.tanjaCone.direction : -Math.PI / 2,
+          t,
+          false,
+          {
+            coat: hexToColor4("#783858"),
+            trim: rgb(246, 236, 242),
+            pants: rgb(44, 50, 64),
+            skin: rgb(250, 208, 176),
+            hair: hexToColor4("#743c20")
+          }
+        );
+      }
+      if (isBedroomDoorOpen) {
+        addHumanoid3D(
+          opaque,
+          upstairs.anneMarieNpc.x + upstairs.anneMarieNpc.width * 0.5,
+          0,
+          upstairs.anneMarieNpc.y + upstairs.anneMarieNpc.height * 0.5,
+          upstairs.anneMarieCone ? upstairs.anneMarieCone.direction : -Math.PI / 2,
+          t,
+          false,
+          {
+            coat: hexToColor4("#428860"),
+            trim: rgb(238, 246, 240),
+            pants: rgb(46, 52, 66),
+            skin: rgb(250, 212, 182),
+            hair: hexToColor4("#c88642"),
+            holdingBook: true
+          }
+        );
+      }
+      addConeOfSight3D(translucent, upstairs.albinCone);
+      addConeOfSight3D(translucent, upstairs.dianaCone);
+      addConeOfSight3D(translucent, upstairs.simonCone);
+      if (isTableRoomDoorOpen) {
+        addConeOfSight3D(translucent, upstairs.henrikCone);
+        addConeOfSight3D(translucent, upstairs.tanjaCone);
+      }
+      if (isBedroomDoorOpen) {
+        addConeOfSight3D(translucent, upstairs.anneMarieCone);
+      }
+      for (const door of upstairs.doors) {
+        addDoorAndFog3D(opaque, door);
+      }
+    } else if (levelId === "level-people") {
+      const peopleLevel = state.levels["level-people"];
+      for (const npc of peopleLevel.npcs) {
+        const nx = npc.bounds.x + npc.bounds.width * 0.5;
+        const nz = npc.bounds.y + npc.bounds.height * 0.5;
+        addHumanoid3D(
+          opaque,
+          nx,
+          0,
+          nz,
+          directionToYaw(npc.facing),
+          t,
+          false,
+          {
+            coat: hexToColor4(npc.shirtColor),
+            trim: rgb(242, 244, 248),
+            pants: rgb(44, 52, 68),
+            skin: rgb(248, 206, 174),
+            hair: hexToColor4(npc.hairColor),
+            holdingClub: npc.name === "Alex",
+            holdingBook: npc.name === "Anne-Marie"
+          }
+        );
+      }
+    }
+    if (state.debugMode) {
+      translucent.addBox(
+        state.player.x + state.player.width * 0.5,
+        py,
+        pz,
+        state.player.width,
+        2.2,
+        state.player.height,
+        rgb(64, 245, 128, 0.45),
+        TexId.SOLID,
+        0
+      );
+      for (const inter of state.interactables) {
+        const ix = inter.bounds.x + inter.bounds.width * 0.5;
+        const iz = inter.bounds.y + inter.bounds.height * 0.5;
+        const iy = getTerrainHeight(ix, iz, levelId);
+        translucent.addBox(
+          ix,
+          iy + 0.5,
+          iz,
+          inter.bounds.width,
+          2,
+          inter.bounds.height,
+          rgb(255, 232, 64, 0.3),
+          TexId.SOLID,
+          0
+        );
+      }
+    }
+    return {
+      opaque: opaque.build(),
+      translucent: translucent.build(),
+      pointLights
+    };
+  }
+
   // src/rendering/renderer.ts
   function computeCamera(playerX, playerY, playerWidth, playerHeight, viewportWidth, viewportHeight, mapWidthPx, mapHeightPx) {
     const targetX = playerX + playerWidth / 2 - viewportWidth / 2;
@@ -2706,7 +5115,98 @@
     }
     ctx.restore();
   }
-  function renderGame(ctx, state, assets) {
+  function renderSoftware3DScene(ctx, state, cam) {
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+    if (state.worldFadedToBlack) {
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, w, h);
+      return;
+    }
+    const isOutside = state.currentLevelId === "level-outside";
+    ctx.fillStyle = isOutside ? "#172647" : "#14121c";
+    ctx.fillRect(0, 0, w, h);
+    const staticMesh = getStaticLevelMesh(state.currentLevelId, state.map);
+    const dynamicMeshes = buildDynamicSceneMeshes(state);
+    const sunX = 0.42;
+    const sunY = 0.78;
+    const sunZ = 0.46;
+    const sunLen = Math.hypot(sunX, sunY, sunZ);
+    const sx = sunX / sunLen;
+    const sy = sunY / sunLen;
+    const sz = sunZ / sunLen;
+    const tris = [];
+    const collectMesh = (verts, count) => {
+      for (let i = 0; i < count; i += 3) {
+        const b0 = i * FLOATS_PER_VERTEX;
+        const b1 = (i + 1) * FLOATS_PER_VERTEX;
+        const b2 = (i + 2) * FLOATS_PER_VERTEX;
+        const p0 = projectWorldToScreen(
+          { x: verts[b0], y: verts[b0 + 1], z: verts[b0 + 2] },
+          cam.viewProjMatrix,
+          w,
+          h
+        );
+        const p1 = projectWorldToScreen(
+          { x: verts[b1], y: verts[b1 + 1], z: verts[b1 + 2] },
+          cam.viewProjMatrix,
+          w,
+          h
+        );
+        const p2 = projectWorldToScreen(
+          { x: verts[b2], y: verts[b2 + 1], z: verts[b2 + 2] },
+          cam.viewProjMatrix,
+          w,
+          h
+        );
+        if (!p0.visible && !p1.visible && !p2.visible) continue;
+        if (p0.w <= 1 || p1.w <= 1 || p2.w <= 1) continue;
+        const nx = verts[b0 + 3];
+        const ny = verts[b0 + 4];
+        const nz = verts[b0 + 5];
+        const ndl = nx * sx + ny * sy + nz * sz;
+        const toon = ndl > 0.36 ? 1.06 : ndl > -0.14 ? 0.84 : 0.58;
+        const r = Math.min(255, Math.round(verts[b0 + 8] * 255 * toon));
+        const g2 = Math.min(255, Math.round(verts[b0 + 9] * 255 * toon));
+        const b = Math.min(255, Math.round(verts[b0 + 10] * 255 * toon));
+        const a = verts[b0 + 11];
+        const outlineScale = verts[b0 + 13];
+        tris.push({
+          x0: p0.x,
+          y0: p0.y,
+          x1: p1.x,
+          y1: p1.y,
+          x2: p2.x,
+          y2: p2.y,
+          depth: (p0.w + p1.w + p2.w) / 3,
+          fill: a < 0.99 ? `rgba(${r},${g2},${b},${a.toFixed(2)})` : `rgb(${r},${g2},${b})`,
+          outline: outlineScale > 0.5
+        });
+      }
+    };
+    collectMesh(staticMesh.vertices, staticMesh.vertexCount);
+    collectMesh(dynamicMeshes.opaque.vertices, dynamicMeshes.opaque.vertexCount);
+    collectMesh(dynamicMeshes.translucent.vertices, dynamicMeshes.translucent.vertexCount);
+    tris.sort((a, b) => b.depth - a.depth);
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 1.1;
+    ctx.strokeStyle = "#101422";
+    for (const t of tris) {
+      ctx.beginPath();
+      ctx.moveTo(t.x0, t.y0);
+      ctx.lineTo(t.x1, t.y1);
+      ctx.lineTo(t.x2, t.y2);
+      ctx.closePath();
+      ctx.fillStyle = t.fill;
+      ctx.fill();
+      if (t.outline) {
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+  function renderGame(ctx, state, assets, options) {
     const {
       map,
       player,
@@ -2720,6 +5220,28 @@
     } = state;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    if (options?.webgpuRenderer || options?.camera3d) {
+      const cam = options.camera3d ?? createCamera3D();
+      if (options.webgpuRenderer) {
+        options.webgpuRenderer.render(state, cam);
+      } else {
+        renderSoftware3DScene(ctx, state, cam);
+      }
+      if (activeDialogue) {
+        const line = activeDialogue.lines[activeDialogue.currentIndex] ?? "";
+        drawDialogueBox(
+          ctx,
+          line,
+          assets.zKeySprite,
+          !state.joystickActive,
+          activeDialogue.speakerPortrait,
+          assets.portraitsAtlas
+        );
+      } else if (nearbyInteractable && !state.joystickActive) {
+        drawInteractionPrompt(ctx, nearbyInteractable.promptText, assets.zKeySprite);
+      }
+      return;
+    }
     if (state.currentLevelId !== "level-outside") {
       ctx.fillStyle = "#000000";
       ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -3131,6 +5653,628 @@
       drawInteractionPrompt(ctx, nearbyInteractable.promptText, assets.zKeySprite);
     }
   }
+
+  // src/rendering/webgpuRenderer.ts
+  var VERTEX_STRIDE_BYTES = FLOATS_PER_VERTEX * 4;
+  var UNIFORM_BUFFER_SIZE = 256;
+  var WGSL_SHADER_SOURCE = (
+    /* wgsl */
+    `
+struct SceneUniforms {
+  viewProj: mat4x4<f32>,
+  cameraPosAndTime: vec4<f32>,
+  sunDirAndAmbient: vec4<f32>,
+  fogColorAndStart: vec4<f32>,
+  fogEndAndFlags: vec4<f32>,
+  light0PosRad: vec4<f32>,
+  light0ColorInt: vec4<f32>,
+  light1PosRad: vec4<f32>,
+  light1ColorInt: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> scene: SceneUniforms;
+@group(0) @binding(1) var atlasSampler: sampler;
+@group(0) @binding(2) var atlasTex: texture_2d<f32>;
+
+struct VertexInput {
+  @location(0) pos: vec3<f32>,
+  @location(1) normal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) color: vec4<f32>,
+  @location(4) texAndOutline: vec2<f32>,
+};
+
+struct VertexOutput {
+  @builtin(position) clipPos: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) worldNormal: vec3<f32>,
+  @location(2) uv: vec2<f32>,
+  @location(3) color: vec4<f32>,
+  @location(4) texId: f32,
+};
+
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  out.clipPos = scene.viewProj * vec4<f32>(in.pos, 1.0);
+  out.worldPos = in.pos;
+  out.worldNormal = in.normal;
+  out.uv = in.uv;
+  out.color = in.color;
+  out.texId = in.texAndOutline.x;
+  return out;
+}
+
+@vertex
+fn vs_outline(in: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let outlineScale = in.texAndOutline.y;
+  if (outlineScale <= 0.001) {
+    out.clipPos = vec4<f32>(0.0, 0.0, 2.0, 1.0);
+    out.worldPos = in.pos;
+    out.worldNormal = in.normal;
+    out.uv = in.uv;
+    out.color = vec4<f32>(0.0);
+    out.texId = 0.0;
+    return out;
+  }
+
+  let nLen = max(0.0001, length(in.normal));
+  let norm = in.normal / nLen;
+  let extrudedPos = in.pos + norm * outlineScale;
+  var clip = scene.viewProj * vec4<f32>(extrudedPos, 1.0);
+  // Push outline slightly back in depth so interior faces are occluded by the opaque pass
+  // while outer silhouette edges remain crisp and unbroken.
+  clip.z = min(clip.w * 0.9999, clip.z + 0.0022 * clip.w);
+
+  out.clipPos = clip;
+  out.worldPos = extrudedPos;
+  out.worldNormal = norm;
+  out.uv = in.uv;
+  out.color = in.color;
+  out.texId = in.texAndOutline.x;
+  return out;
+}
+
+fn sampleAtlas(texIdFloat: f32, rawUv: vec2<f32>) -> vec4<f32> {
+  let tid = i32(round(texIdFloat));
+  let col = f32(tid % ${ATLAS_COLS});
+  let row = f32(tid / ${ATLAS_COLS});
+  let wrappedUv = clamp(fract(rawUv * 0.9999), vec2<f32>(0.05), vec2<f32>(0.95));
+  let atlasUv = vec2<f32>(
+    (col + wrappedUv.x) / f32(${ATLAS_COLS}.0),
+    (row + wrappedUv.y) / f32(${ATLAS_ROWS}.0)
+  );
+  return textureSampleLevel(atlasTex, atlasSampler, atlasUv, 0.0);
+}
+
+fn computePointLightToon(
+  worldPos: vec3<f32>,
+  N: vec3<f32>,
+  lightPosRad: vec4<f32>,
+  lightColorInt: vec4<f32>
+) -> vec3<f32> {
+  let radius = lightPosRad.w;
+  let intensity = lightColorInt.w;
+  if (radius <= 0.01 || intensity <= 0.001) {
+    return vec3<f32>(0.0);
+  }
+  let toLight = lightPosRad.xyz - worldPos;
+  let dist = length(toLight);
+  if (dist >= radius) {
+    return vec3<f32>(0.0);
+  }
+  let L = toLight / max(0.001, dist);
+  let ndl = max(0.25, dot(N, L));
+  let normDist = 1.0 - (dist / radius);
+  // Stepped Wind Waker lantern/hearth toon rings
+  var ring = 0.0;
+  if (normDist > 0.62) {
+    ring = 1.0;
+  } else if (normDist > 0.25) {
+    ring = 0.48;
+  }
+  return lightColorInt.rgb * (ring * intensity * ndl);
+}
+
+@fragment
+fn fs_cel(in: VertexOutput) -> @location(0) vec4<f32> {
+  let fadeBlack = scene.fogEndAndFlags.w;
+  if (fadeBlack >= 0.999) {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+  }
+
+  let texSample = sampleAtlas(in.texId, in.uv);
+  let baseAlbedo = in.color.rgb * texSample.rgb;
+
+  let N = normalize(in.worldNormal);
+  let sunDir = normalize(scene.sunDirAndAmbient.xyz);
+  let ambientBoost = scene.sunDirAndAmbient.w;
+  let ndl = dot(N, sunDir);
+
+  // Wind Waker 3-band cel shading quantization
+  var toonBand = vec3<f32>(0.55, 0.60, 0.72); // cool winter shadow band
+  if (ndl > 0.36) {
+    toonBand = vec3<f32>(1.08, 1.05, 1.00); // warm sunlit band
+  } else if (ndl > -0.14) {
+    toonBand = vec3<f32>(0.82, 0.84, 0.90); // mid-tone band
+  }
+  toonBand = toonBand + vec3<f32>(ambientBoost);
+
+  // Stepped point lights (fireplace hearth, Christmas tree star, EV sparks, windows)
+  let pl0 = computePointLightToon(in.worldPos, N, scene.light0PosRad, scene.light0ColorInt);
+  let pl1 = computePointLightToon(in.worldPos, N, scene.light1PosRad, scene.light1ColorInt);
+
+  // Subtle stepped Wind Waker rim light on grazing silhouettes
+  let V = normalize(scene.cameraPosAndTime.xyz - in.worldPos);
+  let rimDot = 1.0 - max(0.0, dot(N, V));
+  var rim = 0.0;
+  if (rimDot > 0.74 && ndl > -0.1) {
+    rim = 0.14;
+  }
+
+  var litColor = baseAlbedo * (toonBand + pl0 + pl1) + vec3<f32>(rim);
+
+  // Atmospheric distance fog
+  let camDist = length(in.worldPos - scene.cameraPosAndTime.xyz);
+  let fogStart = scene.fogColorAndStart.w;
+  let fogEnd = scene.fogEndAndFlags.x;
+  let fogFactor = clamp((camDist - fogStart) / max(1.0, fogEnd - fogStart), 0.0, 0.78);
+  litColor = mix(litColor, scene.fogColorAndStart.rgb, fogFactor);
+  litColor = litColor * (1.0 - fadeBlack);
+
+  return vec4<f32>(clamp(litColor, vec3<f32>(0.0), vec3<f32>(1.0)), in.color.a);
+}
+
+@fragment
+fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
+  let fadeBlack = scene.fogEndAndFlags.w;
+  if (fadeBlack >= 0.999) {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+  }
+  // Deep Wind Waker cartoon ink contour tinted slightly by object color
+  let ink = mix(vec3<f32>(0.06, 0.07, 0.12), in.color.rgb * 0.22, 0.35);
+  let camDist = length(in.worldPos - scene.cameraPosAndTime.xyz);
+  let fogStart = scene.fogColorAndStart.w;
+  let fogEnd = scene.fogEndAndFlags.x;
+  let fogFactor = clamp((camDist - fogStart) / max(1.0, fogEnd - fogStart), 0.0, 0.78);
+  let finalInk = mix(ink, scene.fogColorAndStart.rgb, fogFactor) * (1.0 - fadeBlack);
+  return vec4<f32>(finalInk, 1.0);
+}
+
+@fragment
+fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
+  let fadeBlack = scene.fogEndAndFlags.w;
+  if (fadeBlack >= 0.999) {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+  }
+  let texSample = sampleAtlas(in.texId, in.uv);
+  let color = in.color.rgb * texSample.rgb * (1.0 - fadeBlack);
+  return vec4<f32>(color, in.color.a);
+}
+`
+  );
+  var WebGPURenderer = class _WebGPURenderer {
+    constructor(canvas, device, context, celOpaquePipeline, outlinePipeline, translucentPipeline, uniformBuffer, bindGroup) {
+      __publicField(this, "device");
+      __publicField(this, "context");
+      __publicField(this, "canvas");
+      __publicField(this, "celOpaquePipeline");
+      __publicField(this, "outlinePipeline");
+      __publicField(this, "translucentPipeline");
+      __publicField(this, "uniformBuffer");
+      __publicField(this, "bindGroup");
+      __publicField(this, "depthTexture", null);
+      __publicField(this, "depthWidth", 0);
+      __publicField(this, "depthHeight", 0);
+      __publicField(this, "staticBuffers", /* @__PURE__ */ new Map());
+      __publicField(this, "dynamicOpaqueBuffer");
+      __publicField(this, "dynamicOpaqueCapacityBytes");
+      __publicField(this, "dynamicTranslucentBuffer");
+      __publicField(this, "dynamicTranslucentCapacityBytes");
+      __publicField(this, "uniformScratch", new Float32Array(UNIFORM_BUFFER_SIZE / 4));
+      this.canvas = canvas;
+      this.device = device;
+      this.context = context;
+      this.celOpaquePipeline = celOpaquePipeline;
+      this.outlinePipeline = outlinePipeline;
+      this.translucentPipeline = translucentPipeline;
+      this.uniformBuffer = uniformBuffer;
+      this.bindGroup = bindGroup;
+      this.dynamicOpaqueCapacityBytes = 512 * 1024;
+      this.dynamicOpaqueBuffer = this.device.createBuffer({
+        size: this.dynamicOpaqueCapacityBytes,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      });
+      this.dynamicTranslucentCapacityBytes = 256 * 1024;
+      this.dynamicTranslucentBuffer = this.device.createBuffer({
+        size: this.dynamicTranslucentCapacityBytes,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      });
+    }
+    static async create(canvas) {
+      if (typeof navigator === "undefined" || !navigator.gpu) {
+        debugLog("WebGPU not available in navigator; using 3D Canvas fallback");
+        return null;
+      }
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          debugLog("No WebGPU adapter found; using 3D Canvas fallback");
+          return null;
+        }
+        const device = await adapter.requestDevice();
+        const context = canvas.getContext(
+          "webgpu"
+        );
+        if (!context) {
+          debugLog("Could not acquire webgpu context on canvas");
+          return null;
+        }
+        const format = navigator.gpu.getPreferredCanvasFormat();
+        context.configure({
+          device,
+          format,
+          alphaMode: "opaque"
+        });
+        const shaderModule = device.createShaderModule({
+          code: WGSL_SHADER_SOURCE
+        });
+        const vertexBufferLayout = {
+          arrayStride: VERTEX_STRIDE_BYTES,
+          stepMode: "vertex",
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: "float32x3" },
+            // pos
+            { shaderLocation: 1, offset: 12, format: "float32x3" },
+            // normal
+            { shaderLocation: 2, offset: 24, format: "float32x2" },
+            // uv
+            { shaderLocation: 3, offset: 32, format: "float32x4" },
+            // color
+            { shaderLocation: 4, offset: 48, format: "float32x2" }
+            // texId, outlineScale
+          ]
+        };
+        const bindGroupLayout = device.createBindGroupLayout({
+          entries: [
+            {
+              binding: 0,
+              visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+              buffer: { type: "uniform" }
+            },
+            {
+              binding: 1,
+              visibility: GPUShaderStage.FRAGMENT,
+              sampler: { type: "filtering" }
+            },
+            {
+              binding: 2,
+              visibility: GPUShaderStage.FRAGMENT,
+              texture: { sampleType: "float" }
+            }
+          ]
+        });
+        const pipelineLayout = device.createPipelineLayout({
+          bindGroupLayouts: [bindGroupLayout]
+        });
+        const celOpaquePipeline = device.createRenderPipeline({
+          layout: pipelineLayout,
+          vertex: {
+            module: shaderModule,
+            entryPoint: "vs_main",
+            buffers: [vertexBufferLayout]
+          },
+          fragment: {
+            module: shaderModule,
+            entryPoint: "fs_cel",
+            targets: [{ format }]
+          },
+          primitive: {
+            topology: "triangle-list",
+            cullMode: "none"
+          },
+          depthStencil: {
+            format: "depth24plus",
+            depthWriteEnabled: true,
+            depthCompare: "less"
+          }
+        });
+        const outlinePipeline = device.createRenderPipeline({
+          layout: pipelineLayout,
+          vertex: {
+            module: shaderModule,
+            entryPoint: "vs_outline",
+            buffers: [vertexBufferLayout]
+          },
+          fragment: {
+            module: shaderModule,
+            entryPoint: "fs_outline",
+            targets: [{ format }]
+          },
+          primitive: {
+            topology: "triangle-list",
+            cullMode: "front"
+          },
+          depthStencil: {
+            format: "depth24plus",
+            depthWriteEnabled: true,
+            depthCompare: "less-equal"
+          }
+        });
+        const translucentPipeline = device.createRenderPipeline({
+          layout: pipelineLayout,
+          vertex: {
+            module: shaderModule,
+            entryPoint: "vs_main",
+            buffers: [vertexBufferLayout]
+          },
+          fragment: {
+            module: shaderModule,
+            entryPoint: "fs_translucent",
+            targets: [
+              {
+                format,
+                blend: {
+                  color: {
+                    srcFactor: "src-alpha",
+                    dstFactor: "one-minus-src-alpha",
+                    operation: "add"
+                  },
+                  alpha: {
+                    srcFactor: "one",
+                    dstFactor: "one-minus-src-alpha",
+                    operation: "add"
+                  }
+                }
+              }
+            ]
+          },
+          primitive: {
+            topology: "triangle-list",
+            cullMode: "none"
+          },
+          depthStencil: {
+            format: "depth24plus",
+            depthWriteEnabled: false,
+            depthCompare: "less-equal"
+          }
+        });
+        const atlas = getProceduralTextureAtlas();
+        const atlasTexture = device.createTexture({
+          size: { width: atlas.width, height: atlas.height, depthOrArrayLayers: 1 },
+          format: "rgba8unorm",
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+        });
+        device.queue.writeTexture(
+          { texture: atlasTexture },
+          atlas.data.buffer,
+          {
+            offset: atlas.data.byteOffset,
+            bytesPerRow: atlas.width * 4,
+            rowsPerImage: atlas.height
+          },
+          { width: atlas.width, height: atlas.height, depthOrArrayLayers: 1 }
+        );
+        const sampler = device.createSampler({
+          magFilter: "nearest",
+          minFilter: "linear",
+          addressModeU: "clamp-to-edge",
+          addressModeV: "clamp-to-edge"
+        });
+        const uniformBuffer = device.createBuffer({
+          size: UNIFORM_BUFFER_SIZE,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });
+        const bindGroup = device.createBindGroup({
+          layout: bindGroupLayout,
+          entries: [
+            { binding: 0, resource: { buffer: uniformBuffer } },
+            { binding: 1, resource: sampler },
+            { binding: 2, resource: atlasTexture.createView() }
+          ]
+        });
+        debugLog("WebGPU 3D Wind Waker renderer initialized");
+        return new _WebGPURenderer(
+          canvas,
+          device,
+          context,
+          celOpaquePipeline,
+          outlinePipeline,
+          translucentPipeline,
+          uniformBuffer,
+          bindGroup
+        );
+      } catch (err) {
+        debugLog(`WebGPU init failed: ${String(err)}`);
+        return null;
+      }
+    }
+    ensureDepthTexture() {
+      const w = Math.max(1, this.canvas.width);
+      const h = Math.max(1, this.canvas.height);
+      if (!this.depthTexture || this.depthWidth !== w || this.depthHeight !== h) {
+        this.depthTexture?.destroy();
+        this.depthTexture = this.device.createTexture({
+          size: { width: w, height: h, depthOrArrayLayers: 1 },
+          format: "depth24plus",
+          usage: GPUTextureUsage.RENDER_ATTACHMENT
+        });
+        this.depthWidth = w;
+        this.depthHeight = h;
+      }
+      return this.depthTexture.createView();
+    }
+    getOrUploadStaticLevelBuffer(state) {
+      const existing = this.staticBuffers.get(state.currentLevelId);
+      if (existing) {
+        return existing;
+      }
+      const mesh = getStaticLevelMesh(state.currentLevelId, state.map);
+      const byteLength = Math.max(64, mesh.vertices.byteLength);
+      const buffer = this.device.createBuffer({
+        size: byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      });
+      if (mesh.vertices.byteLength > 0) {
+        this.device.queue.writeBuffer(
+          buffer,
+          0,
+          mesh.vertices.buffer,
+          mesh.vertices.byteOffset,
+          mesh.vertices.byteLength
+        );
+      }
+      const entry = { buffer, vertexCount: mesh.vertexCount };
+      this.staticBuffers.set(state.currentLevelId, entry);
+      return entry;
+    }
+    render(state, camera) {
+      const w = Math.max(1, this.canvas.width);
+      const h = Math.max(1, this.canvas.height);
+      const aspect = w / h;
+      const proj = mat4Perspective(camera.fovY, aspect, camera.near, camera.far);
+      const view = mat4LookAt(camera.eye, camera.target, camera.up);
+      const viewProj = mat4Multiply(proj, view);
+      const staticEntry = this.getOrUploadStaticLevelBuffer(state);
+      const dynamicScene = buildDynamicSceneMeshes(state);
+      if (dynamicScene.opaque.vertices.byteLength > this.dynamicOpaqueCapacityBytes) {
+        this.dynamicOpaqueBuffer.destroy();
+        this.dynamicOpaqueCapacityBytes = dynamicScene.opaque.vertices.byteLength * 2;
+        this.dynamicOpaqueBuffer = this.device.createBuffer({
+          size: this.dynamicOpaqueCapacityBytes,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+      }
+      if (dynamicScene.opaque.vertices.byteLength > 0) {
+        this.device.queue.writeBuffer(
+          this.dynamicOpaqueBuffer,
+          0,
+          dynamicScene.opaque.vertices.buffer,
+          dynamicScene.opaque.vertices.byteOffset,
+          dynamicScene.opaque.vertices.byteLength
+        );
+      }
+      if (dynamicScene.translucent.vertices.byteLength > this.dynamicTranslucentCapacityBytes) {
+        this.dynamicTranslucentBuffer.destroy();
+        this.dynamicTranslucentCapacityBytes = dynamicScene.translucent.vertices.byteLength * 2;
+        this.dynamicTranslucentBuffer = this.device.createBuffer({
+          size: this.dynamicTranslucentCapacityBytes,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+        });
+      }
+      if (dynamicScene.translucent.vertices.byteLength > 0) {
+        this.device.queue.writeBuffer(
+          this.dynamicTranslucentBuffer,
+          0,
+          dynamicScene.translucent.vertices.buffer,
+          dynamicScene.translucent.vertices.byteOffset,
+          dynamicScene.translucent.vertices.byteLength
+        );
+      }
+      const u = this.uniformScratch;
+      u.set(viewProj, 0);
+      u[16] = camera.eye.x;
+      u[17] = camera.eye.y;
+      u[18] = camera.eye.z;
+      u[19] = state.elapsedTime;
+      const isOutside = state.currentLevelId === "level-outside";
+      u[20] = 0.42;
+      u[21] = 0.78;
+      u[22] = 0.46;
+      u[23] = isOutside ? 0.04 : 0.12;
+      const clearR = isOutside ? 0.09 : 0.08;
+      const clearG = isOutside ? 0.15 : 0.07;
+      const clearB = isOutside ? 0.28 : 0.11;
+      u[24] = clearR;
+      u[25] = clearG;
+      u[26] = clearB;
+      u[27] = isOutside ? 170 : 190;
+      u[28] = isOutside ? 420 : 380;
+      u[29] = dynamicScene.pointLights.length;
+      u[30] = isOutside ? 0 : 1;
+      u[31] = state.worldFadedToBlack ? 1 : 0;
+      const l0 = dynamicScene.pointLights[0];
+      if (l0) {
+        u[32] = l0.x;
+        u[33] = l0.y;
+        u[34] = l0.z;
+        u[35] = l0.radius;
+        u[36] = l0.r;
+        u[37] = l0.g;
+        u[38] = l0.b;
+        u[39] = l0.intensity;
+      } else {
+        u.fill(0, 32, 40);
+      }
+      const l1 = dynamicScene.pointLights[1];
+      if (l1) {
+        u[40] = l1.x;
+        u[41] = l1.y;
+        u[42] = l1.z;
+        u[43] = l1.radius;
+        u[44] = l1.r;
+        u[45] = l1.g;
+        u[46] = l1.b;
+        u[47] = l1.intensity;
+      } else {
+        u.fill(0, 40, 48);
+      }
+      this.device.queue.writeBuffer(
+        this.uniformBuffer,
+        0,
+        u.buffer,
+        u.byteOffset,
+        u.byteLength
+      );
+      const depthView = this.ensureDepthTexture();
+      const colorView = this.context.getCurrentTexture().createView();
+      const encoder = this.device.createCommandEncoder();
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: colorView,
+            clearValue: state.worldFadedToBlack ? { r: 0, g: 0, b: 0, a: 1 } : { r: clearR, g: clearG, b: clearB, a: 1 },
+            loadOp: "clear",
+            storeOp: "store"
+          }
+        ],
+        depthStencilAttachment: {
+          view: depthView,
+          depthClearValue: 1,
+          depthLoadOp: "clear",
+          depthStoreOp: "store"
+        }
+      });
+      pass.setBindGroup(0, this.bindGroup);
+      pass.setPipeline(this.celOpaquePipeline);
+      if (staticEntry.vertexCount > 0) {
+        pass.setVertexBuffer(0, staticEntry.buffer);
+        pass.draw(staticEntry.vertexCount);
+      }
+      if (dynamicScene.opaque.vertexCount > 0) {
+        pass.setVertexBuffer(0, this.dynamicOpaqueBuffer);
+        pass.draw(dynamicScene.opaque.vertexCount);
+      }
+      pass.setPipeline(this.outlinePipeline);
+      if (staticEntry.vertexCount > 0) {
+        pass.setVertexBuffer(0, staticEntry.buffer);
+        pass.draw(staticEntry.vertexCount);
+      }
+      if (dynamicScene.opaque.vertexCount > 0) {
+        pass.setVertexBuffer(0, this.dynamicOpaqueBuffer);
+        pass.draw(dynamicScene.opaque.vertexCount);
+      }
+      if (dynamicScene.translucent.vertexCount > 0) {
+        pass.setPipeline(this.translucentPipeline);
+        pass.setVertexBuffer(0, this.dynamicTranslucentBuffer);
+        pass.draw(dynamicScene.translucent.vertexCount);
+      }
+      pass.end();
+      this.device.queue.submit([encoder.finish()]);
+      return viewProj;
+    }
+  };
 
   // src/entities/dog.ts
   var DOG_START_X = 26.5 * TILE_SIZE;
@@ -4212,6 +7356,7 @@
     state.player.x = PLAYER_START_X;
     state.player.y = PLAYER_START_Y;
     state.player.facing = "up";
+    state.player.yaw = -Math.PI / 2;
     state.player.isMoving = false;
     state.player.walkTimer = 0;
     state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
@@ -4238,6 +7383,18 @@
     let dx = 0;
     if (input.moveVector) {
       dx = input.moveVector.x;
+    } else if (typeof input.cameraYaw === "number") {
+      const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
+      const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      const rawLen = Math.hypot(forward, strafe);
+      if (rawLen > 0) {
+        const nf = forward / rawLen;
+        const ns = strafe / rawLen;
+        const cosY = Math.cos(input.cameraYaw);
+        const sinY = Math.sin(input.cameraYaw);
+        const worldDx = nf * cosY - ns * sinY;
+        dx = Math.abs(worldDx) > 0.15 ? Math.sign(worldDx) : strafe;
+      }
     } else {
       if (input.left) dx -= 1;
       if (input.right) dx += 1;
@@ -4251,6 +7408,7 @@
     player.isMoving = true;
     player.walkTimer += dtSeconds;
     player.facing = dx < 0 ? "left" : "right";
+    player.yaw = dx < 0 ? Math.PI : 0;
     const nextX = player.x + dx * player.speed * dtSeconds;
     player.x = Math.max(ROOF_MIN_X, Math.min(ROOF_MAX_X, nextX));
   }
@@ -4549,10 +7707,20 @@
     if (!canvas) {
       throw new Error("Could not find #game-canvas element");
     }
+    let webgpuCanvas = document.getElementById("webgpu-canvas");
+    if (!webgpuCanvas && gameContainer) {
+      webgpuCanvas = document.createElement("canvas");
+      webgpuCanvas.id = "webgpu-canvas";
+      webgpuCanvas.width = 768;
+      webgpuCanvas.height = 672;
+      gameContainer.insertBefore(webgpuCanvas, canvas);
+    }
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       throw new Error("Could not get 2D rendering context");
     }
+    const webgpuRenderer = webgpuCanvas ? await WebGPURenderer.create(webgpuCanvas) : null;
+    const camera3d = createCamera3D();
     const joystickContainer = document.getElementById("virtual-joystick-container");
     const joystickStick = document.getElementById("virtual-joystick-stick");
     const mobileActionBtn = document.getElementById("mobile-action-btn");
@@ -4601,6 +7769,10 @@
       }
       canvas.style.width = `${layout.canvasWidth}px`;
       canvas.style.height = `${layout.canvasHeight}px`;
+      if (webgpuCanvas) {
+        webgpuCanvas.style.width = `${layout.canvasWidth}px`;
+        webgpuCanvas.style.height = `${layout.canvasHeight}px`;
+      }
       if (joystickContainer) {
         joystickContainer.style.width = `${layout.joystickSize}px`;
         joystickContainer.style.height = `${layout.joystickSize}px`;
@@ -4717,6 +7889,11 @@
       isJoystickActive: () => joystick?.isPointerActive() ?? false,
       isDialogueActive: () => state.activeDialogue !== null
     });
+    attachMouseLookListeners({
+      element: canvas,
+      input,
+      isDialogueActive: () => state.activeDialogue !== null
+    });
     let lastTimestamp = null;
     function frame(now) {
       applyViewportLayout(false);
@@ -4725,7 +7902,8 @@
       const isJoystickShown = joystick?.isVisible() ?? false;
       state.joystickActive = isJoystickShown;
       updateGameState(state, input, dtSeconds);
-      renderGame(ctx, state, assets);
+      updateCamera3D(camera3d, state, input, dtSeconds, canvas.width / canvas.height);
+      renderGame(ctx, state, assets, { webgpuRenderer, camera3d });
       if (mobileActionBtn) {
         if (isJoystickShown && state.nearbyInteractable) {
           mobileActionBtn.textContent = getActionLabel(state.nearbyInteractable.promptText);

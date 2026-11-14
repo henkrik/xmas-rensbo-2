@@ -25,6 +25,22 @@ import {
   measurePixelText,
   wrapPixelText,
 } from './pixelFont';
+import {
+  Camera3D,
+  createCamera3D,
+  projectWorldToScreen,
+} from './math3d';
+import {
+  buildDynamicSceneMeshes,
+  FLOATS_PER_VERTEX,
+  getStaticLevelMesh,
+} from './models3d';
+import { WebGPURenderer } from './webgpuRenderer';
+
+export interface Render3DOptions {
+  webgpuRenderer?: WebGPURenderer | null;
+  camera3d?: Camera3D;
+}
 
 export interface Camera {
   x: number;
@@ -1032,10 +1048,136 @@ function drawCollisionDebugOutlines(
   ctx.restore();
 }
 
+/**
+ * Software 3D Wind Waker cel-shaded + contour fallback renderer onto a 2D canvas context
+ * when hardware WebGPU is unavailable.
+ */
+export function renderSoftware3DScene(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  cam: Camera3D
+): void {
+  const w = ctx.canvas.width;
+  const h = ctx.canvas.height;
+
+  if (state.worldFadedToBlack) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, w, h);
+    return;
+  }
+
+  const isOutside = state.currentLevelId === 'level-outside';
+  ctx.fillStyle = isOutside ? '#172647' : '#14121c';
+  ctx.fillRect(0, 0, w, h);
+
+  const staticMesh = getStaticLevelMesh(state.currentLevelId, state.map);
+  const dynamicMeshes = buildDynamicSceneMeshes(state);
+  const sunX = 0.42;
+  const sunY = 0.78;
+  const sunZ = 0.46;
+  const sunLen = Math.hypot(sunX, sunY, sunZ);
+  const sx = sunX / sunLen;
+  const sy = sunY / sunLen;
+  const sz = sunZ / sunLen;
+
+  interface ProjectedTri {
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    depth: number;
+    fill: string;
+    outline: boolean;
+  }
+
+  const tris: ProjectedTri[] = [];
+  const collectMesh = (verts: Float32Array, count: number) => {
+    for (let i = 0; i < count; i += 3) {
+      const b0 = i * FLOATS_PER_VERTEX;
+      const b1 = (i + 1) * FLOATS_PER_VERTEX;
+      const b2 = (i + 2) * FLOATS_PER_VERTEX;
+
+      const p0 = projectWorldToScreen(
+        { x: verts[b0], y: verts[b0 + 1], z: verts[b0 + 2] },
+        cam.viewProjMatrix,
+        w,
+        h
+      );
+      const p1 = projectWorldToScreen(
+        { x: verts[b1], y: verts[b1 + 1], z: verts[b1 + 2] },
+        cam.viewProjMatrix,
+        w,
+        h
+      );
+      const p2 = projectWorldToScreen(
+        { x: verts[b2], y: verts[b2 + 1], z: verts[b2 + 2] },
+        cam.viewProjMatrix,
+        w,
+        h
+      );
+
+      if (!p0.visible && !p1.visible && !p2.visible) continue;
+      if (p0.w <= 1 || p1.w <= 1 || p2.w <= 1) continue;
+
+      const nx = verts[b0 + 3];
+      const ny = verts[b0 + 4];
+      const nz = verts[b0 + 5];
+      const ndl = nx * sx + ny * sy + nz * sz;
+      const toon = ndl > 0.36 ? 1.06 : ndl > -0.14 ? 0.84 : 0.58;
+
+      const r = Math.min(255, Math.round(verts[b0 + 8] * 255 * toon));
+      const g = Math.min(255, Math.round(verts[b0 + 9] * 255 * toon));
+      const b = Math.min(255, Math.round(verts[b0 + 10] * 255 * toon));
+      const a = verts[b0 + 11];
+      const outlineScale = verts[b0 + 13];
+
+      tris.push({
+        x0: p0.x,
+        y0: p0.y,
+        x1: p1.x,
+        y1: p1.y,
+        x2: p2.x,
+        y2: p2.y,
+        depth: (p0.w + p1.w + p2.w) / 3,
+        fill: a < 0.99 ? `rgba(${r},${g},${b},${a.toFixed(2)})` : `rgb(${r},${g},${b})`,
+        outline: outlineScale > 0.5,
+      });
+    }
+  };
+
+  collectMesh(staticMesh.vertices, staticMesh.vertexCount);
+  collectMesh(dynamicMeshes.opaque.vertices, dynamicMeshes.opaque.vertexCount);
+  collectMesh(dynamicMeshes.translucent.vertices, dynamicMeshes.translucent.vertexCount);
+
+  tris.sort((a, b) => b.depth - a.depth);
+
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 1.1;
+  ctx.strokeStyle = '#101422';
+
+  for (const t of tris) {
+    ctx.beginPath();
+    ctx.moveTo(t.x0, t.y0);
+    ctx.lineTo(t.x1, t.y1);
+    ctx.lineTo(t.x2, t.y2);
+    ctx.closePath();
+    ctx.fillStyle = t.fill;
+    ctx.fill();
+    if (t.outline) {
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
 export function renderGame(
   ctx: CanvasRenderingContext2D,
   state: GameState,
-  assets: GameAssets
+  assets: GameAssets,
+  options?: Render3DOptions
 ): void {
   const {
     map,
@@ -1051,6 +1193,32 @@ export function renderGame(
 
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+  // Primary 3D rendering path (WebGPU hardware cel-shading + contours, or software 3D fallback)
+  if (options?.webgpuRenderer || options?.camera3d) {
+    const cam = options.camera3d ?? createCamera3D();
+    if (options.webgpuRenderer) {
+      options.webgpuRenderer.render(state, cam);
+    } else {
+      renderSoftware3DScene(ctx, state, cam);
+    }
+
+    // 2D HUD overlay on top of the 3D scene (Portraits, SNES Dialogue Boxes, Interaction Prompts)
+    if (activeDialogue) {
+      const line = activeDialogue.lines[activeDialogue.currentIndex] ?? '';
+      drawDialogueBox(
+        ctx,
+        line,
+        assets.zKeySprite,
+        !state.joystickActive,
+        activeDialogue.speakerPortrait,
+        assets.portraitsAtlas
+      );
+    } else if (nearbyInteractable && !state.joystickActive) {
+      drawInteractionPrompt(ctx, nearbyInteractable.promptText, assets.zKeySprite);
+    }
+    return;
+  }
 
   // Fill background with pure black for indoor levels
   if (state.currentLevelId !== 'level-outside') {

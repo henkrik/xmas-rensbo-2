@@ -30,6 +30,24 @@ import { findNearbyInteractable } from '../src/world/interaction';
 import { drawPixelText, measurePixelText } from '../src/rendering/pixelFont';
 import { wrapTextLines } from '../src/rendering/renderer';
 import {
+  createCamera3D,
+  getPlayerElevation,
+  getTerrainHeight,
+  getTerrainNormal,
+  projectWorldToScreen,
+  updateCamera3D,
+} from '../src/rendering/math3d';
+import {
+  buildDynamicSceneMeshes,
+  FLOATS_PER_VERTEX,
+  getStaticLevelMesh,
+} from '../src/rendering/models3d';
+import {
+  ATLAS_HEIGHT,
+  ATLAS_WIDTH,
+  getProceduralTextureAtlas,
+} from '../src/rendering/textures3d';
+import {
   createGameState,
   loadLevel,
   parseLevelQueryParam,
@@ -2283,5 +2301,132 @@ Tanja -> Alex
     expect(stateUnknown.activeDialogue?.lines[1]).toBe(
       'Ehm... this is awkward. An error occurred, gift receiver unknown.'
     );
+  });
+
+  it('supports WASD movement and camera-relative 3D movement when cameraYaw is active', () => {
+    const state = createGameState();
+    const input = createEmptyInput();
+
+    // Verify WASD and E/Space key bindings
+    expect(applyKeyEvent(input, 'KeyW', true)).toBe(true);
+    expect(input.up).toBe(true);
+    expect(applyKeyEvent(input, 'KeyW', false)).toBe(true);
+    expect(input.up).toBe(false);
+
+    expect(applyKeyEvent(input, 'KeyS', true)).toBe(true);
+    expect(input.down).toBe(true);
+    applyKeyEvent(input, 'KeyS', false);
+
+    expect(applyKeyEvent(input, 'KeyA', true)).toBe(true);
+    expect(input.left).toBe(true);
+    applyKeyEvent(input, 'KeyA', false);
+
+    expect(applyKeyEvent(input, 'KeyD', true)).toBe(true);
+    expect(input.right).toBe(true);
+    applyKeyEvent(input, 'KeyD', false);
+
+    expect(applyKeyEvent(input, 'Space', true)).toBe(true);
+    expect(input.action).toBe(true);
+    expect(input.actionJustPressed).toBe(true);
+    applyKeyEvent(input, 'Space', false);
+    input.actionJustPressed = false;
+
+    // When cameraYaw = 0 (looking East / +X), pressing W (up) moves Santa East (+X),
+    // and pressing D (right) strafes South (+Y)
+    const startX = state.player.x;
+    const startY = state.player.y;
+    input.cameraYaw = 0;
+    applyKeyEvent(input, 'KeyW', true);
+    updateGameState(state, input, 0.1);
+    expect(state.player.x).toBeGreaterThan(startX);
+    expect(Math.abs(state.player.y - startY)).toBeLessThan(0.01);
+    expect(state.player.facing).toBe('right');
+    applyKeyEvent(input, 'KeyW', false);
+
+    // Strafing right (D) while looking East (cameraYaw = 0) moves South (+Y)
+    const afterEastY = state.player.y;
+    applyKeyEvent(input, 'KeyD', true);
+    updateGameState(state, input, 0.1);
+    expect(state.player.y).toBeGreaterThan(afterEastY);
+    expect(state.player.facing).toBe('down');
+    applyKeyEvent(input, 'KeyD', false);
+  });
+
+  it('models sloped outdoor terrain and behind-the-back 3D camera following Santa', () => {
+    // Outdoor terrain slopes upward from south driveway toward main house, guest cottages, and north ridge
+    const southDrivewayH = getTerrainHeight(232, 416, 'level-outside');
+    const midDrivewayH = getTerrainHeight(232, 260, 'level-outside');
+    const mainHousePadH = getTerrainHeight(168, 104, 'level-outside');
+    const guestCottagePadH = getTerrainHeight(432, 112, 'level-outside');
+    const northRidgeH = getTerrainHeight(168, 24, 'level-outside');
+
+    expect(midDrivewayH).toBeGreaterThan(southDrivewayH);
+    expect(mainHousePadH).toBeGreaterThan(midDrivewayH);
+    expect(guestCottagePadH).toBeGreaterThan(mainHousePadH);
+    expect(northRidgeH).toBeGreaterThan(mainHousePadH);
+
+    // Indoor levels have flat 0 base terrain height and upward normal (0, 1, 0)
+    expect(getTerrainHeight(160, 160, 'level-basement')).toBe(0);
+    expect(getTerrainNormal(160, 160, 'level-basement')).toEqual({ x: 0, y: 1, z: 0 });
+
+    const outNormal = getTerrainNormal(232, 300, 'level-outside');
+    expect(outNormal.y).toBeGreaterThan(0.8);
+    expect(Math.hypot(outNormal.x, outNormal.y, outNormal.z)).toBeCloseTo(1, 4);
+
+    // Behind-the-back 3D camera positions eye behind Santa along -cameraYaw and projects Santa on screen
+    const state = createGameState();
+    const input = createEmptyInput();
+    input.cameraYaw = -Math.PI / 2; // Looking North (-Z)
+    input.cameraPitch = 0.42;
+
+    const cam = createCamera3D();
+    updateCamera3D(cam, state, input, 0.016, 256 / 224);
+
+    const playerCenterZ = state.player.y + state.player.height / 2;
+    // Camera eye should be South (+Z) and elevated (+Y) behind Santa's back when looking North
+    expect(cam.eye.z).toBeGreaterThan(playerCenterZ);
+    expect(cam.eye.y).toBeGreaterThan(getPlayerElevation(state));
+
+    const screenPt = projectWorldToScreen(
+      {
+        x: state.player.x + state.player.width / 2,
+        y: getPlayerElevation(state) + 8,
+        z: playerCenterZ,
+      },
+      cam.viewProjMatrix,
+      256,
+      224
+    );
+    expect(screenPt.visible).toBe(true);
+    expect(screenPt.x).toBeGreaterThan(60);
+    expect(screenPt.x).toBeLessThan(196);
+  });
+
+  it('builds 3D Wind Waker meshes and procedural texture atlas for all game levels and entities', () => {
+    const atlas = getProceduralTextureAtlas();
+    expect(atlas.width).toBe(ATLAS_WIDTH);
+    expect(atlas.height).toBe(ATLAS_HEIGHT);
+    expect(atlas.data.byteLength).toBe(ATLAS_WIDTH * ATLAS_HEIGHT * 4);
+
+    const levelIds = [
+      'level-outside',
+      'level-basement',
+      'level-upstairs',
+      'level-people',
+    ] as const;
+
+    for (const levelId of levelIds) {
+      const state = createGameState({ initialLevelId: levelId });
+      const staticMesh = getStaticLevelMesh(levelId, state.map);
+      expect(staticMesh.vertexCount).toBeGreaterThan(100);
+      expect(staticMesh.vertexCount % 3).toBe(0);
+      expect(staticMesh.vertices.length).toBe(
+        staticMesh.vertexCount * FLOATS_PER_VERTEX
+      );
+
+      const dyn = buildDynamicSceneMeshes(state);
+      expect(dyn.opaque.vertexCount).toBeGreaterThan(30);
+      expect(dyn.opaque.vertexCount % 3).toBe(0);
+    }
   });
 });

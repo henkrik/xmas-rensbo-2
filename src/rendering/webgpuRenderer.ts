@@ -33,6 +33,7 @@ import {
 
 const VERTEX_STRIDE_BYTES = FLOATS_PER_VERTEX * 4; // 56 bytes
 const UNIFORM_BUFFER_SIZE = 256; // 64 floats
+const MSAA_SAMPLE_COUNT = 4;
 
 const WGSL_SHADER_SOURCE = /* wgsl */ `
 struct SceneUniforms {
@@ -100,7 +101,7 @@ fn vs_outline(in: VertexInput) -> VertexOutput {
   var clip = scene.viewProj * vec4<f32>(extrudedPos, 1.0);
   // Push outline slightly back in depth so interior faces are occluded by the opaque pass
   // while outer silhouette edges remain crisp and unbroken.
-  clip.z = min(clip.w * 0.9999, clip.z + 0.0022 * clip.w);
+  clip.z = min(clip.w * 0.9999, clip.z + 0.0020 * clip.w);
 
   out.clipPos = clip;
   out.worldPos = extrudedPos;
@@ -115,7 +116,7 @@ fn sampleAtlas(texIdFloat: f32, rawUv: vec2<f32>) -> vec4<f32> {
   let tid = i32(round(texIdFloat));
   let col = f32(tid % ${ATLAS_COLS});
   let row = f32(tid / ${ATLAS_COLS});
-  let wrappedUv = clamp(fract(rawUv * 0.9999), vec2<f32>(0.05), vec2<f32>(0.95));
+  let wrappedUv = clamp(fract(rawUv * 0.9999), vec2<f32>(0.03), vec2<f32>(0.97));
   let atlasUv = vec2<f32>(
     (col + wrappedUv.x) / f32(${ATLAS_COLS}.0),
     (row + wrappedUv.y) / f32(${ATLAS_ROWS}.0)
@@ -140,15 +141,12 @@ fn computePointLightToon(
     return vec3<f32>(0.0);
   }
   let L = toLight / max(0.001, dist);
-  let ndl = max(0.25, dot(N, L));
+  let ndl = max(0.28, dot(N, L));
   let normDist = 1.0 - (dist / radius);
-  // Stepped Wind Waker lantern/hearth toon rings
-  var ring = 0.0;
-  if (normDist > 0.62) {
-    ring = 1.0;
-  } else if (normDist > 0.25) {
-    ring = 0.48;
-  }
+  // Smooth-edged Wind Waker HD lantern/hearth toon rings
+  let outerRing = smoothstep(0.20, 0.28, normDist) * 0.48;
+  let innerRing = smoothstep(0.58, 0.66, normDist) * 0.56;
+  let ring = outerRing + innerRing;
   return lightColorInt.rgb * (ring * intensity * ndl);
 }
 
@@ -167,28 +165,33 @@ fn fs_cel(in: VertexOutput) -> @location(0) vec4<f32> {
   let ambientBoost = scene.sunDirAndAmbient.w;
   let ndl = dot(N, sunDir);
 
-  // Wind Waker 3-band cel shading quantization
-  var toonBand = vec3<f32>(0.55, 0.60, 0.72); // cool winter shadow band
-  if (ndl > 0.36) {
-    toonBand = vec3<f32>(1.08, 1.05, 1.00); // warm sunlit band
-  } else if (ndl > -0.14) {
-    toonBand = vec3<f32>(0.82, 0.84, 0.90); // mid-tone band
-  }
+  // Hemispheric sky-to-ground bounce fill (Wind Waker HD soft ambient)
+  let hemiFactor = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+  let shadowTone = mix(vec3<f32>(0.50, 0.55, 0.68), vec3<f32>(0.62, 0.68, 0.80), hemiFactor);
+  let midTone = vec3<f32>(0.84, 0.87, 0.94);
+  let litTone = vec3<f32>(1.10, 1.07, 1.01);
+
+  // Anti-aliased 3-band Wind Waker HD cel shading
+  let band1 = smoothstep(-0.16, -0.09, ndl);
+  let band2 = smoothstep(0.32, 0.39, ndl);
+  var toonBand = mix(shadowTone, midTone, band1);
+  toonBand = mix(toonBand, litTone, band2);
   toonBand = toonBand + vec3<f32>(ambientBoost);
 
   // Stepped point lights (fireplace hearth, Christmas tree star, EV sparks, windows)
   let pl0 = computePointLightToon(in.worldPos, N, scene.light0PosRad, scene.light0ColorInt);
   let pl1 = computePointLightToon(in.worldPos, N, scene.light1PosRad, scene.light1ColorInt);
 
-  // Subtle stepped Wind Waker rim light on grazing silhouettes
+  // View vector for Wind Waker HD specular & Fresnel rim highlights
   let V = normalize(scene.cameraPosAndTime.xyz - in.worldPos);
-  let rimDot = 1.0 - max(0.0, dot(N, V));
-  var rim = 0.0;
-  if (rimDot > 0.74 && ndl > -0.1) {
-    rim = 0.14;
-  }
+  let H = normalize(sunDir + V);
+  let ndh = max(0.0, dot(N, H));
+  let spec = smoothstep(0.89, 0.93, ndh) * step(0.15, ndl) * 0.16;
 
-  var litColor = baseAlbedo * (toonBand + pl0 + pl1) + vec3<f32>(rim);
+  let rimDot = 1.0 - max(0.0, dot(N, V));
+  let rim = smoothstep(0.68, 0.78, rimDot) * smoothstep(-0.20, 0.15, ndl) * 0.18;
+
+  var litColor = baseAlbedo * (toonBand + pl0 + pl1) + vec3<f32>(spec + rim);
 
   // Atmospheric distance fog
   let camDist = length(in.worldPos - scene.cameraPosAndTime.xyz);
@@ -208,7 +211,7 @@ fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, 1.0);
   }
   // Deep Wind Waker cartoon ink contour tinted slightly by object color
-  let ink = mix(vec3<f32>(0.06, 0.07, 0.12), in.color.rgb * 0.22, 0.35);
+  let ink = mix(vec3<f32>(0.05, 0.06, 0.11), in.color.rgb * 0.22, 0.35);
   let camDist = length(in.worldPos - scene.cameraPosAndTime.xyz);
   let fogStart = scene.fogColorAndStart.w;
   let fogEnd = scene.fogEndAndFlags.x;
@@ -233,6 +236,7 @@ export class WebGPURenderer {
   private device: GPUDevice;
   private context: GPUCanvasContext;
   private canvas: HTMLCanvasElement;
+  private format: GPUTextureFormat;
 
   private celOpaquePipeline: GPURenderPipeline;
   private outlinePipeline: GPURenderPipeline;
@@ -241,9 +245,10 @@ export class WebGPURenderer {
   private uniformBuffer: GPUBuffer;
   private bindGroup: GPUBindGroup;
 
+  private msaaColorTexture: GPUTexture | null = null;
   private depthTexture: GPUTexture | null = null;
-  private depthWidth = 0;
-  private depthHeight = 0;
+  private attachmentWidth = 0;
+  private attachmentHeight = 0;
 
   private staticBuffers = new Map<
     LevelId,
@@ -260,6 +265,7 @@ export class WebGPURenderer {
     canvas: HTMLCanvasElement,
     device: GPUDevice,
     context: GPUCanvasContext,
+    format: GPUTextureFormat,
     celOpaquePipeline: GPURenderPipeline,
     outlinePipeline: GPURenderPipeline,
     translucentPipeline: GPURenderPipeline,
@@ -269,19 +275,20 @@ export class WebGPURenderer {
     this.canvas = canvas;
     this.device = device;
     this.context = context;
+    this.format = format;
     this.celOpaquePipeline = celOpaquePipeline;
     this.outlinePipeline = outlinePipeline;
     this.translucentPipeline = translucentPipeline;
     this.uniformBuffer = uniformBuffer;
     this.bindGroup = bindGroup;
 
-    this.dynamicOpaqueCapacityBytes = 512 * 1024;
+    this.dynamicOpaqueCapacityBytes = 2 * 1024 * 1024;
     this.dynamicOpaqueBuffer = this.device.createBuffer({
       size: this.dynamicOpaqueCapacityBytes,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
 
-    this.dynamicTranslucentCapacityBytes = 256 * 1024;
+    this.dynamicTranslucentCapacityBytes = 512 * 1024;
     this.dynamicTranslucentBuffer = this.device.createBuffer({
       size: this.dynamicTranslucentCapacityBytes,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
@@ -380,6 +387,9 @@ export class WebGPURenderer {
           depthWriteEnabled: true,
           depthCompare: 'less',
         },
+        multisample: {
+          count: MSAA_SAMPLE_COUNT,
+        },
       });
 
       const outlinePipeline = device.createRenderPipeline({
@@ -402,6 +412,9 @@ export class WebGPURenderer {
           format: 'depth24plus',
           depthWriteEnabled: true,
           depthCompare: 'less-equal',
+        },
+        multisample: {
+          count: MSAA_SAMPLE_COUNT,
         },
       });
 
@@ -442,9 +455,12 @@ export class WebGPURenderer {
           depthWriteEnabled: false,
           depthCompare: 'less-equal',
         },
+        multisample: {
+          count: MSAA_SAMPLE_COUNT,
+        },
       });
 
-      // Upload Procedural Wind Waker Texture Atlas
+      // Upload Procedural Wind Waker HD Texture Atlas
       const atlas = getProceduralTextureAtlas();
       const atlasTexture = device.createTexture({
         size: { width: atlas.width, height: atlas.height, depthOrArrayLayers: 1 },
@@ -463,7 +479,7 @@ export class WebGPURenderer {
       );
 
       const sampler = device.createSampler({
-        magFilter: 'nearest',
+        magFilter: 'linear',
         minFilter: 'linear',
         addressModeU: 'clamp-to-edge',
         addressModeV: 'clamp-to-edge',
@@ -483,11 +499,12 @@ export class WebGPURenderer {
         ],
       });
 
-      debugLog('WebGPU 3D Wind Waker renderer initialized');
+      debugLog('WebGPU 3D Wind Waker HD renderer initialized (4x MSAA)');
       return new WebGPURenderer(
         canvas,
         device,
         context,
+        format,
         celOpaquePipeline,
         outlinePipeline,
         translucentPipeline,
@@ -500,20 +517,42 @@ export class WebGPURenderer {
     }
   }
 
-  private ensureDepthTexture(): GPUTextureView {
+  private ensureAttachments(): {
+    msaaColorView: GPUTextureView;
+    depthView: GPUTextureView;
+  } {
     const w = Math.max(1, this.canvas.width);
     const h = Math.max(1, this.canvas.height);
-    if (!this.depthTexture || this.depthWidth !== w || this.depthHeight !== h) {
+    if (
+      !this.depthTexture ||
+      !this.msaaColorTexture ||
+      this.attachmentWidth !== w ||
+      this.attachmentHeight !== h
+    ) {
+      this.msaaColorTexture?.destroy();
       this.depthTexture?.destroy();
+
+      this.msaaColorTexture = this.device.createTexture({
+        size: { width: w, height: h, depthOrArrayLayers: 1 },
+        sampleCount: MSAA_SAMPLE_COUNT,
+        format: this.format,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+
       this.depthTexture = this.device.createTexture({
         size: { width: w, height: h, depthOrArrayLayers: 1 },
+        sampleCount: MSAA_SAMPLE_COUNT,
         format: 'depth24plus',
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       });
-      this.depthWidth = w;
-      this.depthHeight = h;
+
+      this.attachmentWidth = w;
+      this.attachmentHeight = h;
     }
-    return this.depthTexture.createView();
+    return {
+      msaaColorView: this.msaaColorTexture.createView(),
+      depthView: this.depthTexture.createView(),
+    };
   }
 
   private getOrUploadStaticLevelBuffer(
@@ -662,26 +701,27 @@ export class WebGPURenderer {
       u.byteLength
     );
 
-    const depthView = this.ensureDepthTexture();
+    const { msaaColorView, depthView } = this.ensureAttachments();
     const colorView = this.context.getCurrentTexture().createView();
     const encoder = this.device.createCommandEncoder();
 
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
-          view: colorView,
+          view: msaaColorView,
+          resolveTarget: colorView,
           clearValue: state.worldFadedToBlack
             ? { r: 0, g: 0, b: 0, a: 1 }
             : { r: clearR, g: clearG, b: clearB, a: 1 },
           loadOp: 'clear',
-          storeOp: 'store',
+          storeOp: 'discard',
         },
       ],
       depthStencilAttachment: {
         view: depthView,
         depthClearValue: 1.0,
         depthLoadOp: 'clear',
-        depthStoreOp: 'store',
+        depthStoreOp: 'discard',
       },
     });
 

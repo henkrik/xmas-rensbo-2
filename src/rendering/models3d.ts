@@ -1,9 +1,10 @@
 /**
- * 3D Mesh Builder & Procedural "Zelda: The Wind Waker" 3D Asset Models.
+ * High-Fi 3D Mesh Builder & Procedural "Zelda: The Wind Waker HD" 3D Asset Models.
  *
  * Every world asset across all levels (Outside, Basement, Upstairs, People gallery)
- * is constructed here as 3D geometry with surface normals, UV coordinates, vertex colors,
- * procedural texture atlas IDs, and contour outline thickness (`outlineScale`).
+ * is constructed with high-segment curved primitives (spheres, capsules, toruses, beveled boxes,
+ * multi-part articulated characters, furniture, vehicles, and architecture), surface normals,
+ * UV coordinates, vertex colors, procedural texture atlas IDs, and contour outline thickness.
  *
  * Vertex layout (14 floats = 56 bytes per vertex):
  *  [0..2]  x, y, z          (3D world position; X = 2D x, Y = elevation up, Z = 2D y)
@@ -90,6 +91,19 @@ export function hexToColor4(hex: string, a = 1): Color4 {
   return [r / 255, g / 255, b / 255, a];
 }
 
+export function darkenColor(c: Color4, factor: number): Color4 {
+  return [c[0] * factor, c[1] * factor, c[2] * factor, c[3]];
+}
+
+export function lightenColor(c: Color4, boost: number): Color4 {
+  return [
+    Math.min(1, c[0] + boost),
+    Math.min(1, c[1] + boost),
+    Math.min(1, c[2] + boost),
+    c[3],
+  ];
+}
+
 export class MeshBuilder {
   private data: number[] = [];
 
@@ -134,7 +148,7 @@ export class MeshBuilder {
     p2: readonly [number, number, number],
     color: Color4,
     texId: number = TexId.SOLID,
-    outlineScale = 0.7,
+    outlineScale = 0.65,
     customNormal?: readonly [number, number, number]
   ): void {
     let nx = 0;
@@ -170,7 +184,7 @@ export class MeshBuilder {
     normal: readonly [number, number, number],
     color: Color4,
     texId: number = TexId.SOLID,
-    outlineScale = 0.7,
+    outlineScale = 0.65,
     uvScaleU = 1,
     uvScaleV = 1
   ): void {
@@ -193,7 +207,7 @@ export class MeshBuilder {
     d: number,
     color: Color4,
     texId: number = TexId.SOLID,
-    outlineScale = 0.75
+    outlineScale = 0.65
   ): void {
     const hx = w * 0.5;
     const hy = h * 0.5;
@@ -248,6 +262,30 @@ export class MeshBuilder {
     pushCornerQuad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0, -1, 0]);
   }
 
+  /**
+   * Adds a chamfered/beveled 3D box whose top and side edges are beveled to catch
+   * Wind Waker HD specular & rim highlights.
+   */
+  addBeveledBox(
+    cx: number,
+    baseY: number,
+    cz: number,
+    w: number,
+    h: number,
+    d: number,
+    bevel: number,
+    color: Color4,
+    texId: number = TexId.SOLID,
+    outlineScale = 0.65
+  ): void {
+    const b = Math.min(bevel, w * 0.25, h * 0.35, d * 0.25);
+    const bodyH = Math.max(0.2, h - b);
+    this.addBox(cx, baseY, cz, w, bodyH, d, color, texId, outlineScale);
+    // Chamfered top cap
+    const topColor = lightenColor(color, 0.04);
+    this.addBox(cx, baseY + bodyH - 0.05, cz, w - b * 1.4, b + 0.05, d - b * 1.4, topColor, texId, outlineScale * 0.8);
+  }
+
   addOrientedBox(
     cx: number,
     cy: number,
@@ -259,7 +297,7 @@ export class MeshBuilder {
     pitch: number,
     color: Color4,
     texId: number = TexId.SOLID,
-    outlineScale = 0.65
+    outlineScale = 0.6
   ): void {
     const hx = w * 0.5;
     const hy = h * 0.5;
@@ -318,14 +356,15 @@ export class MeshBuilder {
     segments: number,
     color: Color4,
     texId: number = TexId.SOLID,
-    outlineScale = 0.7
+    outlineScale = 0.65
   ): void {
+    const segs = Math.max(10, segments);
     const topY = baseY + height;
     const slopeY = (radiusBottom - radiusTop) / (height || 1);
 
-    for (let i = 0; i < segments; i++) {
-      const a0 = (i / segments) * Math.PI * 2;
-      const a1 = ((i + 1) / segments) * Math.PI * 2;
+    for (let i = 0; i < segs; i++) {
+      const a0 = (i / segs) * Math.PI * 2;
+      const a1 = ((i + 1) / segs) * Math.PI * 2;
       const c0 = Math.cos(a0);
       const s0 = Math.sin(a0);
       const c1 = Math.cos(a1);
@@ -341,8 +380,8 @@ export class MeshBuilder {
       const t1: [number, number, number] = [cx + c1 * radiusTop, topY, cz + s1 * radiusTop];
       const t0: [number, number, number] = [cx + c0 * radiusTop, topY, cz + s0 * radiusTop];
 
-      const u0 = i / segments;
-      const u1 = (i + 1) / segments;
+      const u0 = i / segs;
+      const u1 = (i + 1) / segs;
 
       this.pushVertex(b0[0], b0[1], b0[2], n0[0], n0[1], n0[2], u0, 1, color, texId, outlineScale);
       this.pushVertex(b1[0], b1[1], b1[2], n1[0], n1[1], n1[2], u1, 1, color, texId, outlineScale);
@@ -374,11 +413,14 @@ export class MeshBuilder {
     segments: number,
     color: Color4,
     texId: number = TexId.SOLID,
-    outlineScale = 0.75
+    outlineScale = 0.65
   ): void {
-    this.addCylinder(cx, baseY, cz, radius, 0.02, height, segments, color, texId, outlineScale);
+    this.addCylinder(cx, baseY, cz, radius, 0.02, height, Math.max(12, segments), color, texId, outlineScale);
   }
 
+  /**
+   * Adds a smooth high-segment ellipsoid / sphere centered at `(cx, cy, cz)`.
+   */
   addSphere(
     cx: number,
     cy: number,
@@ -390,19 +432,21 @@ export class MeshBuilder {
     lonBands: number,
     color: Color4,
     texId: number = TexId.SOLID,
-    outlineScale = 0.75
+    outlineScale = 0.65
   ): void {
-    for (let lat = 0; lat < latBands; lat++) {
-      const theta0 = (lat / latBands) * Math.PI;
-      const theta1 = ((lat + 1) / latBands) * Math.PI;
+    const lats = Math.max(8, latBands);
+    const lons = Math.max(12, lonBands);
+    for (let lat = 0; lat < lats; lat++) {
+      const theta0 = (lat / lats) * Math.PI;
+      const theta1 = ((lat + 1) / lats) * Math.PI;
       const sinT0 = Math.sin(theta0);
       const cosT0 = Math.cos(theta0);
       const sinT1 = Math.sin(theta1);
       const cosT1 = Math.cos(theta1);
 
-      for (let lon = 0; lon < lonBands; lon++) {
-        const phi0 = (lon / lonBands) * Math.PI * 2;
-        const phi1 = ((lon + 1) / lonBands) * Math.PI * 2;
+      for (let lon = 0; lon < lons; lon++) {
+        const phi0 = (lon / lons) * Math.PI * 2;
+        const phi1 = ((lon + 1) / lons) * Math.PI * 2;
         const cosP0 = Math.cos(phi0);
         const sinP0 = Math.sin(phi0);
         const cosP1 = Math.cos(phi1);
@@ -418,10 +462,10 @@ export class MeshBuilder {
         const p11: [number, number, number] = [cx + n11[0] * rx, cy + n11[1] * ry, cz + n11[2] * rz];
         const p01: [number, number, number] = [cx + n01[0] * rx, cy + n01[1] * ry, cz + n01[2] * rz];
 
-        const u0 = lon / lonBands;
-        const u1 = (lon + 1) / lonBands;
-        const v0 = lat / latBands;
-        const v1 = (lat + 1) / latBands;
+        const u0 = lon / lons;
+        const u1 = (lon + 1) / lons;
+        const v0 = lat / lats;
+        const v1 = (lat + 1) / lats;
 
         this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], u0, v0, color, texId, outlineScale);
         this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], u1, v1, color, texId, outlineScale);
@@ -434,6 +478,103 @@ export class MeshBuilder {
     }
   }
 
+  /**
+   * Adds a 3D torus (donut ring) centered at `(cx, cy, cz)`, oriented around `'x'`, `'y'`, or `'z'`.
+   * Used for scarves, wreaths, rubber tires, cushions, collars, and halo rings.
+   */
+  addTorus(
+    cx: number,
+    cy: number,
+    cz: number,
+    majorR: number,
+    minorR: number,
+    ringSegs: number,
+    tubeSegs: number,
+    axis: 'x' | 'y' | 'z',
+    color: Color4,
+    texId: number = TexId.SOLID,
+    outlineScale = 0.55
+  ): void {
+    const mapAxis = (x: number, y: number, z: number): [number, number, number] => {
+      if (axis === 'y') return [x, y, z];
+      if (axis === 'x') return [y, x, z];
+      return [x, z, y];
+    };
+
+    for (let i = 0; i < ringSegs; i++) {
+      const u0 = (i / ringSegs) * Math.PI * 2;
+      const u1 = ((i + 1) / ringSegs) * Math.PI * 2;
+      const cu0 = Math.cos(u0);
+      const su0 = Math.sin(u0);
+      const cu1 = Math.cos(u1);
+      const su1 = Math.sin(u1);
+
+      for (let j = 0; j < tubeSegs; j++) {
+        const v0 = (j / tubeSegs) * Math.PI * 2;
+        const v1 = ((j + 1) / tubeSegs) * Math.PI * 2;
+        const cv0 = Math.cos(v0);
+        const sv0 = Math.sin(v0);
+        const cv1 = Math.cos(v1);
+        const sv1 = Math.sin(v1);
+
+        const pt = (cu: number, su: number, cv: number, sv: number): [number, number, number] => {
+          const r = majorR + minorR * cv;
+          const [lx, ly, lz] = mapAxis(r * cu, minorR * sv, r * su);
+          return [cx + lx, cy + ly, cz + lz];
+        };
+
+        const nm = (cu: number, su: number, cv: number, sv: number): [number, number, number] => {
+          return mapAxis(cv * cu, sv, cv * su);
+        };
+
+        const p00 = pt(cu0, su0, cv0, sv0);
+        const p10 = pt(cu1, su1, cv0, sv0);
+        const p11 = pt(cu1, su1, cv1, sv1);
+        const p01 = pt(cu0, su0, cv1, sv1);
+
+        const n00 = nm(cu0, su0, cv0, sv0);
+        const n10 = nm(cu1, su1, cv0, sv0);
+        const n11 = nm(cu1, su1, cv1, sv1);
+        const n01 = nm(cu0, su0, cv1, sv1);
+
+        this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], 0, 0, color, texId, outlineScale);
+        this.pushVertex(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], 1, 0, color, texId, outlineScale);
+        this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
+
+        this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], 0, 0, color, texId, outlineScale);
+        this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
+        this.pushVertex(p01[0], p01[1], p01[2], n01[0], n01[1], n01[2], 0, 1, color, texId, outlineScale);
+      }
+    }
+  }
+
+  /**
+   * Adds a soft dark-blue contact shadow disc on the floor/snow to ground characters and props.
+   */
+  addShadowDisc(
+    cx: number,
+    y: number,
+    cz: number,
+    rx: number,
+    rz: number,
+    alpha = 0.32
+  ): void {
+    const segs = 12;
+    const centerColor: Color4 = [0.04, 0.06, 0.14, alpha];
+    const edgeColor: Color4 = [0.04, 0.06, 0.14, 0.02];
+    const sy = y + 0.12;
+    for (let i = 0; i < segs; i++) {
+      const a0 = (i / segs) * Math.PI * 2;
+      const a1 = ((i + 1) / segs) * Math.PI * 2;
+      this.pushVertex(cx, sy, cz, 0, 1, 0, 0.5, 0.5, centerColor, TexId.SOLID, 0);
+      this.pushVertex(cx + Math.cos(a1) * rx, sy, cz + Math.sin(a1) * rz, 0, 1, 0, 1, 1, edgeColor, TexId.SOLID, 0);
+      this.pushVertex(cx + Math.cos(a0) * rx, sy, cz + Math.sin(a0) * rz, 0, 1, 0, 0, 1, edgeColor, TexId.SOLID, 0);
+    }
+  }
+
+  /**
+   * Adds a pitched gable roof with overhang eaves, fascia trim, snow ridge cap, and optional icicles.
+   */
   addGableRoof(
     cx: number,
     baseY: number,
@@ -445,7 +586,8 @@ export class MeshBuilder {
     roofColor: Color4,
     gableColor: Color4,
     texId: number = TexId.ROOF_SLATE,
-    outlineScale = 0.85
+    outlineScale = 0.75,
+    withIcicles = true
   ): void {
     const hx = w * 0.5;
     const hz = d * 0.5;
@@ -465,7 +607,19 @@ export class MeshBuilder {
       this.addTriangle(nwL, swL, rW, gableColor, TexId.HOUSE_SIDING, outlineScale, [-1, 0, 0]);
       this.addTriangle(seL, neL, rE, gableColor, TexId.HOUSE_SIDING, outlineScale, [1, 0, 0]);
       this.addQuad(nwL, neL, seL, swL, [0, -1, 0], gableColor, TexId.SOLID, 0);
-      this.addBox(cx, topY - 1.5, cz, w + 1.5, 2.2, 4.5, rgb(244, 249, 255), TexId.SNOW, 0.5);
+      // Sculpted rounded snow ridge cap
+      this.addBox(cx, topY - 1.5, cz, w + 1.8, 2.4, 5.2, rgb(246, 250, 255), TexId.SNOW, 0.45);
+      // Snow eaves strips & hanging icicles along South and North eaves
+      this.addBox(cx, baseY - 0.4, cz + hz, w + 1.0, 1.4, 2.2, rgb(244, 249, 255), TexId.SNOW, 0.4);
+      this.addBox(cx, baseY - 0.4, cz - hz, w + 1.0, 1.4, 2.2, rgb(244, 249, 255), TexId.SNOW, 0.4);
+      if (withIcicles) {
+        const icicleCount = Math.max(3, Math.floor(w / 14));
+        for (let i = 0; i < icicleCount; i++) {
+          const ix = cx - hx + 6 + (i / Math.max(1, icicleCount - 1)) * (w - 12);
+          const ih = 2.6 + ((i * 7) % 3) * 0.9;
+          this.addCone(ix, baseY - ih, cz + hz, 0.65, ih, 6, rgb(212, 238, 255), TexId.SOLID, 0.25);
+        }
+      }
     } else {
       const swL: [number, number, number] = [cx - hx, baseY, cz + hz];
       const seL: [number, number, number] = [cx + hx, baseY, cz + hz];
@@ -480,7 +634,7 @@ export class MeshBuilder {
       this.addTriangle(swL, seL, rS, gableColor, TexId.HOUSE_SIDING, outlineScale, [0, 0, 1]);
       this.addTriangle(neL, nwL, rN, gableColor, TexId.HOUSE_SIDING, outlineScale, [0, 0, -1]);
       this.addQuad(nwL, neL, seL, swL, [0, -1, 0], gableColor, TexId.SOLID, 0);
-      this.addBox(cx, topY - 1.5, cz, 4.5, 2.2, d + 1.5, rgb(244, 249, 255), TexId.SNOW, 0.5);
+      this.addBox(cx, topY - 1.5, cz, 5.2, 2.4, d + 1.8, rgb(246, 250, 255), TexId.SNOW, 0.45);
     }
   }
 
@@ -494,7 +648,7 @@ export class MeshBuilder {
 }
 
 // ============================================================================
-// 3D Trees, Rocks, and Foliage Models
+// High-Fi 3D Trees, Rocks, and Foliage Models
 // ============================================================================
 
 function addPineTree3D(
@@ -505,51 +659,86 @@ function addPineTree3D(
   variant: number,
   scale = 1.0
 ): void {
+  // Snow mound at base of trunk
+  mb.addSphere(cx, baseY + 0.4, cz, 4.2 * scale, 1.4 * scale, 4.2 * scale, 6, 10, rgb(242, 248, 255), TexId.SNOW, 0.35);
+
   if (variant === 0) {
-    mb.addCylinder(cx, baseY, cz, 2.2 * scale, 1.5 * scale, 9 * scale, 7, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.65);
-    mb.addCone(cx, baseY + 5 * scale, cz, 8.8 * scale, 11 * scale, 8, rgb(29, 92, 51), TexId.PINE_FOLIAGE, 0.8);
-    mb.addCone(cx, baseY + 11 * scale, cz, 7.0 * scale, 10 * scale, 8, rgb(39, 117, 65), TexId.PINE_FOLIAGE, 0.8);
-    mb.addCone(cx, baseY + 17 * scale, cz, 5.0 * scale, 9 * scale, 8, rgb(52, 138, 79), TexId.PINE_FOLIAGE, 0.8);
-    mb.addCone(cx, baseY + 21.5 * scale, cz, 3.0 * scale, 5.2 * scale, 8, rgb(242, 248, 255), TexId.SNOW, 0.6);
+    // Variant 0: Lush 4-tier Norway spruce with snow pillows on boughs
+    mb.addCylinder(cx, baseY, cz, 2.5 * scale, 1.5 * scale, 9.5 * scale, 12, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.6);
+    mb.addCone(cx, baseY + 4.5 * scale, cz, 9.4 * scale, 9.5 * scale, 14, rgb(26, 88, 48), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 9.8 * scale, cz, 7.8 * scale, 9.0 * scale, 14, rgb(34, 108, 58), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 15.0 * scale, cz, 6.0 * scale, 8.2 * scale, 14, rgb(44, 126, 68), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 19.8 * scale, cz, 4.2 * scale, 7.2 * scale, 14, rgb(56, 142, 80), TexId.PINE_FOLIAGE, 0.7);
+    // Fluffy snow crown
+    mb.addCone(cx, baseY + 23.0 * scale, cz, 2.8 * scale, 4.8 * scale, 14, rgb(246, 250, 255), TexId.SNOW, 0.55);
   } else if (variant === 1) {
-    addPineTree3D(mb, cx - 3.2 * scale, baseY, cz + 1.5 * scale, 0, 0.72 * scale);
-    addPineTree3D(mb, cx + 3.2 * scale, baseY, cz - 1.2 * scale, 2, 0.85 * scale);
+    // Variant 1: Twin sister alpine pines
+    addPineTree3D(mb, cx - 3.4 * scale, baseY, cz + 1.5 * scale, 0, 0.74 * scale);
+    addPineTree3D(mb, cx + 3.2 * scale, baseY, cz - 1.2 * scale, 2, 0.88 * scale);
   } else if (variant === 2) {
-    mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.3 * scale, 7 * scale, 6, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.65);
-    mb.addCone(cx, baseY + 4 * scale, cz, 7.4 * scale, 14 * scale, 8, rgb(36, 108, 78), TexId.PINE_FOLIAGE, 0.8);
-    mb.addCone(cx, baseY + 11 * scale, cz, 5.4 * scale, 12 * scale, 8, rgb(54, 134, 98), TexId.PINE_FOLIAGE, 0.8);
-    mb.addCone(cx, baseY + 18 * scale, cz, 3.2 * scale, 6 * scale, 8, rgb(240, 248, 255), TexId.SNOW, 0.6);
+    // Variant 2: Frosty blue-teal conical spruce
+    mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.3 * scale, 7.5 * scale, 12, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.6);
+    mb.addCone(cx, baseY + 3.8 * scale, cz, 8.0 * scale, 11.5 * scale, 14, rgb(32, 102, 74), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 9.8 * scale, cz, 6.2 * scale, 10.5 * scale, 14, rgb(46, 124, 92), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 15.5 * scale, cz, 4.4 * scale, 9.0 * scale, 14, rgb(60, 144, 108), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 20.2 * scale, cz, 2.8 * scale, 5.2 * scale, 14, rgb(244, 250, 255), TexId.SNOW, 0.55);
   } else if (variant === 3) {
-    // Tall crooked Scots pine
-    mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.4 * scale, 18 * scale, 7, rgb(146, 78, 42), TexId.WOOD_GRAIN, 0.7);
-    mb.addSphere(cx - 2 * scale, baseY + 18 * scale, cz, 6.2 * scale, 4.0 * scale, 6.2 * scale, 5, 7, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.8);
-    mb.addSphere(cx + 2.5 * scale, baseY + 20 * scale, cz - 1 * scale, 5.8 * scale, 3.8 * scale, 5.8 * scale, 5, 7, rgb(44, 118, 64), TexId.PINE_FOLIAGE, 0.8);
-    mb.addSphere(cx, baseY + 22 * scale, cz, 5.2 * scale, 2.4 * scale, 5.2 * scale, 4, 7, rgb(242, 248, 255), TexId.SNOW, 0.6);
+    // Variant 3: Sculpted Nordic Scots pine (curved reddish bark trunk + multi-lobe canopy)
+    mb.addCylinder(cx, baseY, cz, 2.3 * scale, 1.8 * scale, 9 * scale, 12, rgb(132, 70, 38), TexId.WOOD_GRAIN, 0.65);
+    mb.addOrientedBox(cx + 0.6 * scale, baseY + 13.5 * scale, cz, 2.8 * scale, 11 * scale, 2.8 * scale, 0.2, 0.14, rgb(156, 84, 44), TexId.WOOD_GRAIN, 0.6);
+    mb.addSphere(cx - 2.4 * scale, baseY + 18.5 * scale, cz + 0.8 * scale, 6.4 * scale, 3.8 * scale, 6.4 * scale, 8, 12, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.7);
+    mb.addSphere(cx + 2.8 * scale, baseY + 20.5 * scale, cz - 1.0 * scale, 6.0 * scale, 3.6 * scale, 6.0 * scale, 8, 12, rgb(46, 118, 64), TexId.PINE_FOLIAGE, 0.7);
+    mb.addSphere(cx + 0.2 * scale, baseY + 22.8 * scale, cz, 5.6 * scale, 2.5 * scale, 5.6 * scale, 8, 12, rgb(246, 250, 255), TexId.SNOW, 0.55);
   } else {
-    // Winter silver birch
-    mb.addCylinder(cx, baseY, cz, 1.7 * scale, 1.1 * scale, 16 * scale, 7, rgb(242, 240, 236), TexId.BIRCH_BARK, 0.7);
-    mb.addOrientedBox(cx - 2.5 * scale, baseY + 13 * scale, cz, 1.0 * scale, 7 * scale, 1.0 * scale, 0.3, 0.55, rgb(235, 232, 228), TexId.BIRCH_BARK, 0.55);
-    mb.addOrientedBox(cx + 2.5 * scale, baseY + 14 * scale, cz, 1.0 * scale, 6.5 * scale, 1.0 * scale, -0.4, -0.5, rgb(235, 232, 228), TexId.BIRCH_BARK, 0.55);
-    mb.addSphere(cx, baseY + 17.5 * scale, cz, 5.5 * scale, 4.2 * scale, 5.5 * scale, 5, 7, rgb(228, 238, 250), TexId.SNOW, 0.7);
+    // Variant 4: High-Fi Winter Silver Birch with multi-limbed crown & snow pillows
+    mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.2 * scale, 16 * scale, 12, rgb(244, 242, 238), TexId.BIRCH_BARK, 0.65);
+    mb.addOrientedBox(cx - 2.6 * scale, baseY + 13.5 * scale, cz + 0.6 * scale, 1.1 * scale, 7.5 * scale, 1.1 * scale, 0.3, 0.52, rgb(238, 235, 230), TexId.BIRCH_BARK, 0.5);
+    mb.addOrientedBox(cx + 2.6 * scale, baseY + 14.2 * scale, cz - 0.6 * scale, 1.1 * scale, 7.0 * scale, 1.1 * scale, -0.4, -0.48, rgb(238, 235, 230), TexId.BIRCH_BARK, 0.5);
+    mb.addSphere(cx - 2.2 * scale, baseY + 17.2 * scale, cz + 0.6 * scale, 4.4 * scale, 3.2 * scale, 4.4 * scale, 8, 12, rgb(232, 242, 252), TexId.SNOW, 0.6);
+    mb.addSphere(cx + 2.2 * scale, baseY + 18.0 * scale, cz - 0.6 * scale, 4.2 * scale, 3.0 * scale, 4.2 * scale, 8, 12, rgb(236, 245, 255), TexId.SNOW, 0.6);
+    mb.addSphere(cx, baseY + 19.6 * scale, cz, 4.8 * scale, 3.4 * scale, 4.8 * scale, 8, 12, rgb(246, 250, 255), TexId.SNOW, 0.6);
   }
 }
 
 function addThujaTree3D(mb: MeshBuilder, cx: number, baseY: number, cz: number): void {
-  mb.addCylinder(cx, baseY, cz, 1.5, 1.0, 4.5, 6, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.6);
-  mb.addCone(cx, baseY + 3, cz, 5.2, 18, 8, rgb(42, 126, 68), TexId.PINE_FOLIAGE, 0.75);
-  mb.addCone(cx, baseY + 14.5, cz, 2.5, 6.8, 8, rgb(240, 248, 255), TexId.SNOW, 0.55);
+  mb.addSphere(cx, baseY + 0.3, cz, 3.2, 1.0, 3.2, 6, 10, rgb(242, 248, 255), TexId.SNOW, 0.3);
+  mb.addCylinder(cx, baseY, cz, 1.5, 1.0, 4.5, 10, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.55);
+  mb.addCone(cx, baseY + 3.0, cz, 5.4, 9.5, 12, rgb(36, 114, 60), TexId.PINE_FOLIAGE, 0.65);
+  mb.addCone(cx, baseY + 8.5, cz, 4.4, 9.0, 12, rgb(44, 130, 70), TexId.PINE_FOLIAGE, 0.65);
+  mb.addCone(cx, baseY + 14.0, cz, 3.1, 7.2, 12, rgb(54, 144, 80), TexId.PINE_FOLIAGE, 0.65);
+  mb.addCone(cx, baseY + 17.5, cz, 2.0, 4.5, 12, rgb(244, 250, 255), TexId.SNOW, 0.5);
 }
 
 function addHedgeTile3D(mb: MeshBuilder, cx: number, baseY: number, cz: number): void {
-  mb.addBox(cx, baseY, cz, 15.5, 8.5, 15.5, rgb(38, 112, 58), TexId.PINE_FOLIAGE, 0.75);
-  mb.addBox(cx, baseY + 7.8, cz, 16.0, 2.2, 16.0, rgb(242, 248, 255), TexId.SNOW, 0.55);
+  mb.addBeveledBox(cx, baseY, cz, 15.6, 8.8, 15.6, 1.8, rgb(38, 114, 58), TexId.PINE_FOLIAGE, 0.65);
+  mb.addBeveledBox(cx, baseY + 7.6, cz, 16.0, 2.4, 16.0, 1.0, rgb(244, 250, 255), TexId.SNOW, 0.45);
 }
 
 function addGraniteCliff3D(mb: MeshBuilder, cx: number, baseY: number, cz: number, seed: number): void {
-  const h = 14 + (seed % 5) * 3;
-  const rx = 10 + (seed % 3) * 1.5;
-  mb.addCylinder(cx, baseY - 2, cz, rx, rx * 0.7, h, 7, rgb(108, 116, 128), TexId.STONE_FLOOR, 0.85);
-  mb.addSphere(cx, baseY + h - 2.2, cz, rx * 0.68, 2.5, rx * 0.68, 4, 7, rgb(242, 248, 255), TexId.SNOW, 0.6);
+  const h = 15 + (seed % 5) * 3;
+  const rx = 10.5 + (seed % 3) * 1.5;
+  mb.addCylinder(cx, baseY - 2, cz, rx, rx * 0.72, h, 10, rgb(108, 116, 128), TexId.STONE_FLOOR, 0.75);
+  mb.addSphere(cx, baseY + h - 2.0, cz, rx * 0.7, 2.8, rx * 0.7, 8, 12, rgb(244, 250, 255), TexId.SNOW, 0.55);
+}
+
+function addWindowWithShutters3D(
+  mb: MeshBuilder,
+  cx: number,
+  cy: number,
+  cz: number,
+  w: number,
+  h: number,
+  shutterColor: Color4
+): void {
+  // Outer wooden window frame & stone sill
+  mb.addBox(cx, cy - 0.8, cz + 0.3, w + 2.4, 1.2, 2.2, rgb(238, 240, 246), TexId.SOLID, 0.4);
+  mb.addBox(cx, cy + 0.2, cz, w, h, 1.4, rgb(255, 232, 142), TexId.WINDOW_GLOW, 0.45);
+  // Left & Right louvered shutters
+  const sw = Math.max(2.6, w * 0.22);
+  mb.addBox(cx - w * 0.5 - sw * 0.55, cy + 0.2, cz + 0.2, sw, h, 1.2, shutterColor, TexId.WOOD_GRAIN, 0.45);
+  mb.addBox(cx + w * 0.5 + sw * 0.55, cy + 0.2, cz + 0.2, sw, h, 1.2, shutterColor, TexId.WOOD_GRAIN, 0.45);
+  // Snow cap on window header
+  mb.addBox(cx, cy + h + 0.2, cz + 0.3, w + 2.0, 1.0, 1.8, rgb(246, 250, 255), TexId.SNOW, 0.3);
 }
 
 // ============================================================================
@@ -560,8 +749,8 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
   const mb = new MeshBuilder();
   const ts = map.tileSize; // 16
 
-  // 1. Sloped Terrain Heightfield Mesh (subdivided into 8x8 world-unit cells)
-  const step = 8;
+  // 1. High-Resolution Sloped Terrain Heightfield Mesh (subdivided into 4x4 world-unit cells)
+  const step = 4;
   const gridCols = Math.floor((map.cols * ts) / step);
   const gridRows = Math.floor((map.rows * ts) / step);
 
@@ -576,14 +765,14 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
       const tileRow = Math.min(map.rows - 1, Math.floor((z0 + step * 0.5) / ts));
       const tile = map.tiles[tileRow][tileCol];
 
-      let color: Color4 = rgb(238, 245, 255);
+      let color: Color4 = rgb(240, 246, 255);
       let texId: number = TexId.SNOW;
       let yOffset = 0;
 
       if (tile === TileType.Road || tile === TileType.ElectricCar || tile === TileType.Motorcycle) {
-        color = rgb(166, 174, 188);
+        color = rgb(168, 176, 190);
         texId = TexId.GRAVEL;
-        yOffset = -0.25;
+        yOffset = -0.28;
       }
 
       const y00 = getTerrainHeight(x0, z0, 'level-outside') + yOffset;
@@ -596,10 +785,10 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
       const n11 = getTerrainNormal(x1, z1, 'level-outside');
       const n01 = getTerrainNormal(x0, z1, 'level-outside');
 
-      const u0 = (gx % 2) * 0.5;
-      const u1 = u0 + 0.5;
-      const v0 = (gz % 2) * 0.5;
-      const v1 = v0 + 0.5;
+      const u0 = (gx % 4) * 0.25;
+      const u1 = u0 + 0.25;
+      const v0 = (gz % 4) * 0.25;
+      const v1 = v0 + 0.25;
 
       mb.pushVertex(x0, y00, z0, n00.x, n00.y, n00.z, u0, v0, color, texId, 0);
       mb.pushVertex(x0, y01, z1, n01.x, n01.y, n01.z, u0, v1, color, texId, 0);
@@ -634,7 +823,7 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
     }
   }
 
-  // 3. Main Villa House (cols 4..16 => x: 64..272, rows 3..9 => z: 48..160)
+  // 3. High-Fi Main Villa House (cols 4..16 => x: 64..272, rows 3..9 => z: 48..160)
   {
     const x0 = 4 * ts; // 64
     const x1 = 17 * ts; // 272
@@ -646,24 +835,28 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
     const d = z1 - z0; // 112
     const baseY = getTerrainHeight(5 * ts, 9 * ts, 'level-outside');
 
-    // Stone foundation plinth
-    mb.addBox(cx, baseY - 4, cz, w + 4, 6, d + 4, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.85);
+    // Chiseled granite foundation plinth
+    mb.addBeveledBox(cx, baseY - 4, cz, w + 4, 6.2, d + 4, 0.8, rgb(122, 126, 138), TexId.STONE_FLOOR, 0.8);
 
     // Main two-story cream-gold Swedish wooden facade
     const wallH = MAIN_HOUSE_WALL_HEIGHT; // 34
-    mb.addBox(cx, baseY + 2, cz, w, wallH, d, rgb(246, 222, 166), TexId.HOUSE_SIDING, 1.0);
+    mb.addBox(cx, baseY + 2, cz, w, wallH, d, rgb(246, 222, 166), TexId.HOUSE_SIDING, 0.9);
 
-    // White corner trim posts
+    // Mid-story architectural belt course & cornice trim
+    mb.addBox(cx, baseY + 18, cz, w + 1.6, 1.6, d + 1.6, rgb(248, 248, 252), TexId.SOLID, 0.45);
+    mb.addBox(cx, baseY + wallH + 0.5, cz, w + 2.0, 1.8, d + 2.0, rgb(248, 248, 252), TexId.SOLID, 0.45);
+
+    // White corner trim pilasters
     for (const [tx, tz] of [
       [x0, z0],
       [x1, z0],
       [x0, z1],
       [x1, z1],
     ]) {
-      mb.addBox(tx, baseY + 2, tz, 4.0, wallH + 0.5, 4.0, rgb(248, 248, 252), TexId.SOLID, 0.6);
+      mb.addBox(tx, baseY + 2, tz, 4.4, wallH + 0.5, 4.4, rgb(248, 248, 252), TexId.SOLID, 0.55);
     }
 
-    // Pitched slate gable roof
+    // Pitched slate gable roof with snow ridge & icicles
     const roofBaseY = baseY + 2 + wallH;
     mb.addGableRoof(
       cx,
@@ -676,71 +869,94 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
       rgb(62, 74, 94),
       rgb(238, 212, 152),
       TexId.ROOF_SLATE,
-      1.0
+      0.9,
+      true
     );
 
     // Roof walk boardwalk along z = ROOF_WALK_Y + 6 (72) from col 4 to col 8
     const roofWalkY = baseY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
-    mb.addBox(96, roofWalkY - 1.5, ROOF_WALK_Y + 6, 76, 2.2, 14, rgb(242, 248, 255), TexId.SNOW, 0.55);
+    mb.addBeveledBox(96, roofWalkY - 1.5, ROOF_WALK_Y + 6, 76, 2.2, 14, 0.5, rgb(242, 248, 255), TexId.SNOW, 0.5);
 
-    // Red brick Chimney on the roof at ROOF_CHIMNEY_BOUNDS (x: 120..136, z: 58..76)
+    // High-Fi Red Brick Chimney on the roof at ROOF_CHIMNEY_BOUNDS (x: 120..136, z: 58..76)
     const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
     const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
-    mb.addBox(chimX, roofWalkY - 4, chimZ, 16, 18, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.9);
-    mb.addBox(chimX, roofWalkY + 13.5, chimZ, 18, 2.4, 18, rgb(245, 250, 255), TexId.SNOW, 0.6);
-    mb.addBox(chimX, roofWalkY + 15.0, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
+    mb.addBox(chimX, roofWalkY - 4, chimZ, 16, 17, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.8);
+    // Corbeled brick chimney crown
+    mb.addBeveledBox(chimX, roofWalkY + 12.5, chimZ, 18.5, 2.8, 18.5, 0.6, rgb(245, 250, 255), TexId.SNOW, 0.55);
+    mb.addBox(chimX, roofWalkY + 14.8, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
+    // Dual terracotta chimney flue pots
+    mb.addCylinder(chimX - 3, roofWalkY + 14.8, chimZ, 2.0, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+    mb.addCylinder(chimX + 3, roofWalkY + 14.8, chimZ, 2.0, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
 
-    // Glowing Windows on South wall (cols 5..6 and 14..15)
+    // Shuttered Glowing Windows on South wall (cols 5..6 and 14..15, two stories)
+    const greenShutter = rgb(44, 108, 68);
     for (const winCol of [5.5, 14.5]) {
       const wx = (winCol + 0.5) * ts;
-      mb.addBox(wx, baseY + 8, z1 + 0.5, 22, 10, 1.4, rgb(255, 228, 135), TexId.WINDOW_GLOW, 0.45);
-      mb.addBox(wx, baseY + 22, z1 + 0.5, 22, 10, 1.4, rgb(255, 228, 135), TexId.WINDOW_GLOW, 0.45);
+      addWindowWithShutters3D(mb, wx, baseY + 7.5, z1 + 0.3, 18, 9.5, greenShutter);
+      addWindowWithShutters3D(mb, wx, baseY + 21.5, z1 + 0.3, 18, 9.5, greenShutter);
     }
 
     // Center Veranda / Glass Porch (cols 9..11 => x: 144..192, z: 160)
-    mb.addBox(168, baseY, z1 + 5, 48, 4, 12, rgb(164, 114, 68), TexId.WOOD_FLOOR, 0.7);
-    mb.addCylinder(148, baseY + 4, z1 + 9, 1.4, 1.4, 20, 6, rgb(248, 248, 252), TexId.SOLID, 0.55);
-    mb.addCylinder(188, baseY + 4, z1 + 9, 1.4, 1.4, 20, 6, rgb(248, 248, 252), TexId.SOLID, 0.55);
-    mb.addGableRoof(168, baseY + 24, z1 + 5, 52, 7, 14, false, rgb(62, 74, 94), rgb(246, 222, 166), TexId.ROOF_SLATE, 0.75);
-    mb.addBox(168, baseY + 9, z1 + 0.6, 36, 12, 1.4, rgb(255, 232, 145), TexId.WINDOW_GLOW, 0.45);
+    mb.addBeveledBox(168, baseY, z1 + 5.5, 50, 4.2, 13, 0.6, rgb(164, 114, 68), TexId.WOOD_FLOOR, 0.65);
+    // Porch steps
+    mb.addBeveledBox(168, baseY, z1 + 13.5, 22, 2.2, 4.5, 0.4, rgb(148, 152, 162), TexId.STONE_FLOOR, 0.5);
+    // Turned classical porch columns & balustrade rails
+    for (const colX of [146, 158, 178, 190]) {
+      mb.addCylinder(colX, baseY + 4.2, z1 + 10.5, 1.6, 1.3, 20, 12, rgb(248, 248, 252), TexId.SOLID, 0.5);
+      mb.addBox(colX, baseY + 4.2, z1 + 10.5, 3.8, 1.8, 3.8, rgb(238, 240, 246), TexId.SOLID, 0.4);
+    }
+    mb.addBox(152, baseY + 8.5, z1 + 10.5, 12, 1.2, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.4);
+    mb.addBox(184, baseY + 8.5, z1 + 10.5, 12, 1.2, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.4);
+    mb.addGableRoof(168, baseY + 24, z1 + 5.5, 54, 7.5, 15, false, rgb(62, 74, 94), rgb(246, 222, 166), TexId.ROOF_SLATE, 0.7, false);
+    mb.addBox(168, baseY + 8.5, z1 + 0.6, 36, 13, 1.4, rgb(255, 232, 145), TexId.WINDOW_GLOW, 0.45);
 
-    // Front Entrance Door at col 13, row 9 (x: 208..224, z: 160)
+    // Front Entrance Door at col 13, row 9 (x: 216, z: 160) with Torus Holly Wreath & Lanterns
     const doorX = 13.5 * ts; // 216
-    mb.addBox(doorX, baseY + 2, z1 + 0.6, 13, 18, 1.8, rgb(124, 64, 34), TexId.WOOD_GRAIN, 0.65);
-    mb.addSphere(doorX, baseY + 13, z1 + 1.8, 3.0, 3.0, 0.9, 5, 7, rgb(36, 128, 56), TexId.PINE_FOLIAGE, 0.4);
+    mb.addBox(doorX, baseY + 2, z1 + 0.4, 15, 19.5, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.5);
+    mb.addBeveledBox(doorX, baseY + 2, z1 + 0.8, 12.5, 18, 1.6, 0.5, rgb(124, 64, 34), TexId.WOOD_GRAIN, 0.6);
+    // 3D Torus Holly Wreath + Red Ribbon Bow on front door
+    mb.addTorus(doorX, baseY + 13.5, z1 + 2.0, 2.6, 0.95, 14, 8, 'z', rgb(34, 128, 54), TexId.PINE_FOLIAGE, 0.4);
+    mb.addSphere(doorX, baseY + 15.8, z1 + 2.4, 1.1, 0.8, 0.7, 6, 8, rgb(224, 36, 42), TexId.SOLID, 0.3);
+    // Brass coach lanterns flanking the front door
+    mb.addSphere(doorX - 9.5, baseY + 14.5, z1 + 1.6, 1.3, 1.8, 1.3, 6, 8, rgb(255, 228, 120), TexId.SOLID, 0.35);
+    mb.addSphere(doorX + 9.5, baseY + 14.5, z1 + 1.6, 1.3, 1.8, 1.3, 6, 8, rgb(255, 228, 120), TexId.SOLID, 0.35);
   }
 
-  // 4. Guest Cottage 1 ("Stuga 1", cols 19..22 => x: 304..368, rows 5..8 => z: 80..144)
-  {
-    const cx = 21 * ts; // 336
-    const cz = 7 * ts; // 112
-    const w = 4 * ts; // 64
-    const d = 4 * ts; // 64
+  // 4. Guest Cottage 1 & 2 ("Stuga 1" at cols 19..22, "Stuga 2" at cols 25..28, rows 5..8)
+  for (const [stugaCol, wallColor, gableColor] of [
+    [21, rgb(172, 106, 58), rgb(156, 94, 48)],
+    [27, rgb(164, 98, 52), rgb(148, 88, 44)],
+  ] as const) {
+    const cx = stugaCol * ts;
+    const cz = 7 * ts;
+    const w = 4 * ts;
+    const d = 4 * ts;
     const baseY = getTerrainHeight(cx, cz, 'level-outside');
 
-    mb.addBox(cx, baseY - 3, cz, w + 2, 4, d + 2, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.75);
-    mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(172, 106, 58), TexId.LOG_WALL, 0.9);
-    mb.addGableRoof(cx, baseY + 21, cz, w + 6, 12, d + 6, true, rgb(58, 68, 86), rgb(156, 94, 48), TexId.ROOF_SLATE, 0.9);
-    mb.addBox(cx - 10, baseY + 1, cz + d * 0.5 + 0.5, 10, 15, 1.4, rgb(112, 62, 32), TexId.WOOD_GRAIN, 0.55);
-    mb.addBox(cx + 12, baseY + 7, cz + d * 0.5 + 0.5, 12, 9, 1.4, rgb(255, 226, 130), TexId.WINDOW_GLOW, 0.4);
+    mb.addBeveledBox(cx, baseY - 3, cz, w + 3, 4.2, d + 3, 0.6, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.7);
+    mb.addBox(cx, baseY + 1, cz, w, 20, d, wallColor, TexId.LOG_WALL, 0.85);
+
+    // Authentic Swedish protruding notched log corners ("knuttimring")
+    for (const [kx, kz] of [
+      [cx - w * 0.5, cz - d * 0.5],
+      [cx + w * 0.5, cz - d * 0.5],
+      [cx - w * 0.5, cz + d * 0.5],
+      [cx + w * 0.5, cz + d * 0.5],
+    ]) {
+      mb.addBox(kx, baseY + 1, kz, 5.2, 20.2, 5.2, gableColor, TexId.LOG_WALL, 0.6);
+    }
+
+    mb.addGableRoof(cx, baseY + 21, cz, w + 7, 12, d + 7, true, rgb(58, 68, 86), gableColor, TexId.ROOF_SLATE, 0.85, true);
+    // Small stuga brick chimney
+    mb.addBox(cx + 12, baseY + 26, cz - 8, 7, 9, 7, rgb(182, 60, 46), TexId.BRICK_RED, 0.6);
+    mb.addBox(cx + 12, baseY + 34.5, cz - 8, 8.2, 1.5, 8.2, rgb(245, 250, 255), TexId.SNOW, 0.4);
+    // Door, stone step & shuttered window
+    mb.addBeveledBox(cx - 11, baseY + 1, cz + d * 0.5 + 0.5, 10.5, 15.5, 1.6, 0.4, rgb(112, 62, 32), TexId.WOOD_GRAIN, 0.55);
+    mb.addBeveledBox(cx - 11, baseY, cz + d * 0.5 + 3.5, 13, 2.0, 5.5, 0.4, rgb(138, 142, 152), TexId.STONE_FLOOR, 0.45);
+    addWindowWithShutters3D(mb, cx + 11, baseY + 7, cz + d * 0.5 + 0.3, 12, 8.5, rgb(186, 44, 42));
   }
 
-  // 5. Guest Cottage 2 ("Stuga 2", cols 25..28 => x: 400..464, rows 5..8 => z: 80..144)
-  {
-    const cx = 27 * ts; // 432
-    const cz = 7 * ts; // 112
-    const w = 4 * ts; // 64
-    const d = 4 * ts; // 64
-    const baseY = getTerrainHeight(cx, cz, 'level-outside');
-
-    mb.addBox(cx, baseY - 3, cz, w + 2, 4, d + 2, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.75);
-    mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(164, 98, 52), TexId.LOG_WALL, 0.9);
-    mb.addGableRoof(cx, baseY + 21, cz, w + 6, 12, d + 6, true, rgb(58, 68, 86), rgb(148, 88, 44), TexId.ROOF_SLATE, 0.9);
-    mb.addBox(cx - 10, baseY + 1, cz + d * 0.5 + 0.5, 10, 15, 1.4, rgb(112, 62, 32), TexId.WOOD_GRAIN, 0.55);
-    mb.addBox(cx + 12, baseY + 7, cz + d * 0.5 + 0.5, 12, 9, 1.4, rgb(255, 226, 130), TexId.WINDOW_GLOW, 0.4);
-  }
-
-  // 6. White Shed with Red Double Doors (cols 25..29 => x: 400..480, rows 16..19 => z: 256..320)
+  // 6. White Shed with Red Double Barn Doors (cols 25..29 => x: 400..480, rows 16..19 => z: 256..320)
   {
     const cx = 27.5 * ts; // 440
     const cz = 18 * ts; // 288
@@ -748,11 +964,15 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
     const d = 4 * ts; // 64
     const baseY = getTerrainHeight(cx, cz, 'level-outside');
 
-    mb.addBox(cx, baseY - 2, cz, w + 2, 3, d + 2, rgb(114, 118, 126), TexId.STONE_FLOOR, 0.75);
-    mb.addBox(cx, baseY + 1, cz, w, 18, d, rgb(236, 238, 244), TexId.HOUSE_SIDING, 0.9);
-    mb.addGableRoof(cx, baseY + 19, cz, w + 5, 10, d + 5, true, rgb(64, 72, 86), rgb(224, 228, 236), TexId.ROOF_SLATE, 0.9);
-    // Iconic bright red double doors on South wall
-    mb.addBox(cx, baseY + 1, cz + d * 0.5 + 0.5, 24, 15, 1.5, rgb(214, 38, 38), TexId.WOOD_GRAIN, 0.7);
+    mb.addBeveledBox(cx, baseY - 2, cz, w + 2, 3.2, d + 2, 0.5, rgb(114, 118, 126), TexId.STONE_FLOOR, 0.7);
+    mb.addBox(cx, baseY + 1, cz, w, 18.5, d, rgb(238, 240, 246), TexId.HOUSE_SIDING, 0.85);
+    mb.addGableRoof(cx, baseY + 19.5, cz, w + 6, 10.5, d + 6, true, rgb(64, 72, 86), rgb(224, 228, 236), TexId.ROOF_SLATE, 0.85, true);
+    // Double red barn doors with white X cross-bracing & iron hinges
+    const doorZ = cz + d * 0.5 + 0.5;
+    mb.addBox(cx, baseY + 1, doorZ, 26, 15.5, 1.4, rgb(214, 38, 38), TexId.WOOD_GRAIN, 0.65);
+    mb.addBox(cx, baseY + 1, doorZ + 0.3, 1.4, 15.5, 1.2, rgb(245, 245, 250), TexId.SOLID, 0.35);
+    mb.addOrientedBox(cx - 6.5, baseY + 8.5, doorZ + 0.4, 1.1, 14, 1.0, 0, 0.62, rgb(245, 245, 250), TexId.SOLID, 0.3);
+    mb.addOrientedBox(cx + 6.5, baseY + 8.5, doorZ + 0.4, 1.1, 14, 1.0, 0, -0.62, rgb(245, 245, 250), TexId.SOLID, 0.3);
   }
 
   // 7. Blue Garage + EV Wallbox (cols 2..7 => x: 32..128, rows 21..25 => z: 336..416)
@@ -763,61 +983,92 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
     const d = 5 * ts; // 80
     const baseY = getTerrainHeight(cx, cz, 'level-outside');
 
-    mb.addBox(cx, baseY - 2, cz, w + 2, 3, d + 2, rgb(118, 122, 130), TexId.STONE_FLOOR, 0.75);
-    mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(68, 124, 196), TexId.BLUE_SIDING, 0.9);
-    mb.addGableRoof(cx, baseY + 21, cz, w + 6, 11, d + 6, true, rgb(54, 64, 82), rgb(58, 108, 176), TexId.ROOF_SLATE, 0.9);
-    // EV Wallbox mounted on East wall of blue garage at col 7, row 22 (x: 128, z: 358)
+    mb.addBeveledBox(cx, baseY - 2, cz, w + 2, 3.2, d + 2, 0.5, rgb(118, 122, 130), TexId.STONE_FLOOR, 0.7);
+    mb.addBox(cx, baseY + 1, cz, w, 20.5, d, rgb(64, 122, 196), TexId.BLUE_SIDING, 0.85);
+    mb.addGableRoof(cx, baseY + 21.5, cz, w + 6, 11.5, d + 6, true, rgb(54, 64, 82), rgb(58, 108, 176), TexId.ROOF_SLATE, 0.85, true);
+    // Sectional overhead garage doors on South wall
+    mb.addBeveledBox(cx - 20, baseY + 1, cz + d * 0.5 + 0.5, 32, 15.5, 1.5, 0.4, rgb(234, 240, 248), TexId.HOUSE_SIDING, 0.55);
+    mb.addBeveledBox(cx + 20, baseY + 1, cz + d * 0.5 + 0.5, 32, 15.5, 1.5, 0.4, rgb(234, 240, 248), TexId.HOUSE_SIDING, 0.55);
+
+    // High-Fi EV Wallbox mounted on East wall at col 7, row 22 (x: 128, z: 358)
     const wbY = getTerrainHeight(128, 358, 'level-outside');
-    mb.addBox(129, wbY + 8, 358, 3.0, 6.5, 5.0, rgb(42, 48, 58), TexId.SOLID, 0.6);
-    mb.addSphere(130.8, wbY + 12, 358, 0.8, 0.8, 0.8, 4, 5, rgb(64, 245, 128), TexId.SOLID, 0.25);
+    mb.addBeveledBox(129, wbY + 7.5, 358, 3.4, 7.2, 5.6, 0.5, rgb(38, 44, 54), TexId.SOLID, 0.55);
+    // Glowing green LED status ring on Wallbox
+    mb.addTorus(130.9, wbY + 11.5, 358, 1.2, 0.35, 10, 6, 'x', rgb(64, 248, 136), TexId.SOLID, 0.25);
   }
 
-  // 8. Electric Car & Charging Cable across row 22 (car at cols 17..19 => x: 272..320, rows 21..22 => z: 336..368)
+  // 8. High-Fi Sculpted Electric Car & Charging Cable across row 22 (car at cols 17..19 => x: 272..320, rows 21..22 => z: 336..368)
   {
     const carX = 18.5 * ts; // 296
     const carZ = 22 * ts; // 352
     const baseY = getTerrainHeight(carX, carZ, 'level-outside');
 
-    for (const [wx, wz] of [
-      [-14, -9],
-      [14, -9],
-      [-14, 9],
-      [14, 9],
-    ]) {
-      mb.addCylinder(carX + wx, baseY, carZ + wz, 3.6, 3.6, 3.6, 8, rgb(32, 34, 40), TexId.SOLID, 0.55);
-    }
-    mb.addBox(carX, baseY + 2.4, carZ, 44, 7.0, 22, rgb(44, 138, 158), TexId.SOLID, 0.85);
-    mb.addBox(carX - 2, baseY + 9.0, carZ, 24, 6.0, 18, rgb(56, 158, 178), TexId.WINDOW_GLOW, 0.8);
-    mb.addBox(carX - 2, baseY + 14.8, carZ, 22, 1.5, 16, rgb(242, 248, 255), TexId.SNOW, 0.5);
+    // Ground contact shadow under EV
+    mb.addShadowDisc(carX, baseY, carZ, 24, 13, 0.38);
 
-    // Charging cable running along row 22 (z = 358) from Wallbox (x = 128) to Car (x = 274)
-    for (let segX = 132; segX < 272; segX += 12) {
-      const cy = getTerrainHeight(segX, 358, 'level-outside');
-      mb.addBox(segX + 6, cy + 0.5, 358, 12.5, 1.3, 1.6, rgb(28, 32, 38), TexId.SOLID, 0.45);
+    // 4 Rubber Tires (Torus) + Silver Alloy Hubs
+    for (const [wx, wz] of [
+      [-14, -9.8],
+      [14, -9.8],
+      [-14, 9.8],
+      [14, 9.8],
+    ]) {
+      mb.addTorus(carX + wx, baseY + 3.6, carZ + wz, 2.6, 1.2, 14, 8, 'z', rgb(26, 28, 34), TexId.SOLID, 0.5);
+      mb.addCylinder(carX + wx, baseY + 2.2, carZ + wz, 1.8, 1.8, 2.8, 10, rgb(212, 220, 232), TexId.SOLID, 0.35);
     }
-    // Exposed copper hazard core at DAMAGED_WIRE_HAZARD
+
+    // Lower sculpted aerodynamic body & rocker panels
+    mb.addBeveledBox(carX, baseY + 2.4, carZ, 45, 6.8, 21, 1.4, rgb(38, 134, 156), TexId.SOLID, 0.75);
+    // Front & rear bumpers
+    mb.addBeveledBox(carX, baseY + 2.0, carZ, 47, 2.8, 20, 0.8, rgb(28, 36, 46), TexId.SOLID, 0.55);
+    // Sloped greenhouse cabin + tinted glass windows
+    mb.addBeveledBox(carX - 1.5, baseY + 8.6, carZ, 26, 5.8, 17.5, 1.6, rgb(24, 34, 48), TexId.SOLID, 0.7);
+    mb.addBeveledBox(carX - 1.5, baseY + 13.6, carZ, 21, 1.4, 15.5, 0.5, rgb(44, 148, 170), TexId.SOLID, 0.55);
+    // Snow drift on car roof & hood
+    mb.addBeveledBox(carX - 1.5, baseY + 14.6, carZ, 19, 1.3, 14, 0.5, rgb(244, 250, 255), TexId.SNOW, 0.4);
+    // Side mirrors
+    mb.addSphere(carX - 9, baseY + 9.2, carZ - 10.2, 1.2, 0.9, 1.5, 6, 8, rgb(38, 134, 156), TexId.SOLID, 0.4);
+    mb.addSphere(carX - 9, baseY + 9.2, carZ + 10.2, 1.2, 0.9, 1.5, 6, 8, rgb(38, 134, 156), TexId.SOLID, 0.4);
+    // Full-width LED DRL front lightbar (West) & crimson rear taillight bar (East)
+    mb.addBox(carX - 22.8, baseY + 5.8, carZ, 1.0, 1.6, 17, rgb(255, 248, 200), TexId.SOLID, 0.3);
+    mb.addBox(carX + 22.8, baseY + 6.0, carZ, 1.0, 1.6, 17, rgb(238, 38, 48), TexId.SOLID, 0.3);
+
+    // Charging cable running along row 22 (z = 358) from Wallbox (x = 128) to Car port (x = 274)
+    for (let segX = 132; segX < 272; segX += 10) {
+      const cy = getTerrainHeight(segX, 358, 'level-outside');
+      mb.addBeveledBox(segX + 5, cy + 0.4, 358, 10.5, 1.4, 1.6, 0.4, rgb(26, 30, 38), TexId.SOLID, 0.4);
+    }
+    // Exposed frayed copper core at DAMAGED_WIRE_HAZARD
     const hx = DAMAGED_WIRE_HAZARD.x + DAMAGED_WIRE_HAZARD.width * 0.5;
     const hz = DAMAGED_WIRE_HAZARD.y + DAMAGED_WIRE_HAZARD.height * 0.5;
     const hy = getTerrainHeight(hx, hz, 'level-outside');
-    mb.addBox(hx, hy + 0.7, hz, 8, 1.8, 2.8, rgb(235, 136, 42), TexId.SOLID, 0.55);
+    mb.addBeveledBox(hx, hy + 0.6, hz, 8.5, 2.0, 3.0, 0.5, rgb(242, 138, 42), TexId.SOLID, 0.5);
   }
 
-  // 9. Outdoor Patio Table & Benches (cols 7..8 => x: 112..144, rows 14..15 => z: 224..256)
+  // 9. High-Fi Outdoor Patio Table, Benches & Folded Umbrella (cols 7..8 => x: 128, z: 240)
   {
     const px = 8 * ts; // 128
     const pz = 15 * ts; // 240
     const baseY = getTerrainHeight(px, pz, 'level-outside');
-    mb.addBox(px, baseY, pz, 22, 6.0, 14, rgb(146, 94, 48), TexId.WOOD_GRAIN, 0.75);
-    mb.addBox(px, baseY + 5.8, pz, 24, 1.4, 15, rgb(242, 248, 255), TexId.SNOW, 0.5);
-    mb.addBox(px, baseY, pz - 10, 20, 3.5, 4, rgb(136, 86, 42), TexId.WOOD_GRAIN, 0.6);
-    mb.addBox(px, baseY, pz + 10, 20, 3.5, 4, rgb(136, 86, 42), TexId.WOOD_GRAIN, 0.6);
+    mb.addShadowDisc(px, baseY, pz, 15, 14, 0.3);
+    // Table legs & plank top
+    mb.addBox(px - 8, baseY, pz, 2.0, 5.8, 11, rgb(122, 76, 38), TexId.WOOD_GRAIN, 0.55);
+    mb.addBox(px + 8, baseY, pz, 2.0, 5.8, 11, rgb(122, 76, 38), TexId.WOOD_GRAIN, 0.55);
+    mb.addBeveledBox(px, baseY + 5.2, pz, 23, 1.4, 14.5, 0.4, rgb(152, 98, 50), TexId.WOOD_GRAIN, 0.65);
+    mb.addBeveledBox(px, baseY + 6.4, pz, 21, 1.1, 13, 0.4, rgb(244, 250, 255), TexId.SNOW, 0.4);
+    // Folded winter patio umbrella in center of table
+    mb.addCylinder(px, baseY + 1, pz, 0.8, 0.8, 17, 8, rgb(92, 62, 36), TexId.WOOD_GRAIN, 0.45);
+    mb.addCone(px, baseY + 9.5, pz, 3.6, 9.5, 10, rgb(198, 52, 48), TexId.FABRIC, 0.55);
+    // Benches
+    mb.addBeveledBox(px, baseY + 2.4, pz - 10.5, 21, 1.2, 4.2, 0.3, rgb(142, 90, 44), TexId.WOOD_GRAIN, 0.55);
+    mb.addBeveledBox(px, baseY + 2.4, pz + 10.5, 21, 1.2, 4.2, 0.3, rgb(142, 90, 44), TexId.WOOD_GRAIN, 0.55);
   }
 
   return mb;
 }
 
 // ============================================================================
-// Helper for Indoor Levels: Floor Tiles & Cutaway 3D Walls
+// Helper for Indoor Levels: Floor Tiles & Cutaway 3D Architectural Walls
 // ============================================================================
 
 function addIndoorTilesAndWalls(
@@ -835,20 +1086,23 @@ function addIndoorTilesAndWalls(
       const cz = r * ts + ts * 0.5;
 
       if (tile === TileType.InteriorWall) {
-        // Keep southern-most wall lower so behind-the-back camera has unobstructed view when looking North
         const southTile = r + 1 < map.rows ? map.tiles[r + 1][c] : TileType.VoidBlack;
-        const h = southTile === TileType.VoidBlack ? 9.0 : wallHeight;
-        mb.addBox(cx, 0, cz, ts, h, ts, rgb(232, 222, 204), TexId.INTERIOR_WALL, 0.75);
-        mb.addBox(cx, h, cz, ts + 0.3, 1.2, ts + 0.3, rgb(92, 62, 40), TexId.WOOD_GRAIN, 0.5);
+        const h = southTile === TileType.VoidBlack ? 9.2 : wallHeight;
+        // Baseboard plinth
+        mb.addBox(cx, 0, cz, ts + 0.3, 1.6, ts + 0.3, rgb(116, 76, 46), TexId.WOOD_GRAIN, 0.4);
+        // Main wallpapered & wainscoted wall
+        mb.addBox(cx, 1.4, cz, ts, h - 1.4, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.65);
+        // Routed walnut cutaway top cap
+        mb.addBeveledBox(cx, h, cz, ts + 0.5, 1.4, ts + 0.5, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
       } else {
-        let floorColor = rgb(194, 142, 88);
+        let floorColor = rgb(198, 146, 92);
         let floorTex: number = TexId.WOOD_FLOOR;
 
         if (tile === TileType.StoneTileFloor) {
-          floorColor = rgb(178, 166, 156);
+          floorColor = rgb(182, 170, 160);
           floorTex = TexId.STONE_FLOOR;
         } else if (tile === TileType.BathroomTileFloor) {
-          floorColor = rgb(212, 236, 242);
+          floorColor = rgb(216, 238, 244);
           floorTex = TexId.BATHROOM_TILE;
         } else if (tile === TileType.StairsFloor) {
           floorColor = rgb(168, 116, 68);
@@ -870,6 +1124,38 @@ function addIndoorTilesAndWalls(
   }
 }
 
+function addTuftedCouch3D(
+  mb: MeshBuilder,
+  cx: number,
+  cz: number,
+  w: number,
+  d: number,
+  facing: 'north' | 'south' | 'east',
+  fabricColor: Color4,
+  pillowColor: Color4
+): void {
+  mb.addShadowDisc(cx, 0, cz, w * 0.54, d * 0.54, 0.32);
+  const darkFabric = darkenColor(fabricColor, 0.84);
+  // Base frame & seat cushion
+  mb.addBeveledBox(cx, 0.6, cz, w, 4.8, d, 0.9, fabricColor, TexId.FABRIC, 0.65);
+
+  if (facing === 'east') {
+    // Backrest on West side, rolled armrests on North & South
+    mb.addBeveledBox(cx - w * 0.34, 4.8, cz, w * 0.32, 6.2, d, 1.0, darkFabric, TexId.FABRIC, 0.65);
+    mb.addTorus(cx + 1, 5.5, cz - d * 0.44, 2.0, 1.2, 10, 8, 'x', darkFabric, TexId.FABRIC, 0.5);
+    mb.addTorus(cx + 1, 5.5, cz + d * 0.44, 2.0, 1.2, 10, 8, 'x', darkFabric, TexId.FABRIC, 0.5);
+    mb.addSphere(cx + 0.5, 6.2, cz - d * 0.25, 1.8, 2.2, 3.0, 8, 10, pillowColor, TexId.FABRIC, 0.45);
+    mb.addSphere(cx + 0.5, 6.2, cz + d * 0.25, 1.8, 2.2, 3.0, 8, 10, pillowColor, TexId.FABRIC, 0.45);
+  } else {
+    // Backrest on North side, rolled armrests on West & East
+    mb.addBeveledBox(cx, 4.8, cz - d * 0.34, w, 6.2, d * 0.32, 1.0, darkFabric, TexId.FABRIC, 0.65);
+    mb.addTorus(cx - w * 0.44, 5.5, cz + 1, 2.0, 1.2, 10, 8, 'z', darkFabric, TexId.FABRIC, 0.5);
+    mb.addTorus(cx + w * 0.44, 5.5, cz + 1, 2.0, 1.2, 10, 8, 'z', darkFabric, TexId.FABRIC, 0.5);
+    mb.addSphere(cx - w * 0.26, 6.2, cz + 0.5, 3.2, 2.2, 1.8, 8, 10, pillowColor, TexId.FABRIC, 0.45);
+    mb.addSphere(cx + w * 0.26, 6.2, cz + 0.5, 3.2, 2.2, 1.8, 8, 10, pillowColor, TexId.FABRIC, 0.45);
+  }
+}
+
 // ============================================================================
 // Static Level 2: Basement (32x28 TileMap)
 // ============================================================================
@@ -879,55 +1165,83 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
   const ts = map.tileSize; // 16
   addIndoorTilesAndWalls(mb, map, 16);
 
-  // 1. Library Bookshelf on north wall (cols 7..12, row 7 => x: 112..208, z: 112..128)
-  mb.addBox(10 * ts, 0, 7.5 * ts, 6 * ts, 16, 12, rgb(132, 82, 44), TexId.BOOKSHELF, 0.8);
+  // 1. High-Fi Library Bookshelf on north wall (cols 7..12, row 7 => x: 112..208, z: 112..128)
+  mb.addBeveledBox(10 * ts, 0, 7.5 * ts, 6 * ts, 16.5, 12.5, 0.8, rgb(128, 78, 40), TexId.BOOKSHELF, 0.75);
+  // Decorative crown molding & brass globe on top of the bookcase
+  mb.addBeveledBox(10 * ts, 16.2, 7.5 * ts, 6 * ts + 2, 1.5, 14, 0.4, rgb(98, 58, 28), TexId.WOOD_GRAIN, 0.55);
+  mb.addSphere(8.2 * ts, 19.8, 7.5 * ts, 2.2, 2.2, 2.2, 8, 12, rgb(76, 158, 198), TexId.SOLID, 0.45);
 
-  // 2. Stack of Firewood on east wall of library (col 12, rows 8..9 => x: 192..208, z: 128..160)
-  mb.addBox(12.5 * ts, 0, 9 * ts, 14, 11, 2 * ts, rgb(148, 92, 48), TexId.LOG_WALL, 0.75);
-
-  // 3. Library Couch on west wall (col 7, rows 9..11 => x: 112..128, z: 144..192)
-  mb.addBox(7.5 * ts, 0, 10.5 * ts, 14, 5.5, 3 * ts, rgb(168, 152, 134), TexId.FABRIC, 0.75);
-  mb.addBox(7.2 * ts, 5.2, 10.5 * ts, 4.5, 6.0, 3 * ts, rgb(148, 132, 114), TexId.FABRIC, 0.75);
-
-  // 4. Red Brick Fireplace (cols 11..12, rows 11..12 => x: 176..208, z: 176..208)
-  mb.addBox(12 * ts, 0, 12 * ts, 2 * ts, 19, 2 * ts, rgb(186, 62, 48), TexId.BRICK_RED, 0.85);
-  mb.addBox(12 * ts, 18.5, 12 * ts, 2 * ts + 3, 2.2, 2 * ts + 3, rgb(112, 72, 42), TexId.WOOD_GRAIN, 0.7);
-  // Hearth firebox opening facing West
-  mb.addBox(11 * ts - 0.5, 1, 12 * ts, 1.5, 10, 16, rgb(28, 22, 22), TexId.SOLID, 0);
-
-  // 5. Basement Living Room Couch (cols 8..10, row 14 => x: 128..176, z: 224..240)
-  mb.addBox(9.5 * ts, 0, 14.5 * ts, 3 * ts, 5.5, 15, rgb(168, 152, 134), TexId.FABRIC, 0.75);
-  mb.addBox(9.5 * ts, 5.2, 14.2 * ts, 3 * ts, 6.0, 4.5, rgb(148, 132, 114), TexId.FABRIC, 0.75);
-
-  // 6. Chess Board Table (cols 8..9, row 17 => x: 128..160, z: 272..288)
-  mb.addBox(9 * ts, 0, 17.5 * ts, 22, 6.2, 16, rgb(128, 78, 42), TexId.WOOD_GRAIN, 0.75);
-  mb.addBox(9 * ts, 6.1, 17.5 * ts, 14, 0.8, 14, rgb(245, 236, 212), TexId.CHESSBOARD, 0.4);
-  mb.addCone(9 * ts - 3, 6.9, 17.5 * ts - 3, 1.1, 3.0, 5, rgb(246, 214, 92), TexId.SOLID, 0.35);
-  mb.addCone(9 * ts + 3, 6.9, 17.5 * ts + 3, 1.1, 3.0, 5, rgb(72, 76, 88), TexId.SOLID, 0.35);
-
-  // 7. Extra Big South Windows (row 20, cols 7..9 & 10..12 => z: 320..336)
-  mb.addBox(8.5 * ts, 3, 20.2 * ts, 2.6 * ts, 8, 2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
-  mb.addBox(11.5 * ts, 3, 20.2 * ts, 2.6 * ts, 8, 2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
-
-  // 8. Hallway Coat Hangers (col 14, rows 17..18 => x: 224..240, z: 272..304)
-  mb.addCylinder(14.5 * ts, 0, 18 * ts, 3.5, 1.0, 14, 6, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.65);
-  mb.addSphere(14.5 * ts, 10.5, 18 * ts, 3.6, 4.0, 3.6, 4, 6, rgb(186, 48, 48), TexId.FABRIC, 0.55);
-
-  // 9. Locked North Door (cols 15..16, row 12) & Locked Front Door (cols 15..16, row 20)
-  mb.addBox(16 * ts, 0, 12.5 * ts, 2 * ts, 15, 6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.7);
-  mb.addBox(16 * ts, 0, 20.5 * ts, 2 * ts, 11, 6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.7);
-
-  // 10. Basement Staircase ascending Eastward (cols 18..21, rows 15..18 => x: 288..352, z: 240..304)
-  for (let s = 0; s < 8; s++) {
-    const sx = 18 * ts + s * 8 + 4;
-    const sh = (s + 1) * 1.6;
-    mb.addBox(sx, 0, 17 * ts, 8.2, sh, 4 * ts - 4, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.65);
+  // 2. Stacked Birch & Oak Firewood Rack (col 12, rows 8..9 => x: 192..208, z: 128..160)
+  mb.addBeveledBox(12.5 * ts, 0, 9 * ts, 14, 11.5, 2 * ts, 0.7, rgb(148, 92, 48), TexId.LOG_WALL, 0.65);
+  for (let i = 0; i < 4; i++) {
+    mb.addCylinder(12.5 * ts, 11.5, 8.3 * ts + i * 6.5, 2.2, 2.2, 2.5, 10, rgb(238, 234, 226), TexId.BIRCH_BARK, 0.4);
   }
 
-  // 11. Bathroom Sink (col 19, rows 9..10) & Toilet (col 21, row 9)
-  mb.addBox(19.5 * ts, 0, 10 * ts, 13, 7.5, 22, rgb(242, 246, 252), TexId.SOLID, 0.7);
-  mb.addBox(21.7 * ts, 0, 9.5 * ts, 5, 10.5, 10, rgb(246, 250, 255), TexId.SOLID, 0.7);
-  mb.addCylinder(21.3 * ts, 0, 9.5 * ts, 4.4, 4.8, 5.5, 8, rgb(246, 250, 255), TexId.SOLID, 0.7);
+  // 3. Tufted Library Couch on west wall (col 7, rows 9..11 => x: 112..128, z: 144..192)
+  addTuftedCouch3D(mb, 7.55 * ts, 10.5 * ts, 15, 3 * ts - 2, 'east', rgb(172, 154, 134), rgb(186, 56, 56));
+
+  // 4. Grand Brick & Stone Fireplace (cols 11..12, rows 11..12 => x: 176..208, z: 176..208)
+  mb.addBeveledBox(12 * ts, 0, 12 * ts, 2 * ts + 1, 1.8, 2 * ts + 2, 0.4, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.55);
+  mb.addBox(12 * ts, 1.8, 12 * ts, 2 * ts, 17.2, 2 * ts, rgb(186, 62, 48), TexId.BRICK_RED, 0.8);
+  // Carved oak mantelpiece shelf + holiday greenery garland & candles
+  mb.addBeveledBox(12 * ts, 18.5, 12 * ts, 2 * ts + 4, 2.4, 2 * ts + 4, 0.6, rgb(108, 68, 38), TexId.WOOD_GRAIN, 0.65);
+  mb.addTorus(11 * ts - 0.5, 18.2, 12 * ts, 6.5, 1.2, 12, 8, 'x', rgb(36, 124, 54), TexId.PINE_FOLIAGE, 0.4);
+  // Dark firebox & glowing ember logs
+  mb.addBox(11 * ts - 0.4, 1.8, 12 * ts, 1.6, 10.5, 17, rgb(24, 18, 18), TexId.SOLID, 0);
+  mb.addSphere(11.3 * ts, 2.6, 12 * ts, 2.5, 1.4, 6.5, 6, 10, rgb(255, 92, 28), TexId.SOLID, 0.3);
+
+  // 5. Basement Living Room Couch (cols 8..10, row 14 => x: 128..176, z: 224..240)
+  addTuftedCouch3D(mb, 9.5 * ts, 14.5 * ts, 3 * ts - 2, 15, 'south', rgb(172, 154, 134), rgb(64, 128, 178));
+
+  // 6. Pedestal Chess Board Table & Chairs (cols 8..9, row 17 => x: 144, z: 280)
+  {
+    const cx = 9 * ts;
+    const cz = 17.5 * ts;
+    mb.addShadowDisc(cx, 0, cz, 14, 11, 0.32);
+    mb.addCylinder(cx, 0, cz, 5.5, 2.2, 1.6, 12, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.5);
+    mb.addCylinder(cx, 1.6, cz, 2.2, 2.2, 4.4, 12, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.5);
+    mb.addBeveledBox(cx, 5.8, cz, 22, 1.2, 16, 0.4, rgb(134, 82, 44), TexId.WOOD_GRAIN, 0.65);
+    mb.addBox(cx, 6.9, cz, 13.5, 0.5, 13.5, rgb(245, 236, 212), TexId.CHESSBOARD, 0.35);
+    // Miniature sculpted gold & silver chess pieces
+    for (let p = -4; p <= 4; p += 2.6) {
+      mb.addCone(cx + p, 7.4, cz - 4.2, 0.85, 2.6, 8, rgb(248, 216, 92), TexId.SOLID, 0.3);
+      mb.addCone(cx + p, 7.4, cz + 4.2, 0.85, 2.6, 8, rgb(76, 82, 96), TexId.SOLID, 0.3);
+    }
+  }
+
+  // 7. Extra Big South Windows (row 20, cols 7..9 & 10..12 => z: 320..336)
+  mb.addBox(8.5 * ts, 2.5, 20.2 * ts, 2.6 * ts, 8.5, 2.2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
+  mb.addBox(11.5 * ts, 2.5, 20.2 * ts, 2.6 * ts, 8.5, 2.2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
+
+  // 8. Hallway Coat Rack with Hanging Coat, Scarf & Top Hat (col 14, rows 17..18)
+  mb.addShadowDisc(14.5 * ts, 0, 18 * ts, 5, 5, 0.28);
+  mb.addCylinder(14.5 * ts, 0, 18 * ts, 4.0, 0.9, 14.5, 10, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.6);
+  mb.addSphere(14.5 * ts, 10.2, 18 * ts, 3.6, 4.2, 3.6, 8, 10, rgb(186, 48, 48), TexId.FABRIC, 0.55);
+  mb.addCylinder(14.5 * ts, 14.2, 18 * ts, 2.4, 2.6, 2.8, 10, rgb(34, 36, 44), TexId.SOLID, 0.5);
+
+  // 9. Locked North Door (cols 15..16, row 12) & Locked Front Door (cols 15..16, row 20)
+  mb.addBeveledBox(16 * ts, 0, 12.5 * ts, 2 * ts, 15.5, 6, 0.6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
+  mb.addBeveledBox(16 * ts, 0, 20.5 * ts, 2 * ts, 11.2, 6, 0.6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
+
+  // 10. High-Fi Basement Staircase with Balusters & Newel Posts (cols 18..21, rows 15..18)
+  for (let s = 0; s < 8; s++) {
+    const sx = 18 * ts + s * 8 + 4;
+    const sh = (s + 1) * 1.65;
+    mb.addBeveledBox(sx, 0, 17 * ts, 8.2, sh, 4 * ts - 4, 0.35, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.55);
+    // Turned balusters along the south edge of the stairs
+    mb.addCylinder(sx, sh, 18.8 * ts, 0.6, 0.5, 5.5, 8, rgb(242, 238, 230), TexId.SOLID, 0.35);
+  }
+  mb.addOrientedBox(20 * ts, 11.5, 18.8 * ts, 4 * ts, 1.3, 1.5, 0, 0.22, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.5);
+
+  // 11. High-Fi Bathroom Vanity Sink, Mirror & Sculpted Porcelain Toilet (cols 18..22, rows 7..12)
+  mb.addBeveledBox(19.5 * ts, 0, 10 * ts, 13.5, 7.8, 23, 0.6, rgb(242, 246, 252), TexId.SOLID, 0.65);
+  mb.addTorus(19.6 * ts, 8.0, 10 * ts, 3.8, 0.9, 12, 8, 'y', rgb(252, 254, 255), TexId.SOLID, 0.4);
+  // Chrome faucet
+  mb.addCylinder(19.2 * ts, 8.0, 10 * ts, 0.5, 0.5, 2.6, 8, rgb(210, 220, 232), TexId.SOLID, 0.3);
+  // Sculpted Porcelain Toilet (col 21, row 9)
+  mb.addBeveledBox(21.75 * ts, 4.5, 9.5 * ts, 5.2, 6.8, 9.5, 0.7, rgb(246, 250, 255), TexId.SOLID, 0.65);
+  mb.addCylinder(21.3 * ts, 0, 9.5 * ts, 3.6, 4.8, 5.2, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
+  mb.addTorus(21.3 * ts, 5.3, 9.5 * ts, 3.8, 1.0, 12, 8, 'y', rgb(252, 254, 255), TexId.SOLID, 0.45);
 
   return mb;
 }
@@ -941,88 +1255,172 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
   const ts = map.tileSize; // 16
   addIndoorTilesAndWalls(mb, map, 16);
 
-  // 1. Dining Room Cupboard (col 2, rows 6..7 => x: 32..48, z: 96..128)
-  mb.addBox(2.5 * ts, 0, 7 * ts, 14, 15, 2 * ts, rgb(134, 82, 42), TexId.WOOD_GRAIN, 0.8);
+  // 1. Dining Room China Hutch Cupboard (col 2, rows 6..7 => x: 40, z: 112)
+  mb.addBeveledBox(2.5 * ts, 0, 7 * ts, 14.5, 7.5, 2 * ts, 0.6, rgb(134, 82, 42), TexId.WOOD_GRAIN, 0.7);
+  mb.addBeveledBox(2.4 * ts, 7.5, 7 * ts, 11.5, 8.2, 2 * ts - 2, 0.5, rgb(148, 94, 50), TexId.BOOKSHELF, 0.7);
 
-  // 2. Long Wooden Dining Table (cols 4..5, rows 6..9 => x: 64..96, z: 96..160)
-  mb.addBox(5 * ts, 0, 8 * ts, 2 * ts - 2, 6.8, 4 * ts - 4, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.8);
-  mb.addBox(5 * ts, 6.7, 8 * ts, 10, 0.5, 4 * ts - 10, rgb(248, 244, 240), TexId.FABRIC, 0.35);
+  // 2. Festive Long Dining Table with Candelabrum, Plates, Goblets & 6 High-Back Chairs (cols 4..5, rows 6..9)
+  {
+    const tx = 5 * ts; // 80
+    const tz = 8 * ts; // 128
+    mb.addShadowDisc(tx, 0, tz, 17, 32, 0.34);
+    mb.addBeveledBox(tx, 0, tz, 2 * ts - 2, 6.8, 4 * ts - 4, 0.7, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.75);
+    // White linen table runner & golden 3-branch candelabrum
+    mb.addBeveledBox(tx, 6.7, tz, 12, 0.5, 4 * ts - 8, 0.2, rgb(250, 246, 242), TexId.FABRIC, 0.35);
+    mb.addCylinder(tx, 7.2, tz, 2.0, 0.7, 4.5, 10, rgb(250, 214, 78), TexId.SOLID, 0.4);
+    mb.addSphere(tx, 12.2, tz, 0.7, 1.3, 0.7, 6, 8, rgb(255, 200, 64), TexId.SOLID, 0.2);
 
-  // 3. Kitchen Island (cols 10..11, rows 6..7), Stove/Sink on East Wall (col 15, rows 5..8), Altar (cols 10..11, row 10)
-  mb.addBox(11 * ts, 0, 7 * ts, 2 * ts - 2, 8.2, 2 * ts - 2, rgb(232, 228, 218), TexId.SOLID, 0.75);
-  mb.addBox(11 * ts, 8.0, 7 * ts, 2 * ts, 1.4, 2 * ts, rgb(168, 114, 66), TexId.WOOD_GRAIN, 0.65);
-  mb.addBox(15.5 * ts, 0, 7 * ts, 14, 8.5, 4 * ts - 2, rgb(224, 228, 234), TexId.SOLID, 0.75);
-  // Altar
-  mb.addBox(11 * ts, 0, 10.5 * ts, 2 * ts - 2, 10, 14, rgb(138, 44, 44), TexId.WOOD_GRAIN, 0.75);
-  mb.addCylinder(10.5 * ts, 10, 10.5 * ts, 1.1, 1.1, 3.8, 6, rgb(255, 224, 110), TexId.SOLID, 0.35);
-  mb.addCylinder(11.5 * ts, 10, 10.5 * ts, 1.1, 1.1, 3.8, 6, rgb(255, 224, 110), TexId.SOLID, 0.35);
+    // 6 Porcelain dinner plates & High-back chairs flanking the table
+    for (const rowOff of [-18, 0, 18]) {
+      // Plates on table
+      mb.addCylinder(tx - 8, 7.1, tz + rowOff, 3.2, 3.4, 0.5, 12, rgb(250, 252, 255), TexId.SOLID, 0.3);
+      mb.addCylinder(tx + 8, 7.1, tz + rowOff, 3.2, 3.4, 0.5, 12, rgb(250, 252, 255), TexId.SOLID, 0.3);
+      // Chairs with backrests tucked next to table
+      mb.addBeveledBox(tx - 15.5, 0, tz + rowOff, 4.5, 4.5, 6.5, 0.4, rgb(124, 74, 38), TexId.WOOD_GRAIN, 0.5);
+      mb.addBeveledBox(tx - 17.2, 4.5, tz + rowOff, 1.4, 5.5, 6.5, 0.3, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.5);
+      mb.addBeveledBox(tx + 15.5, 0, tz + rowOff, 4.5, 4.5, 6.5, 0.4, rgb(124, 74, 38), TexId.WOOD_GRAIN, 0.5);
+      mb.addBeveledBox(tx + 17.2, 4.5, tz + rowOff, 1.4, 5.5, 6.5, 0.3, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.5);
+    }
+  }
 
-  // 4. Living Room Colorful Couch (cols 4..6, row 11) & Armchairs (col 2, row 12 & col 7, row 13)
-  mb.addBox(5.5 * ts, 0, 11.5 * ts, 3 * ts - 2, 5.8, 15, rgb(214, 84, 58), TexId.FABRIC, 0.8);
-  mb.addBox(5.5 * ts, 5.5, 11.2 * ts, 3 * ts - 2, 6.2, 4.5, rgb(64, 134, 188), TexId.FABRIC, 0.8);
-  mb.addBox(2.5 * ts, 0, 12.5 * ts, 14, 7.5, 14, rgb(236, 178, 52), TexId.FABRIC, 0.75);
-  mb.addBox(7.5 * ts, 0, 13.5 * ts, 14, 7.5, 14, rgb(68, 156, 124), TexId.FABRIC, 0.75);
+  // 3. Kitchen Island with Fruit Bowl, Stove/Sink Counter & Candlelit Altar
+  {
+    const ix = 11 * ts;
+    const iz = 7 * ts;
+    mb.addShadowDisc(ix, 0, iz, 17, 17, 0.32);
+    mb.addBeveledBox(ix, 0, iz, 2 * ts - 2, 8.0, 2 * ts - 2, 0.5, rgb(236, 232, 224), TexId.SOLID, 0.7);
+    mb.addBeveledBox(ix, 7.8, iz, 2 * ts + 1, 1.6, 2 * ts + 1, 0.5, rgb(168, 114, 66), TexId.WOOD_GRAIN, 0.6);
+    // Ceramic fruit bowl with apples & oranges on the island
+    mb.addCylinder(ix, 9.4, iz, 3.2, 4.6, 1.8, 12, rgb(248, 250, 255), TexId.SOLID, 0.4);
+    mb.addSphere(ix - 1.2, 11.2, iz, 1.5, 1.4, 1.5, 6, 8, rgb(220, 42, 42), TexId.SOLID, 0.3);
+    mb.addSphere(ix + 1.4, 11.2, iz + 0.8, 1.4, 1.4, 1.4, 6, 8, rgb(245, 148, 38), TexId.SOLID, 0.3);
 
-  // 5. THE CHRISTMAS TREE! (cols 2..3, rows 14..16 => x: 32..64, z: 224..272)
+    // East wall Stove & Sink Counter (col 15, rows 5..8)
+    mb.addBeveledBox(15.5 * ts, 0, 7 * ts, 14.5, 8.6, 4 * ts - 2, 0.6, rgb(228, 232, 238), TexId.SOLID, 0.7);
+    mb.addBox(15.5 * ts, 8.6, 6 * ts, 11, 0.4, 18, rgb(32, 36, 44), TexId.SOLID, 0.35);
+    mb.addTorus(15.5 * ts, 8.9, 5.7 * ts, 2.2, 0.35, 10, 6, 'y', rgb(238, 64, 48), TexId.SOLID, 0.2);
+    mb.addTorus(15.5 * ts, 8.9, 6.4 * ts, 2.2, 0.35, 10, 6, 'y', rgb(238, 64, 48), TexId.SOLID, 0.2);
+    // Stainless sink & gooseneck faucet
+    mb.addCylinder(15.8 * ts, 8.6, 8 * ts, 0.5, 0.5, 3.2, 8, rgb(210, 220, 232), TexId.SOLID, 0.3);
+
+    // Kitchen Altar / Shrine (cols 10..11, row 10)
+    mb.addBeveledBox(11 * ts, 0, 10.5 * ts, 2 * ts - 2, 9.5, 14, 0.6, rgb(142, 42, 46), TexId.WOOD_GRAIN, 0.7);
+    mb.addBeveledBox(11 * ts, 9.4, 10.3 * ts, 18, 2.2, 8, 0.4, rgb(242, 198, 72), TexId.SOLID, 0.5);
+    mb.addCylinder(10.4 * ts, 9.5, 10.6 * ts, 1.1, 1.1, 4.0, 10, rgb(255, 232, 128), TexId.SOLID, 0.35);
+    mb.addCylinder(11.6 * ts, 9.5, 10.6 * ts, 1.1, 1.1, 4.0, 10, rgb(255, 232, 128), TexId.SOLID, 0.35);
+  }
+
+  // 4. Living Room Designer Patchwork Couch (cols 4..6, row 11) & Wingback Armchairs
+  addTuftedCouch3D(mb, 5.5 * ts, 11.5 * ts, 3 * ts - 2, 15, 'south', rgb(214, 84, 58), rgb(248, 206, 68));
+  mb.addShadowDisc(2.5 * ts, 0, 12.5 * ts, 8.5, 8.5, 0.3);
+  mb.addBeveledBox(2.5 * ts, 0.5, 12.5 * ts, 14.5, 5.2, 14.5, 0.9, rgb(236, 178, 52), TexId.FABRIC, 0.65);
+  mb.addBeveledBox(2.1 * ts, 5.2, 12.5 * ts, 4.2, 5.8, 14.5, 0.8, rgb(214, 156, 38), TexId.FABRIC, 0.65);
+
+  mb.addShadowDisc(7.5 * ts, 0, 13.5 * ts, 8.5, 8.5, 0.3);
+  mb.addBeveledBox(7.5 * ts, 0.5, 13.5 * ts, 14.5, 5.2, 14.5, 0.9, rgb(68, 156, 124), TexId.FABRIC, 0.65);
+  mb.addBeveledBox(7.9 * ts, 5.2, 13.5 * ts, 4.2, 5.8, 14.5, 0.8, rgb(52, 134, 104), TexId.FABRIC, 0.65);
+
+  // 5. THE GRAND CHRISTMAS TREE! (cols 2..3, rows 14..16 => x: 48, z: 248)
   {
     const tx = 3 * ts; // 48
     const tz = 15.5 * ts; // 248
-    mb.addCylinder(tx, 0.2, tz, 14, 13.5, 0.9, 12, rgb(198, 36, 42), TexId.FABRIC, 0.45);
-    mb.addCylinder(tx, 0.9, tz, 2.8, 2.0, 9, 7, rgb(96, 58, 32), TexId.WOOD_GRAIN, 0.65);
-    mb.addCone(tx, 6.0, tz, 13.0, 11.5, 10, rgb(26, 108, 48), TexId.PINE_FOLIAGE, 0.85);
-    mb.addCone(tx, 12.5, tz, 10.4, 10.5, 10, rgb(34, 128, 58), TexId.PINE_FOLIAGE, 0.85);
-    mb.addCone(tx, 18.5, tz, 7.6, 9.5, 10, rgb(44, 146, 68), TexId.PINE_FOLIAGE, 0.85);
-    mb.addCone(tx, 24.0, tz, 4.8, 7.5, 10, rgb(54, 162, 78), TexId.PINE_FOLIAGE, 0.85);
+    mb.addShadowDisc(tx, 0, tz, 16, 16, 0.38);
+    // Velvet tree skirt with gold border ring
+    mb.addCylinder(tx, 0.2, tz, 14.2, 13.5, 0.9, 16, rgb(198, 36, 42), TexId.FABRIC, 0.4);
+    mb.addTorus(tx, 0.6, tz, 13.8, 0.6, 16, 8, 'y', rgb(250, 212, 72), TexId.SOLID, 0.3);
+    // Trunk
+    mb.addCylinder(tx, 0.9, tz, 3.0, 2.0, 9, 12, rgb(96, 58, 32), TexId.WOOD_GRAIN, 0.6);
+    // 5 lush evergreen bough tiers
+    mb.addCone(tx, 5.5, tz, 13.5, 10.5, 16, rgb(24, 104, 46), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(tx, 11.2, tz, 11.4, 9.8, 16, rgb(32, 122, 54), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(tx, 16.5, tz, 9.0, 9.0, 16, rgb(40, 138, 64), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(tx, 21.5, tz, 6.6, 8.0, 16, rgb(48, 154, 72), TexId.PINE_FOLIAGE, 0.75);
+    mb.addCone(tx, 26.0, tz, 4.2, 6.8, 16, rgb(58, 168, 82), TexId.PINE_FOLIAGE, 0.75);
 
     const ornamentPalette: Color4[] = [
-      rgb(238, 44, 48),
-      rgb(252, 212, 62),
-      rgb(56, 152, 245),
-      rgb(236, 92, 214),
+      rgb(242, 42, 48),
+      rgb(255, 216, 64),
+      rgb(56, 156, 250),
+      rgb(240, 88, 218),
     ];
-    for (let i = 0; i < 12; i++) {
-      const ang = (i / 12) * Math.PI * 2;
-      const tier = i % 3;
-      const rad = tier === 0 ? 10.2 : tier === 1 ? 8.0 : 5.4;
-      const oy = tier === 0 ? 8.5 : tier === 1 ? 15.0 : 21.0;
+    for (let i = 0; i < 18; i++) {
+      const ang = (i / 18) * Math.PI * 2 * 2.0;
+      const tNorm = i / 18;
+      const rad = 11.8 * (1 - tNorm * 0.68);
+      const oy = 7.2 + tNorm * 19.5;
       mb.addSphere(
         tx + Math.cos(ang) * rad,
         oy,
         tz + Math.sin(ang) * rad,
-        1.45,
-        1.45,
-        1.45,
-        4,
-        6,
+        1.5,
+        1.5,
+        1.5,
+        8,
+        10,
         ornamentPalette[i % ornamentPalette.length],
         TexId.SOLID,
-        0.4
+        0.38
       );
     }
 
-    // Glowing Golden Star at the top of the Christmas Tree
-    mb.addSphere(tx, 32.2, tz, 3.0, 3.0, 1.5, 5, 8, rgb(255, 232, 75), TexId.SOLID, 0.65);
-    mb.addOrientedBox(tx, 32.2, tz, 5.6, 5.6, 1.5, 0, Math.PI * 0.25, rgb(255, 238, 95), TexId.SOLID, 0.55);
+    // Glowing Golden Star Topper + Halo Ring
+    mb.addSphere(tx, 33.6, tz, 3.0, 3.0, 1.5, 8, 12, rgb(255, 236, 82), TexId.SOLID, 0.55);
+    mb.addOrientedBox(tx, 33.6, tz, 5.8, 5.8, 1.5, 0, Math.PI * 0.25, rgb(255, 242, 104), TexId.SOLID, 0.5);
+    mb.addTorus(tx, 33.6, tz, 4.2, 0.45, 14, 6, 'z', rgb(255, 245, 140), TexId.SOLID, 0.25);
 
-    // Presents under the tree
-    mb.addBox(tx - 8, 0.8, tz + 8, 6, 5, 6, rgb(218, 44, 48), TexId.GIFT_WRAP, 0.6);
-    mb.addBox(tx + 7, 0.8, tz + 8, 5.5, 4.5, 5.5, rgb(48, 128, 214), TexId.GIFT_WRAP, 0.6);
+    // Pile of Festive Presents with 3D Bow Loops under the Tree
+    for (const [gx, gz, gw, gh, gc] of [
+      [tx - 8.5, tz + 8.0, 6.2, 5.2, rgb(222, 42, 48)],
+      [tx + 7.5, tz + 8.2, 5.6, 4.6, rgb(48, 128, 218)],
+      [tx - 1.5, tz + 10.2, 5.0, 4.2, rgb(52, 168, 86)],
+      [tx + 8.8, tz - 5.5, 5.2, 4.4, rgb(168, 64, 196)],
+    ] as const) {
+      mb.addBeveledBox(gx, 0.8, gz, gw, gh, gw, 0.5, gc, TexId.GIFT_WRAP, 0.55);
+      mb.addTorus(gx, 0.8 + gh + 0.5, gz, 1.3, 0.45, 8, 6, 'x', rgb(255, 218, 72), TexId.SOLID, 0.35);
+      mb.addTorus(gx, 0.8 + gh + 0.5, gz, 1.3, 0.45, 8, 6, 'z', rgb(255, 218, 72), TexId.SOLID, 0.35);
+    }
   }
 
-  // 6. Table Room Second Table (cols 11..12, rows 17..18 => x: 176..208, z: 272..304)
-  mb.addBox(12 * ts, 0, 18 * ts, 2 * ts - 2, 6.8, 2 * ts - 2, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.75);
+  // 6. Table Room Second Table & Chairs (cols 11..12, rows 17..18 => x: 192, z: 288)
+  mb.addShadowDisc(12 * ts, 0, 18 * ts, 16, 16, 0.32);
+  mb.addBeveledBox(12 * ts, 0, 18 * ts, 2 * ts - 2, 6.8, 2 * ts - 2, 0.6, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.7);
 
-  // 7. Shower Sink (col 17, rows 7..8) & Toilet (col 19, row 8)
-  mb.addBox(17.5 * ts, 0, 8 * ts, 13, 7.5, 22, rgb(242, 246, 252), TexId.SOLID, 0.7);
-  mb.addCylinder(19.5 * ts, 0, 8.5 * ts, 4.4, 4.8, 5.5, 8, rgb(246, 250, 255), TexId.SOLID, 0.7);
+  // 7. Shower Sink & Porcelain Toilet (col 17, rows 7..8 & col 19, row 8)
+  mb.addBeveledBox(17.5 * ts, 0, 8 * ts, 13.5, 7.8, 22, 0.6, rgb(242, 246, 252), TexId.SOLID, 0.65);
+  mb.addCylinder(19.5 * ts, 0, 8.5 * ts, 3.8, 4.8, 5.4, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
+  mb.addTorus(19.5 * ts, 5.4, 8.5 * ts, 3.8, 1.0, 12, 8, 'y', rgb(252, 254, 255), TexId.SOLID, 0.45);
 
-  // 8. Bedroom Double Bed (cols 26..27, rows 6..7 => x: 416..448, z: 96..128)
-  mb.addBox(27 * ts, 0, 7 * ts, 2 * ts - 2, 5.5, 2 * ts - 2, rgb(132, 82, 42), TexId.WOOD_GRAIN, 0.75);
-  mb.addBox(27 * ts, 5.2, 7 * ts, 2 * ts - 4, 2.2, 2 * ts - 4, rgb(198, 52, 58), TexId.FABRIC, 0.55);
+  // 8. Bedroom Carved Sleigh Double Bed with Duvet & Pillows (cols 26..27, rows 6..7 => x: 432, z: 112)
+  {
+    const bx = 27 * ts;
+    const bz = 7 * ts;
+    mb.addShadowDisc(bx, 0, bz, 17, 17, 0.34);
+    mb.addBeveledBox(bx, 0, bz, 2 * ts - 2, 4.8, 2 * ts - 2, 0.6, rgb(128, 78, 38), TexId.WOOD_GRAIN, 0.7);
+    // Carved headboard on North side
+    mb.addBeveledBox(bx, 4.8, bz - ts + 2.5, 2 * ts - 2, 7.2, 3.2, 0.6, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.65);
+    // White sheet & plush crimson duvet
+    mb.addBeveledBox(bx, 4.6, bz, 2 * ts - 4, 2.0, 2 * ts - 4, 0.6, rgb(248, 248, 252), TexId.FABRIC, 0.45);
+    mb.addBeveledBox(bx, 5.2, bz + 2.5, 2 * ts - 3.5, 2.2, 2 * ts - 9, 0.7, rgb(198, 48, 56), TexId.FABRIC, 0.55);
+    // Plump pillows
+    mb.addSphere(bx - 6.5, 7.2, bz - 8.5, 5.2, 1.8, 3.2, 8, 10, rgb(252, 252, 255), TexId.FABRIC, 0.45);
+    mb.addSphere(bx + 6.5, 7.2, bz - 8.5, 5.2, 1.8, 3.2, 8, 10, rgb(252, 252, 255), TexId.FABRIC, 0.45);
+  }
 
-  // 9. Office Desks & Computer (cols 20..22, rows 15..17 => x: 320..368, z: 240..288)
-  mb.addBox(21.5 * ts, 0, 16.5 * ts, 3 * ts - 4, 6.8, 2 * ts - 2, rgb(142, 90, 48), TexId.WOOD_GRAIN, 0.75);
-  mb.addBox(21.5 * ts, 6.8, 16.5 * ts, 9.5, 7.0, 2.0, rgb(42, 46, 56), TexId.WINDOW_GLOW, 0.55);
+  // 9. Office Executive Desk, Ultrawide Monitor, Keyboard & Ergonomic Swivel Chair (cols 20..22, rows 15..17)
+  {
+    const ox = 21.5 * ts;
+    const oz = 16.5 * ts;
+    mb.addShadowDisc(ox, 0, oz, 22, 16, 0.32);
+    mb.addBeveledBox(ox, 0, oz, 3 * ts - 4, 6.8, 2 * ts - 2, 0.6, rgb(142, 90, 48), TexId.WOOD_GRAIN, 0.7);
+    // Monitor stand, glowing ultrawide screen & keyboard
+    mb.addCylinder(ox, 6.8, oz - 4, 2.6, 0.8, 2.2, 10, rgb(52, 58, 70), TexId.SOLID, 0.4);
+    mb.addBeveledBox(ox, 8.6, oz - 4, 14, 7.5, 1.8, 0.35, rgb(36, 40, 50), TexId.WINDOW_GLOW, 0.55);
+    mb.addBeveledBox(ox, 6.8, oz + 3, 9, 0.6, 3.6, 0.2, rgb(48, 54, 66), TexId.SOLID, 0.35);
+    // Swivel chair with backrest
+    mb.addCylinder(ox, 0, oz + 14, 4.2, 1.0, 4.2, 10, rgb(44, 48, 58), TexId.SOLID, 0.45);
+    mb.addBeveledBox(ox, 4.0, oz + 14, 8.5, 1.6, 8.5, 0.5, rgb(58, 66, 82), TexId.FABRIC, 0.55);
+    mb.addBeveledBox(ox, 5.4, oz + 17.5, 8.0, 6.5, 2.0, 0.5, rgb(52, 60, 76), TexId.FABRIC, 0.55);
+  }
 
   return mb;
 }
@@ -1060,7 +1458,7 @@ export function getStaticLevelMesh(levelId: LevelId, map: TileMap): MeshData {
 }
 
 // ============================================================================
-// 3D Articulated Character Models (Santa, 11 NPCs, Dog, Cat, Props)
+// High-Fi 3D Articulated Character Models (Santa, 11 NPCs, Dog, Cat, Props)
 // ============================================================================
 
 export interface CharacterColors3D {
@@ -1087,8 +1485,13 @@ export function addHumanoid3D(
   isMoving: boolean,
   style: CharacterColors3D,
   isSanta = false,
-  carryingLadder = false
+  carryingLadder = false,
+  translucentMb?: MeshBuilder
 ): void {
+  if (translucentMb) {
+    translucentMb.addShadowDisc(cx, baseY, cz, 5.6, 5.6, 0.36);
+  }
+
   const cyaw = Math.cos(yaw);
   const syaw = Math.sin(yaw);
   const fx = cyaw;
@@ -1096,220 +1499,164 @@ export function addHumanoid3D(
   const rx = -syaw;
   const rz = cyaw;
 
-  const swing = isMoving ? Math.sin(walkPhase * 11) * 0.55 : 0;
-  const bob = isMoving ? Math.abs(Math.sin(walkPhase * 11)) * 0.8 : 0;
+  const swing = isMoving ? Math.sin(walkPhase * 11) * 0.58 : 0;
+  const bob = isMoving ? Math.abs(Math.sin(walkPhase * 11)) * 0.85 : 0;
   const y0 = baseY + bob;
 
-  // Boots & Legs
-  const legSpread = 1.65;
-  const legSwingDist = style.sitting ? 1.8 : Math.sin(swing) * 1.8;
-  mb.addOrientedBox(
-    cx + rx * legSpread + fx * legSwingDist,
-    y0 + 2.2,
-    cz + rz * legSpread + fz * legSwingDist,
-    2.4,
-    4.4,
-    2.4,
-    yaw,
-    style.sitting ? 0.9 : swing,
-    style.pants,
-    TexId.SOLID,
-    0.75
-  );
-  mb.addOrientedBox(
-    cx - rx * legSpread - fx * legSwingDist,
-    y0 + 2.2,
-    cz - rz * legSpread - fz * legSwingDist,
-    2.4,
-    4.4,
-    2.4,
-    yaw,
-    style.sitting ? 0.9 : -swing,
-    style.pants,
-    TexId.SOLID,
-    0.75
-  );
+  // 1. Articulated Legs + Rounded Boots + Boot Cuffs
+  const legSpread = 1.75;
+  const legSwingDist = style.sitting ? 1.9 : Math.sin(swing) * 1.9;
+  const bootColor: Color4 = isSanta ? rgb(28, 30, 38) : darkenColor(style.pants, 0.65);
 
-  // Torso / Coat
-  mb.addCylinder(cx, y0 + 3.8, cz, 4.2, 3.4, 6.8, 8, style.coat, TexId.FABRIC, 0.85);
+  for (const side of [1, -1] as const) {
+    const sSwing = style.sitting ? 0.9 : side * swing;
+    const sDist = style.sitting ? 1.9 : side * legSwingDist;
+    const lx = cx + rx * legSpread * side + fx * sDist;
+    const lz = cz + rz * legSpread * side + fz * sDist;
+
+    // Rounded boot sole & toe
+    mb.addSphere(lx + fx * 0.5, y0 + 1.0, lz + fz * 0.5, 1.45, 1.05, 1.65, 6, 8, bootColor, TexId.SOLID, 0.6);
+    if (isSanta) {
+      // Fluffy white fur boot cuff
+      mb.addTorus(lx, y0 + 2.1, lz, 1.15, 0.45, 8, 6, 'y', style.trim, TexId.SNOW, 0.4);
+    }
+    // Pant leg
+    mb.addOrientedBox(lx, y0 + 2.8, lz, 2.3, 3.6, 2.3, yaw, sSwing, style.pants, TexId.SOLID, 0.65);
+  }
+
+  // 2. Sculpted Coat Skirt + Upper Torso + Scarf/Collar
+  mb.addCylinder(cx, y0 + 3.6, cz, 4.45, 3.65, 3.8, 14, style.coat, TexId.FABRIC, 0.75);
+  mb.addCylinder(cx, y0 + 6.8, cz, 3.65, 3.25, 3.8, 14, style.coat, TexId.FABRIC, 0.75);
 
   if (isSanta) {
-    mb.addCylinder(cx, y0 + 3.6, cz, 4.45, 4.35, 1.4, 8, style.trim, TexId.SNOW, 0.5);
-    mb.addCylinder(cx, y0 + 5.8, cz, 4.05, 3.95, 1.3, 8, rgb(32, 32, 38), TexId.SOLID, 0.45);
+    // Plush white fur bottom coat hem, vertical center fur trim, leather belt, and gold frame buckle
+    mb.addTorus(cx, y0 + 3.8, cz, 4.15, 0.7, 14, 8, 'y', style.trim, TexId.SNOW, 0.5);
+    mb.addCylinder(cx, y0 + 5.8, cz, 4.05, 3.95, 1.35, 14, rgb(28, 30, 38), TexId.SOLID, 0.45);
     mb.addOrientedBox(
-      cx + fx * 3.9,
-      y0 + 6.4,
-      cz + fz * 3.9,
-      0.8,
-      1.5,
-      1.8,
+      cx + fx * 3.95,
+      y0 + 6.45,
+      cz + fz * 3.95,
+      0.85,
+      1.65,
+      2.0,
       yaw,
       0,
-      rgb(250, 212, 64),
+      rgb(252, 214, 68),
       TexId.SOLID,
       0.35
     );
+    // Plush white fur collar around Santa's shoulders
+    mb.addTorus(cx, y0 + 10.2, cz, 3.0, 0.85, 12, 8, 'y', style.trim, TexId.SNOW, 0.5);
+  } else {
+    // Cozy knitted winter collar / scarf ring around NPC neck
+    mb.addTorus(cx, y0 + 10.2, cz, 2.85, 0.75, 12, 8, 'y', style.trim, TexId.FABRIC, 0.45);
   }
 
-  // Arms
-  const armSpread = 4.4;
-  mb.addOrientedBox(
-    cx + rx * armSpread - fx * legSwingDist * 0.7,
-    y0 + 7.5,
-    cz + rz * armSpread - fz * legSwingDist * 0.7,
-    2.1,
-    5.0,
-    2.1,
-    yaw,
-    -swing * 0.9,
-    style.coat,
-    TexId.FABRIC,
-    0.7
-  );
-  mb.addOrientedBox(
-    cx - rx * armSpread + fx * legSwingDist * 0.7,
-    y0 + 7.5,
-    cz - rz * armSpread + fz * legSwingDist * 0.7,
-    2.1,
-    5.0,
-    2.1,
-    yaw,
-    swing * 0.9,
-    style.coat,
-    TexId.FABRIC,
-    0.7
-  );
+  // 3. Articulated Shoulders, Arms & Rounded Mittens/Hands
+  const armSpread = 4.35;
+  const mittenColor: Color4 = isSanta ? rgb(224, 232, 245) : style.skin;
+  for (const side of [1, -1] as const) {
+    const aSwing = -side * swing * 0.9;
+    const aDist = -side * legSwingDist * 0.72;
+    const ax = cx + rx * armSpread * side + fx * aDist;
+    const az = cz + rz * armSpread * side + fz * aDist;
 
-  // Expressive Wind Waker Cartoon Head
-  const headY = y0 + 13.0;
-  mb.addSphere(cx, headY, cz, 3.6, 3.5, 3.6, 6, 8, style.skin, TexId.SOLID, 0.85);
+    // Shoulder cap
+    mb.addSphere(cx + rx * 3.7 * side, y0 + 9.4, cz + rz * 3.7 * side, 1.4, 1.4, 1.4, 6, 8, style.coat, TexId.FABRIC, 0.5);
+    // Sleeve
+    mb.addOrientedBox(ax, y0 + 7.5, az, 2.0, 4.4, 2.0, yaw, aSwing, style.coat, TexId.FABRIC, 0.65);
+    // Mitten / Hand sphere
+    mb.addSphere(ax + fx * Math.sin(aSwing) * 1.4, y0 + 5.1, az + fz * Math.sin(aSwing) * 1.4, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
+  }
 
-  const eyeForward = 3.25;
-  const eyeSpread = 1.25;
-  mb.addSphere(
-    cx + fx * eyeForward + rx * eyeSpread,
-    headY + 0.4,
-    cz + fz * eyeForward + rz * eyeSpread,
-    0.58,
-    0.72,
-    0.58,
-    4,
-    5,
-    rgb(24, 28, 38),
-    TexId.SOLID,
-    0.2
-  );
-  mb.addSphere(
-    cx + fx * eyeForward - rx * eyeSpread,
-    headY + 0.4,
-    cz + fz * eyeForward - rz * eyeSpread,
-    0.58,
-    0.72,
-    0.58,
-    4,
-    5,
-    rgb(24, 28, 38),
-    TexId.SOLID,
-    0.2
-  );
+  // 4. High-Fi Expressive Wind Waker HD Head, Ears, Nose, Cheeks & Eye Catchlights
+  const headY = y0 + 13.3;
+  mb.addSphere(cx, headY, cz, 3.75, 3.65, 3.75, 12, 16, style.skin, TexId.SOLID, 0.8);
+
+  // 3D Ears on left and right sides of head
+  mb.addSphere(cx + rx * 3.65, headY - 0.1, cz + rz * 3.65, 0.75, 1.05, 0.75, 6, 8, style.skin, TexId.SOLID, 0.45);
+  mb.addSphere(cx - rx * 3.65, headY - 0.1, cz - rz * 3.65, 0.75, 1.05, 0.75, 6, 8, style.skin, TexId.SOLID, 0.45);
+
+  // Sculpted 3D Button Nose & Rosy Winter Cheeks
+  const noseColor = lightenColor(style.skin, -0.06);
+  mb.addSphere(cx + fx * 3.75, headY - 0.15, cz + fz * 3.75, 0.72, 0.68, 0.72, 6, 8, noseColor, TexId.SOLID, 0.35);
+
+  // Expressive Eyes: White Sclera + Dark Iris + Bright White Catchlight Shine + Eyebrows
+  const eyeForward = 3.35;
+  const eyeSpread = 1.35;
+  for (const side of [1, -1] as const) {
+    const ex = cx + fx * eyeForward + rx * eyeSpread * side;
+    const ez = cz + fz * eyeForward + rz * eyeSpread * side;
+    // White sclera base
+    mb.addSphere(ex, headY + 0.45, ez, 0.78, 0.9, 0.65, 6, 8, rgb(252, 254, 255), TexId.SOLID, 0.15);
+    // Dark pupil/iris
+    mb.addSphere(ex + fx * 0.22, headY + 0.45, ez + fz * 0.22, 0.56, 0.72, 0.52, 6, 8, rgb(22, 26, 38), TexId.SOLID, 0.15);
+    // Signature Wind Waker HD white eye catchlight dot
+    mb.addSphere(ex + fx * 0.38 + rx * 0.18, headY + 0.68, ez + fz * 0.38 + rz * 0.18, 0.22, 0.22, 0.22, 4, 6, rgb(255, 255, 255), TexId.SOLID, 0);
+    // Expressive eyebrow
+    mb.addOrientedBox(ex + fx * 0.1, headY + 1.45, ez + fz * 0.1, 0.4, 0.32, 1.1, yaw, 0, style.hair, TexId.SOLID, 0.2);
+  }
 
   if (style.hasBeard || isSanta) {
-    mb.addSphere(
-      cx + fx * 2.2,
-      headY - 1.5,
-      cz + fz * 2.2,
-      3.1,
-      2.6,
-      2.6,
-      5,
-      7,
-      rgb(250, 252, 255),
-      TexId.SNOW,
-      0.7
-    );
+    // Full sculpted white Santa beard + curly mustache lobes
+    mb.addSphere(cx + fx * 2.35, headY - 1.65, cz + fz * 2.35, 3.25, 2.75, 2.95, 10, 12, rgb(250, 252, 255), TexId.SNOW, 0.65);
+    mb.addSphere(cx + fx * 3.1, headY - 2.9, cz + fz * 3.1, 2.1, 1.8, 2.1, 8, 10, rgb(252, 254, 255), TexId.SNOW, 0.55);
+    // Mustache
+    mb.addSphere(cx + fx * 3.45 + rx * 0.95, headY - 0.65, cz + fz * 3.45 + rz * 0.95, 1.1, 0.65, 1.1, 6, 8, rgb(255, 255, 255), TexId.SNOW, 0.35);
+    mb.addSphere(cx + fx * 3.45 - rx * 0.95, headY - 0.65, cz + fz * 3.45 - rz * 0.95, 1.1, 0.65, 1.1, 6, 8, rgb(255, 255, 255), TexId.SNOW, 0.35);
   }
 
   if (style.hat || isSanta) {
     const hatColor = style.hat ?? rgb(220, 36, 42);
-    mb.addCylinder(cx, headY + 2.0, cz, 3.9, 3.8, 1.4, 8, style.trim, TexId.SNOW, 0.65);
-    mb.addCone(cx - fx * 0.6, headY + 3.2, cz - fz * 0.6, 3.5, 5.8, 8, hatColor, TexId.FABRIC, 0.8);
+    // Plush torus fur hat brim
+    mb.addTorus(cx, headY + 2.25, cz, 3.35, 0.85, 14, 8, 'y', style.trim, TexId.SNOW, 0.55);
+    // Curved multi-segment drooping Santa/winter hat
+    mb.addCylinder(cx - fx * 0.3, headY + 2.6, cz - fz * 0.3, 3.35, 2.3, 3.2, 12, hatColor, TexId.FABRIC, 0.7);
+    mb.addCone(cx - fx * 1.15, headY + 5.4, cz - fz * 1.15, 2.35, 4.2, 12, hatColor, TexId.FABRIC, 0.7);
+    // Fluffy white pom-pom at tip of hat
     mb.addSphere(
-      cx - fx * 1.8,
-      headY + 8.6,
-      cz - fz * 1.8,
-      1.45,
-      1.45,
-      1.45,
-      5,
-      6,
+      cx - fx * 2.1,
+      headY + 9.2 + bob * 0.3,
+      cz - fz * 2.1,
+      1.55,
+      1.55,
+      1.55,
+      8,
+      10,
       rgb(252, 254, 255),
       TexId.SNOW,
-      0.65
+      0.6
     );
   } else {
-    mb.addSphere(cx, headY + 1.2, cz, 3.75, 2.8, 3.75, 5, 8, style.hair, TexId.SOLID, 0.75);
+    // Sculpted multi-part Wind Waker HD hair (crown + bangs + side locks + back volume)
+    mb.addSphere(cx - fx * 0.2, headY + 1.15, cz - fz * 0.2, 3.95, 3.05, 3.95, 10, 14, style.hair, TexId.SOLID, 0.7);
+    mb.addSphere(cx + fx * 1.8, headY + 2.15, cz + fz * 1.8, 3.1, 1.45, 3.3, 8, 10, style.hair, TexId.SOLID, 0.5);
+    mb.addSphere(cx - fx * 2.6, headY - 0.2, cz - fz * 2.6, 2.4, 2.4, 2.4, 8, 10, style.hair, TexId.SOLID, 0.55);
   }
 
+  // 5. Held High-Fi Props
   if (style.holdingClub) {
-    mb.addOrientedBox(
-      cx + fx * 4.5 + rx * 2.5,
-      y0 + 4.5,
-      cz + fz * 4.5 + rz * 2.5,
-      0.8,
-      9.0,
-      0.8,
-      yaw,
-      0.35,
-      rgb(212, 218, 228),
-      TexId.SOLID,
-      0.5
-    );
+    const gx = cx + fx * 4.5 + rx * 2.5;
+    const gz = cz + fz * 4.5 + rz * 2.5;
+    mb.addOrientedBox(gx, y0 + 4.5, gz, 0.65, 9.2, 0.65, yaw, 0.35, rgb(216, 222, 234), TexId.SOLID, 0.45);
+    mb.addBox(gx + fx * 1.6, y0 + 0.6, gz + fz * 1.6, 1.6, 1.1, 2.8, rgb(180, 190, 206), TexId.SOLID, 0.45);
+    mb.addSphere(gx + fx * 3.4, y0 + 0.6, gz + fz * 3.4, 0.7, 0.7, 0.7, 6, 8, rgb(252, 254, 255), TexId.SOLID, 0.3);
   }
 
   if (style.holdingBook) {
-    mb.addOrientedBox(
-      cx + fx * 4.2,
-      y0 + 7.2,
-      cz + fz * 4.2,
-      3.0,
-      2.4,
-      3.8,
-      yaw,
-      0.4,
-      rgb(192, 48, 52),
-      TexId.BOOKSHELF,
-      0.5
-    );
+    mb.addOrientedBox(cx + fx * 4.2, y0 + 7.2, cz + fz * 4.2, 3.2, 2.5, 4.0, yaw, 0.4, rgb(192, 48, 52), TexId.BOOKSHELF, 0.5);
+    mb.addOrientedBox(cx + fx * 4.0, y0 + 7.45, cz + fz * 4.0, 2.9, 2.2, 3.6, yaw, 0.4, rgb(250, 246, 236), TexId.SOLID, 0.3);
   }
 
   if (style.hasPresentInLap) {
-    mb.addBox(
-      cx + fx * 4.2,
-      y0 + 5.0,
-      cz + fz * 4.2,
-      5.2,
-      4.6,
-      5.2,
-      rgb(220, 42, 48),
-      TexId.GIFT_WRAP,
-      0.65
-    );
+    const gx = cx + fx * 4.2;
+    const gz = cz + fz * 4.2;
+    mb.addBeveledBox(gx, y0 + 4.8, gz, 5.4, 4.8, 5.4, 0.45, rgb(220, 42, 48), TexId.GIFT_WRAP, 0.6);
+    mb.addTorus(gx, y0 + 9.8, gz, 1.2, 0.4, 8, 6, 'z', rgb(255, 218, 72), TexId.SOLID, 0.35);
   }
 
   if (carryingLadder) {
-    mb.addOrientedBox(
-      cx - fx * 3.2,
-      y0 + 8.5,
-      cz - fz * 3.2,
-      1.4,
-      12.0,
-      5.2,
-      yaw,
-      0.2,
-      rgb(168, 112, 58),
-      TexId.WOOD_GRAIN,
-      0.65
-    );
+    mb.addOrientedBox(cx - fx * 3.3, y0 + 8.5, cz - fz * 3.3, 1.4, 12.5, 5.4, yaw, 0.2, rgb(168, 112, 58), TexId.WOOD_GRAIN, 0.6);
   }
 }
 
@@ -1323,18 +1670,18 @@ function addWoodenLadder3D(
 ): void {
   const wood = rgb(176, 118, 62);
   if (standingVertical) {
-    mb.addBox(cx - 2.6, baseY, cz, 1.4, height, 1.4, wood, TexId.WOOD_GRAIN, 0.7);
-    mb.addBox(cx + 2.6, baseY, cz, 1.4, height, 1.4, wood, TexId.WOOD_GRAIN, 0.7);
+    mb.addCylinder(cx - 2.7, baseY, cz, 0.85, 0.8, height, 10, wood, TexId.WOOD_GRAIN, 0.6);
+    mb.addCylinder(cx + 2.7, baseY, cz, 0.85, 0.8, height, 10, wood, TexId.WOOD_GRAIN, 0.6);
     const rungs = 8;
     for (let i = 0; i < rungs; i++) {
       const ry = baseY + 3 + (i / (rungs - 1)) * (height - 5);
-      mb.addBox(cx, ry, cz, 5.8, 1.1, 1.2, wood, TexId.WOOD_GRAIN, 0.55);
+      mb.addBeveledBox(cx, ry, cz, 6.0, 1.0, 1.1, 0.25, wood, TexId.WOOD_GRAIN, 0.5);
     }
   } else {
-    mb.addBox(cx, baseY + 0.6, cz - 2.5, 24, 1.5, 1.4, wood, TexId.WOOD_GRAIN, 0.65);
-    mb.addBox(cx, baseY + 0.6, cz + 2.5, 24, 1.5, 1.4, wood, TexId.WOOD_GRAIN, 0.65);
+    mb.addBeveledBox(cx, baseY + 0.6, cz - 2.6, 24, 1.5, 1.4, 0.3, wood, TexId.WOOD_GRAIN, 0.6);
+    mb.addBeveledBox(cx, baseY + 0.6, cz + 2.6, 24, 1.5, 1.4, 0.3, wood, TexId.WOOD_GRAIN, 0.6);
     for (let i = -9; i <= 9; i += 3.6) {
-      mb.addBox(cx + i, baseY + 0.8, cz, 1.2, 1.3, 5.6, wood, TexId.WOOD_GRAIN, 0.55);
+      mb.addBeveledBox(cx + i, baseY + 0.8, cz, 1.2, 1.3, 5.8, 0.25, wood, TexId.WOOD_GRAIN, 0.5);
     }
   }
 }
@@ -1348,6 +1695,8 @@ function addDog3D(
   const cx = dog.x + dog.width * 0.5;
   const cz = dog.y + dog.height * 0.5;
   const baseY = getTerrainHeight(cx, cz, 'level-outside');
+  translucentMb.addShadowDisc(cx, baseY, cz, 5.8, 4.4, 0.35);
+
   const yaw = directionToYaw(dog.facing);
   const cyaw = Math.cos(yaw);
   const syaw = Math.sin(yaw);
@@ -1358,106 +1707,143 @@ function addDog3D(
 
   const isRunning = dog.mode === 'chasing' || Math.hypot(dog.vx, dog.vy) > 2;
   const legBounce = isRunning ? Math.sin(elapsedTime * 16) * 1.2 : 0;
-  const bodyColor = rgb(198, 134, 68);
+  const bodyColor = rgb(206, 142, 74);
+  const chestColor = rgb(238, 196, 138);
   const earColor = rgb(128, 76, 34);
 
+  // 4 Articulated Legs & Rounded Paws
   for (const [fSign, rSign] of [
     [1, 1],
     [1, -1],
     [-1, 1],
     [-1, -1],
   ]) {
-    mb.addBox(
-      cx + fx * fSign * 3.0 + rx * rSign * 1.8,
-      baseY + Math.max(0, fSign * legBounce * 0.4),
-      cz + fz * fSign * 3.0 + rz * rSign * 1.8,
-      1.6,
-      3.2,
-      1.6,
-      bodyColor,
-      TexId.SOLID,
-      0.6
-    );
+    const lx = cx + fx * fSign * 3.1 + rx * rSign * 1.85;
+    const lz = cz + fz * fSign * 3.1 + rz * rSign * 1.85;
+    const ly = baseY + Math.max(0, fSign * legBounce * 0.45);
+    mb.addCylinder(lx, ly + 0.5, lz, 0.85, 0.95, 3.0, 8, bodyColor, TexId.SOLID, 0.55);
+    mb.addSphere(lx + fx * 0.3, ly + 0.55, lz + fz * 0.3, 1.0, 0.65, 1.1, 6, 8, chestColor, TexId.SOLID, 0.45);
   }
 
-  mb.addOrientedBox(cx, baseY + 4.0, cz, 8.2, 3.8, 4.4, yaw, 0, bodyColor, TexId.FABRIC, 0.75);
-  mb.addOrientedBox(cx + fx * 3.2, baseY + 4.8, cz + fz * 3.2, 1.4, 4.2, 4.6, yaw, 0, rgb(220, 38, 42), TexId.SOLID, 0.5);
-  mb.addSphere(cx + fx * 4.6, baseY + 6.8, cz + fz * 4.6, 2.8, 2.6, 2.8, 5, 7, bodyColor, TexId.SOLID, 0.75);
-  mb.addSphere(cx + fx * 6.8, baseY + 6.2, cz + fz * 6.8, 1.5, 1.2, 1.5, 4, 5, earColor, TexId.SOLID, 0.55);
-  mb.addSphere(cx + fx * 4.2 + rx * 2.6, baseY + 6.2, cz + fz * 4.2 + rz * 2.6, 1.0, 2.2, 1.2, 4, 5, earColor, TexId.SOLID, 0.55);
-  mb.addSphere(cx + fx * 4.2 - rx * 2.6, baseY + 6.2, cz + fz * 4.2 - rz * 2.6, 1.0, 2.2, 1.2, 4, 5, earColor, TexId.SOLID, 0.55);
+  // Sculpted Torso, Haunches & Fluffy Chest
+  mb.addSphere(cx - fx * 1.4, baseY + 4.3, cz - fz * 1.4, 3.4, 2.3, 2.4, 8, 12, bodyColor, TexId.FABRIC, 0.65);
+  mb.addSphere(cx + fx * 1.8, baseY + 4.6, cz + fz * 1.8, 3.0, 2.5, 2.5, 8, 12, bodyColor, TexId.FABRIC, 0.65);
+  mb.addSphere(cx + fx * 3.2, baseY + 4.4, cz + fz * 3.2, 2.1, 2.0, 2.1, 6, 10, chestColor, TexId.FABRIC, 0.5);
 
-  const wag = Math.sin(elapsedTime * 18) * 1.4;
+  // Red Collar + Shiny Gold Dog Tag
+  mb.addTorus(cx + fx * 3.5, baseY + 5.6, cz + fz * 3.5, 2.1, 0.52, 12, 6, 'y', rgb(224, 36, 42), TexId.SOLID, 0.45);
+  mb.addSphere(cx + fx * 5.4, baseY + 4.8, cz + fz * 5.4, 0.55, 0.55, 0.55, 6, 6, rgb(252, 214, 68), TexId.SOLID, 0.25);
+
+  // Expressive Head, Snout, Wet Black Nose, Happy Pink Tongue & Floppy Ears
+  const hx = cx + fx * 4.8;
+  const hz = cz + fz * 4.8;
+  const hy = baseY + 7.1;
+  mb.addSphere(hx, hy, hz, 2.85, 2.65, 2.85, 10, 14, bodyColor, TexId.SOLID, 0.7);
+  mb.addSphere(hx + fx * 2.2, hy - 0.5, hz + fz * 2.2, 1.65, 1.35, 1.55, 8, 10, chestColor, TexId.SOLID, 0.6);
+  mb.addSphere(hx + fx * 3.65, hy - 0.15, hz + fz * 3.65, 0.65, 0.55, 0.65, 6, 8, rgb(24, 24, 30), TexId.SOLID, 0.25);
+  // Happy pink tongue
+  mb.addSphere(hx + fx * 2.9, hy - 1.45, hz + fz * 2.9, 0.55, 0.75, 0.45, 6, 6, rgb(245, 112, 138), TexId.SOLID, 0.2);
+  // Eyes with catchlights
+  for (const side of [1, -1] as const) {
+    mb.addSphere(hx + fx * 2.2 + rx * 1.25 * side, hy + 0.55, hz + fz * 2.2 + rz * 1.25 * side, 0.5, 0.58, 0.5, 6, 6, rgb(22, 24, 32), TexId.SOLID, 0.15);
+  }
+  // Floppy ears
+  mb.addSphere(hx - fx * 0.2 + rx * 2.75, hy - 0.3, hz - fz * 0.2 + rz * 2.75, 0.95, 2.35, 1.35, 8, 10, earColor, TexId.SOLID, 0.55);
+  mb.addSphere(hx - fx * 0.2 - rx * 2.75, hy - 0.3, hz - fz * 0.2 - rz * 2.75, 0.95, 2.35, 1.35, 8, 10, earColor, TexId.SOLID, 0.55);
+
+  // Wagging Tail
+  const wag = Math.sin(elapsedTime * 18) * 1.5;
   mb.addOrientedBox(
     cx - fx * 4.6 + rx * wag,
-    baseY + 5.8,
+    baseY + 5.9,
     cz - fz * 4.6 + rz * wag,
-    3.2,
-    1.2,
-    1.2,
+    3.4,
+    1.1,
+    1.1,
     yaw,
-    0.55,
+    0.58,
     earColor,
     TexId.SOLID,
-    0.55
+    0.5
   );
 
+  // Floating 3D Puffy Heart when dog is chasing
   if (dog.mode === 'chasing' || dog.hearts.length > 0) {
-    const hy = baseY + 12.5 + Math.sin(elapsedTime * 6) * 1.2;
-    translucentMb.addSphere(cx - 1.1, hy, cz, 1.5, 1.5, 1.2, 4, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
-    translucentMb.addSphere(cx + 1.1, hy, cz, 1.5, 1.5, 1.2, 4, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
-    translucentMb.addCone(cx, hy - 2.4, cz, 2.2, 2.6, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
+    const heartY = baseY + 13.0 + Math.sin(elapsedTime * 6) * 1.2;
+    translucentMb.addSphere(cx - 1.15, heartY, cz, 1.55, 1.55, 1.25, 8, 10, rgb(248, 48, 82, 0.94), TexId.SOLID, 0.45);
+    translucentMb.addSphere(cx + 1.15, heartY, cz, 1.55, 1.55, 1.25, 8, 10, rgb(248, 48, 82, 0.94), TexId.SOLID, 0.45);
+    translucentMb.addCone(cx, heartY - 2.4, cz, 2.25, 2.6, 10, rgb(248, 48, 82, 0.94), TexId.SOLID, 0.45);
   }
 }
 
-function addCat3D(mb: MeshBuilder, cat: Cat): void {
+function addCat3D(mb: MeshBuilder, translucentMb: MeshBuilder, cat: Cat, elapsedTime = 0): void {
   const cx = cat.x + cat.width * 0.5;
   const cz = cat.y + cat.height * 0.5;
-  const catBlack = rgb(28, 30, 38);
+  translucentMb.addShadowDisc(cx, 0, cz, 4.4, 4.4, 0.32);
 
-  mb.addCylinder(cx, 0, cz, 3.0, 2.4, 5.2, 7, catBlack, TexId.SOLID, 0.75);
-  mb.addSphere(cx, 6.5, cz + 1.0, 2.5, 2.3, 2.5, 5, 7, catBlack, TexId.SOLID, 0.75);
-  mb.addCone(cx - 1.5, 8.2, cz + 1.0, 0.9, 2.2, 4, catBlack, TexId.SOLID, 0.55);
-  mb.addCone(cx + 1.5, 8.2, cz + 1.0, 0.9, 2.2, 4, catBlack, TexId.SOLID, 0.55);
-  mb.addSphere(cx - 0.9, 6.8, cz + 3.2, 0.45, 0.45, 0.45, 4, 4, rgb(84, 245, 112), TexId.SOLID, 0.2);
-  mb.addSphere(cx + 0.9, 6.8, cz + 3.2, 0.45, 0.45, 0.45, 4, 4, rgb(84, 245, 112), TexId.SOLID, 0.2);
+  const catBlack = rgb(28, 30, 40);
+  // Lithe seated feline body & white front paws
+  mb.addCylinder(cx, 0, cz, 3.0, 2.2, 5.2, 12, catBlack, TexId.SOLID, 0.65);
+  mb.addSphere(cx - 1.1, 0.55, cz + 2.4, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+  mb.addSphere(cx + 1.1, 0.55, cz + 2.4, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+  // Sculpted Cat Head + Pointed Ears + Pink Inner Ears + Glowing Emerald Eyes
+  mb.addSphere(cx, 6.6, cz + 1.0, 2.6, 2.4, 2.6, 10, 12, catBlack, TexId.SOLID, 0.65);
+  mb.addCone(cx - 1.55, 8.2, cz + 1.0, 0.95, 2.3, 8, catBlack, TexId.SOLID, 0.5);
+  mb.addCone(cx + 1.55, 8.2, cz + 1.0, 0.95, 2.3, 8, catBlack, TexId.SOLID, 0.5);
+  mb.addSphere(cx - 0.95, 6.85, cz + 3.25, 0.52, 0.58, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+  mb.addSphere(cx + 0.95, 6.85, cz + 3.25, 0.52, 0.58, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+  // S-curved swishing tail
+  const swish = Math.sin(elapsedTime * 5) * 0.9;
+  mb.addSphere(cx + swish, 2.2, cz - 3.2, 0.7, 2.2, 0.7, 6, 8, catBlack, TexId.SOLID, 0.45);
 }
 
 function addMotorcycle3D(
   mb: MeshBuilder,
+  translucentMb: MeshBuilder,
   motorcycle: MotorcycleState,
   elapsedTime: number
 ): void {
   const cx = motorcycle.x + motorcycle.width * 0.5;
   const cz = motorcycle.y + motorcycle.height * 0.5;
   const baseY = getTerrainHeight(cx, cz, 'level-outside');
+  translucentMb.addShadowDisc(cx, baseY, cz, 11, 5.5, 0.36);
 
   if (motorcycle.status === 'crashed') {
-    mb.addOrientedBox(cx, baseY + 2.5, cz, 18, 3.8, 7.0, 0.4, 1.1, rgb(42, 46, 56), TexId.SOLID, 0.75);
-    for (let i = 0; i < 3; i++) {
-      const p = (elapsedTime * 0.9 + i * 0.33) % 1;
-      mb.addSphere(
+    mb.addOrientedBox(cx, baseY + 2.5, cz, 18, 3.8, 7.0, 0.4, 1.1, rgb(42, 46, 56), TexId.SOLID, 0.7);
+    for (let i = 0; i < 4; i++) {
+      const p = (elapsedTime * 0.9 + i * 0.25) % 1;
+      translucentMb.addSphere(
         cx + Math.sin(elapsedTime * 3 + i) * 2.5,
-        baseY + 5 + p * 14,
+        baseY + 5 + p * 15,
         cz,
-        2.0 + p * 2.5,
-        1.8 + p * 2.0,
-        2.0 + p * 2.5,
-        4,
-        6,
-        rgb(168, 174, 184),
+        2.0 + p * 2.6,
+        1.8 + p * 2.2,
+        2.0 + p * 2.6,
+        8,
+        10,
+        rgb(176, 184, 196, (1 - p) * 0.65),
         TexId.SOLID,
-        0.4
+        0
       );
     }
     return;
   }
 
-  mb.addCylinder(cx - 6.5, baseY, cz, 3.5, 3.5, 2.4, 8, rgb(28, 30, 36), TexId.SOLID, 0.65);
-  mb.addCylinder(cx + 6.5, baseY, cz, 3.5, 3.5, 2.4, 8, rgb(28, 30, 36), TexId.SOLID, 0.65);
-  mb.addBox(cx, baseY + 3.0, cz, 14, 4.0, 4.0, rgb(46, 52, 64), TexId.SOLID, 0.75);
-  mb.addBox(cx + 5.0, baseY + 6.5, cz, 1.5, 3.5, 7.5, rgb(192, 198, 210), TexId.SOLID, 0.55);
-  mb.addSphere(cx + 6.8, baseY + 6.8, cz, 1.5, 1.5, 1.5, 4, 5, rgb(255, 242, 156), TexId.SOLID, 0.35);
+  // Front & Rear Rubber Tires (Torus) + Chrome Rims
+  for (const wx of [-6.8, 6.8]) {
+    mb.addTorus(cx + wx, baseY + 3.4, cz, 2.5, 1.0, 14, 8, 'z', rgb(24, 26, 32), TexId.SOLID, 0.55);
+    mb.addCylinder(cx + wx, baseY + 2.2, cz, 1.7, 1.7, 2.2, 10, rgb(210, 218, 232), TexId.SOLID, 0.35);
+  }
+  // Engine block & chrome twin exhaust pipes
+  mb.addBeveledBox(cx, baseY + 2.8, cz, 9.5, 3.8, 3.8, 0.6, rgb(56, 62, 74), TexId.SOLID, 0.6);
+  mb.addOrientedBox(cx - 3.5, baseY + 2.6, cz + 2.2, 9.0, 1.0, 1.0, 0, 0.12, rgb(216, 224, 236), TexId.SOLID, 0.4);
+  // Sculpted Teardrop Fuel Tank & Stepped Leather Saddle
+  mb.addSphere(cx + 2.2, baseY + 6.4, cz, 3.8, 2.0, 2.2, 8, 12, rgb(32, 36, 46), TexId.SOLID, 0.6);
+  mb.addSphere(cx - 3.2, baseY + 5.8, cz, 4.2, 1.4, 2.1, 8, 10, rgb(64, 42, 30), TexId.FABRIC, 0.55);
+  // Front Forks, Handlebars & Chrome Headlight
+  mb.addOrientedBox(cx + 5.2, baseY + 5.8, cz, 1.2, 6.8, 2.8, 0, -0.35, rgb(206, 214, 228), TexId.SOLID, 0.45);
+  mb.addBox(cx + 4.4, baseY + 8.6, cz, 1.2, 1.2, 8.2, rgb(42, 46, 56), TexId.SOLID, 0.45);
+  mb.addSphere(cx + 6.8, baseY + 7.2, cz, 1.4, 1.5, 1.5, 8, 10, rgb(255, 244, 164), TexId.SOLID, 0.35);
 }
 
 function addConeOfSight3D(translucentMb: MeshBuilder, cone: ConeOfSight | null | undefined): void {
@@ -1500,28 +1886,28 @@ function addConeOfSight3D(translucentMb: MeshBuilder, cone: ConeOfSight | null |
 
 function addDoorAndFog3D(opaqueMb: MeshBuilder, door: CollidableDoor): void {
   const b = door.bounds;
-  opaqueMb.addBox(
+  opaqueMb.addBeveledBox(
     b.x + b.width * 0.5,
     0,
     b.y + b.height * 0.5,
     b.width,
     15.5,
     b.height,
+    0.5,
     rgb(132, 78, 40),
     TexId.WOOD_GRAIN,
-    0.8
+    0.75
   );
-  // Brass doorknob
   opaqueMb.addSphere(
     b.x + b.width * 0.75,
     7.5,
     b.y + b.height * 0.5 + 2.5,
-    1.0,
-    1.0,
-    1.0,
-    4,
-    5,
-    rgb(248, 212, 72),
+    1.05,
+    1.05,
+    1.05,
+    6,
+    8,
+    rgb(250, 214, 72),
     TexId.SOLID,
     0.35
   );
@@ -1543,10 +1929,10 @@ function addDoorAndFog3D(opaqueMb: MeshBuilder, door: CollidableDoor): void {
 
 function addExclamationBadge3D(opaqueMb: MeshBuilder, cx: number, baseY: number, cz: number): void {
   const ay = baseY + 19;
-  opaqueMb.addBox(cx - 1.5, ay + 2.5, cz, 1.5, 5.2, 1.5, rgb(255, 42, 42), TexId.SOLID, 0.55);
-  opaqueMb.addSphere(cx - 1.5, ay + 0.8, cz, 0.9, 0.9, 0.9, 4, 5, rgb(255, 42, 42), TexId.SOLID, 0.45);
-  opaqueMb.addBox(cx + 1.5, ay + 2.5, cz, 1.5, 5.2, 1.5, rgb(255, 42, 42), TexId.SOLID, 0.55);
-  opaqueMb.addSphere(cx + 1.5, ay + 0.8, cz, 0.9, 0.9, 0.9, 4, 5, rgb(255, 42, 42), TexId.SOLID, 0.45);
+  opaqueMb.addBeveledBox(cx - 1.5, ay + 2.5, cz, 1.6, 5.2, 1.6, 0.3, rgb(255, 42, 42), TexId.SOLID, 0.55);
+  opaqueMb.addSphere(cx - 1.5, ay + 0.8, cz, 0.95, 0.95, 0.95, 6, 8, rgb(255, 42, 42), TexId.SOLID, 0.45);
+  opaqueMb.addBeveledBox(cx + 1.5, ay + 2.5, cz, 1.6, 5.2, 1.6, 0.3, rgb(255, 42, 42), TexId.SOLID, 0.55);
+  opaqueMb.addSphere(cx + 1.5, ay + 0.8, cz, 0.95, 0.95, 0.95, 6, 8, rgb(255, 42, 42), TexId.SOLID, 0.45);
 }
 
 // ============================================================================
@@ -1607,7 +1993,8 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
       state.player.isMoving,
       santaStyle,
       true,
-      state.hasLadder && !state.ladderPlaced
+      state.hasLadder && !state.ladderPlaced,
+      translucent
     );
   }
 
@@ -1619,7 +2006,7 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
     for (const fp of state.footprints) {
       const alpha = Math.max(0, 1 - fp.age / fp.maxAge) * 0.65;
       const fy = getTerrainHeight(fp.x, fp.y, 'level-outside') + 0.15;
-      translucent.addBox(fp.x, fy, fp.y, 2.2, 0.3, 2.8, rgb(138, 162, 198, alpha), TexId.SOLID, 0);
+      translucent.addSphere(fp.x, fy, fp.y, 1.2, 0.2, 1.6, 6, 8, rgb(138, 162, 198, alpha), TexId.SOLID, 0);
     }
 
     // Ladder (on ground at GROUND_LADDER_BOUNDS or placed on west wall of main house)
@@ -1638,7 +2025,7 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
     }
 
     // Motorcycle
-    addMotorcycle3D(opaque, state.motorcycle, t);
+    addMotorcycle3D(opaque, translucent, state.motorcycle, t);
 
     // Dog & floating hearts
     addDog3D(opaque, translucent, state.dog, t);
@@ -1663,7 +2050,10 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
           skin: rgb(248, 206, 174),
           hair: rgb(168, 176, 160),
           holdingClub: true,
-        }
+        },
+        false,
+        false,
+        translucent
       );
     }
 
@@ -1692,47 +2082,48 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
               hair: rgb(176, 104, 48),
               hat: rgb(128, 64, 112),
             };
-      addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style);
+      addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style, false, false, translucent);
     });
 
-    // Flying Snowballs
+    // Flying Snowballs + ground shadow
     for (const sb of state.snowballs) {
       const sx = sb.x + sb.width * 0.5;
       const sz = sb.y + sb.height * 0.5;
-      const sy = getTerrainHeight(sx, sz, 'level-outside') + 7.5;
-      opaque.addSphere(sx, sy, sz, 3.2, 3.2, 3.2, 5, 7, rgb(248, 252, 255), TexId.SNOW, 0.65);
+      const groundY = getTerrainHeight(sx, sz, 'level-outside');
+      translucent.addShadowDisc(sx, groundY, sz, 2.8, 2.8, 0.28);
+      opaque.addSphere(sx, groundY + 7.5, sz, 3.3, 3.3, 3.3, 10, 12, rgb(248, 252, 255), TexId.SNOW, 0.6);
     }
 
     // Chimney Smoke Puffs rising from the main house chimney
     const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, 'level-outside');
-    const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 14;
+    const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 16;
     const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
     const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
-    for (let i = 0; i < 4; i++) {
-      const phase = (t * 0.45 + i * 0.25) % 1;
-      const sx = chimX + Math.sin(t * 1.8 + i * 2) * 3.5 * phase;
+    for (let i = 0; i < 5; i++) {
+      const phase = (t * 0.42 + i * 0.2) % 1;
+      const sx = chimX + Math.sin(t * 1.8 + i * 2) * 3.8 * phase;
       const sz = chimZ - phase * 6;
-      const sy = chimTopY + phase * 22;
-      const r = 2.2 + phase * 3.2;
-      translucent.addSphere(sx, sy, sz, r, r * 0.85, r, 4, 6, rgb(228, 236, 248, (1 - phase) * 0.55), TexId.SOLID, 0);
+      const sy = chimTopY + phase * 24;
+      const r = 2.2 + phase * 3.6;
+      translucent.addSphere(sx, sy, sz, r, r * 0.85, r, 8, 10, rgb(228, 236, 248, (1 - phase) * 0.52), TexId.SOLID, 0);
     }
 
     // Electric Sparks on the frayed EV charging cable
     const sparkX = DAMAGED_WIRE_HAZARD.x + DAMAGED_WIRE_HAZARD.width * 0.5;
     const sparkZ = DAMAGED_WIRE_HAZARD.y + DAMAGED_WIRE_HAZARD.height * 0.5;
     const sparkBaseY = getTerrainHeight(sparkX, sparkZ, 'level-outside') + 1.5;
-    for (let i = 0; i < 3; i++) {
-      const ang = t * 14 + i * 2.1;
+    for (let i = 0; i < 4; i++) {
+      const ang = t * 15 + i * 1.6;
       translucent.addOrientedBox(
         sparkX + Math.cos(ang) * 2.2,
         sparkBaseY + 1.2 + Math.abs(Math.sin(ang * 1.7)) * 2.8,
         sparkZ + Math.sin(ang) * 2.2,
-        4.0,
-        0.6,
-        0.6,
+        4.2,
+        0.55,
+        0.55,
         ang,
         0.6,
-        rgb(120, 235, 255, 0.95),
+        rgb(120, 238, 255, 0.95),
         TexId.SOLID,
         0.3
       );
@@ -1754,35 +2145,35 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
       r: 1.0,
       g: 0.82,
       b: 0.42,
-      radius: 85,
-      intensity: 0.8,
+      radius: 90,
+      intensity: 0.82,
     });
 
     // Gentle 3D Falling Snowflakes around Santa
-    for (let i = 0; i < 28; i++) {
+    for (let i = 0; i < 32; i++) {
       const seedX = ((i * 73) % 140) - 70;
       const seedZ = ((i * 47) % 140) - 70;
       const fall = (t * 14 + i * 9.3) % 42;
       const fx = px + seedX + Math.sin(t * 1.5 + i) * 4;
       const fz = pz + seedZ + Math.cos(t * 1.3 + i) * 4;
       const fy = py + 38 - fall;
-      translucent.addSphere(fx, fy, fz, 0.65, 0.65, 0.65, 3, 4, rgb(252, 254, 255, 0.85), TexId.SOLID, 0);
+      translucent.addSphere(fx, fy, fz, 0.6, 0.6, 0.6, 6, 6, rgb(252, 254, 255, 0.85), TexId.SOLID, 0);
     }
   } else if (levelId === 'level-basement') {
     const basement = state.levels['level-basement'];
 
-    // Animated Fireplace Flames & Warm Hearth Point Light (cols 11..12, rows 11..12 => x: 176, z: 192)
-    for (let i = 0; i < 4; i++) {
-      const flicker = Math.sin(t * 14 + i * 1.8) * 1.4;
-      const flameH = 5.0 + flicker;
+    // Animated Fireplace Flames & Warm Hearth Point Light
+    for (let i = 0; i < 5; i++) {
+      const flicker = Math.sin(t * 14 + i * 1.6) * 1.5;
+      const flameH = 5.2 + flicker;
       translucent.addCone(
-        11 * TILE_SIZE - 1,
-        1.5,
-        11.5 * TILE_SIZE + i * 3.2,
+        11 * TILE_SIZE - 0.8,
+        1.8,
+        11.4 * TILE_SIZE + i * 2.8,
         1.8,
         flameH,
-        6,
-        i % 2 === 0 ? rgb(255, 146, 36, 0.92) : rgb(255, 224, 68, 0.92),
+        10,
+        i % 2 === 0 ? rgb(255, 146, 36, 0.92) : rgb(255, 226, 72, 0.92),
         TexId.SOLID,
         0
       );
@@ -1794,7 +2185,7 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
       r: 1.0,
       g: 0.62,
       b: 0.22,
-      radius: 120,
+      radius: 125,
       intensity: 1.05 + Math.sin(t * 13) * 0.18,
     });
 
@@ -1813,7 +2204,10 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
         pants: rgb(44, 52, 68),
         skin: rgb(248, 206, 174),
         hair: hexToColor4('#4e433c'),
-      }
+      },
+      false,
+      false,
+      translucent
     );
 
     // Olexa (olexaNpc)
@@ -1831,7 +2225,10 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
         pants: rgb(44, 52, 68),
         skin: rgb(248, 206, 174),
         hair: hexToColor4('#342618'),
-      }
+      },
+      false,
+      false,
+      translucent
     );
 
     // Hanneloes sitting on the toilet in the bathroom (when door is opened)
@@ -1854,25 +2251,26 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
           skin: rgb(250, 208, 176),
           hair: hexToColor4('#8a4822'),
           sitting: true,
-        }
+        },
+        false,
+        false,
+        translucent
       );
       if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) {
         addExclamationBadge3D(opaque, tx, 2.0, tz);
       }
     }
 
-    // Sight cones
     addConeOfSight3D(translucent, basement.coneOfSight);
     addConeOfSight3D(translucent, basement.olexaConeOfSight);
 
-    // Closed doors & fog-of-war masks
     for (const door of basement.doors) {
       addDoorAndFog3D(opaque, door);
     }
   } else if (levelId === 'level-upstairs') {
     const upstairs = state.levels['level-upstairs'];
 
-    // Christmas Tree warm golden glow at (3 * 16, 15.5 * 16)
+    // Christmas Tree warm golden glow
     pointLights.push({
       x: 3 * TILE_SIZE,
       y: 18,
@@ -1880,12 +2278,12 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
       r: 1.0,
       g: 0.86,
       b: 0.42,
-      radius: 130,
+      radius: 135,
       intensity: 1.0 + Math.sin(t * 4) * 0.1,
     });
 
     // Black Cat in Extra Room
-    addCat3D(opaque, upstairs.cat);
+    addCat3D(opaque, translucent, upstairs.cat, t);
 
     // Rosanna Cutscene: second Santa running west-to-east outside the north kitchen windows
     if (upstairs.rosannaCutscene?.active) {
@@ -1895,7 +2293,7 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
         cs.santaX + 8,
         0,
         cs.santaY + 8,
-        0, // running East
+        0,
         cs.walkTimer,
         true,
         {
@@ -1907,7 +2305,9 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
           hat: rgb(220, 36, 42),
           hasBeard: true,
         },
-        true
+        true,
+        false,
+        translucent
       );
       if (Math.floor(cs.elapsed * 10) % 2 === 0) {
         addExclamationBadge3D(opaque, px, py, pz);
@@ -1924,22 +2324,26 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
       (d) => d.id === 'upstairs-office-door'
     );
 
-    // Diana's Present in Bedroom (if bedroom opened & not taken)
+    // Diana's Present in Bedroom
     if (isBedroomDoorOpen && !state.player.states.get(DIANA_PRESENT_TAKEN_KEY)) {
       const pr = UPSTAIRS_DIANA_PRESENT_BOUNDS;
       const gx = pr.x + pr.width * 0.5;
       const gz = pr.y + pr.height * 0.5;
-      opaque.addBox(gx, 0, gz, 8, 7, 8, rgb(214, 40, 40), TexId.GIFT_WRAP, 0.75);
-      opaque.addSphere(gx, 7.5, gz, 2.2, 1.4, 2.2, 4, 6, rgb(255, 209, 102), TexId.SOLID, 0.5);
+      translucent.addShadowDisc(gx, 0, gz, 5.5, 5.5, 0.3);
+      opaque.addBeveledBox(gx, 0, gz, 8, 7, 8, 0.5, rgb(214, 40, 40), TexId.GIFT_WRAP, 0.7);
+      opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, 'x', rgb(255, 209, 102), TexId.SOLID, 0.4);
+      opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, 'z', rgb(255, 209, 102), TexId.SOLID, 0.4);
     }
 
-    // Simon's Present in Office (if office opened & not taken)
+    // Simon's Present in Office
     if (isOfficeDoorOpen && !state.player.states.get(SIMON_PRESENT_TAKEN_KEY)) {
       const pr = UPSTAIRS_SIMON_PRESENT_BOUNDS;
       const gx = pr.x + pr.width * 0.5;
       const gz = pr.y + pr.height * 0.5;
-      opaque.addBox(gx, 0, gz, 8, 7, 8, rgb(42, 117, 211), TexId.GIFT_WRAP, 0.75);
-      opaque.addSphere(gx, 7.5, gz, 2.2, 1.4, 2.2, 4, 6, rgb(255, 238, 84), TexId.SOLID, 0.5);
+      translucent.addShadowDisc(gx, 0, gz, 5.5, 5.5, 0.3);
+      opaque.addBeveledBox(gx, 0, gz, 8, 7, 8, 0.5, rgb(42, 117, 211), TexId.GIFT_WRAP, 0.7);
+      opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, 'x', rgb(255, 238, 84), TexId.SOLID, 0.4);
+      opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, 'z', rgb(255, 238, 84), TexId.SOLID, 0.4);
     }
 
     // Albin pacing in Dining Room
@@ -1957,7 +2361,10 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
         pants: rgb(42, 48, 62),
         skin: rgb(248, 206, 174),
         hair: hexToColor4('#7a421c'),
-      }
+      },
+      false,
+      false,
+      translucent
     );
 
     // Diana & Simon in Living Room
@@ -1978,7 +2385,10 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
         hair: hexToColor4('#2a1a14'),
         sitting: isDianaDistracted,
         hasPresentInLap: isDianaDistracted,
-      }
+      },
+      false,
+      false,
+      translucent
     );
 
     const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY));
@@ -1998,10 +2408,13 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
         hair: hexToColor4('#583822'),
         sitting: isSimonDistracted,
         hasPresentInLap: isSimonDistracted,
-      }
+      },
+      false,
+      false,
+      translucent
     );
 
-    // Henrik & Tanja in Table Room (when table room door is opened)
+    // Henrik & Tanja in Table Room
     if (isTableRoomDoorOpen) {
       addHumanoid3D(
         opaque,
@@ -2017,7 +2430,10 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
           pants: rgb(42, 48, 62),
           skin: rgb(248, 206, 174),
           hair: hexToColor4('#6e4624'),
-        }
+        },
+        false,
+        false,
+        translucent
       );
       addHumanoid3D(
         opaque,
@@ -2033,11 +2449,14 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
           pants: rgb(44, 50, 64),
           skin: rgb(250, 208, 176),
           hair: hexToColor4('#743c20'),
-        }
+        },
+        false,
+        false,
+        translucent
       );
     }
 
-    // Anne-Marie in Bedroom (when bedroom door is opened)
+    // Anne-Marie in Bedroom
     if (isBedroomDoorOpen) {
       addHumanoid3D(
         opaque,
@@ -2054,11 +2473,13 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
           skin: rgb(250, 212, 182),
           hair: hexToColor4('#c88642'),
           holdingBook: true,
-        }
+        },
+        false,
+        false,
+        translucent
       );
     }
 
-    // Sight Cones
     addConeOfSight3D(translucent, upstairs.albinCone);
     addConeOfSight3D(translucent, upstairs.dianaCone);
     addConeOfSight3D(translucent, upstairs.simonCone);
@@ -2070,7 +2491,6 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
       addConeOfSight3D(translucent, upstairs.anneMarieCone);
     }
 
-    // Closed Doors & Fog of War
     for (const door of upstairs.doors) {
       addDoorAndFog3D(opaque, door);
     }
@@ -2095,7 +2515,10 @@ export function buildDynamicSceneMeshes(state: GameState): DynamicSceneMeshes {
           hair: hexToColor4(npc.hairColor),
           holdingClub: npc.name === 'Alex',
           holdingBook: npc.name === 'Anne-Marie',
-        }
+        },
+        false,
+        false,
+        translucent
       );
     }
   }

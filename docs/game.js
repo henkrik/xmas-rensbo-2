@@ -2534,7 +2534,7 @@
   // src/rendering/textures3d.ts
   var ATLAS_COLS = 4;
   var ATLAS_ROWS = 5;
-  var TILE_RES = 128;
+  var TILE_RES = 256;
   var ATLAS_WIDTH = ATLAS_COLS * TILE_RES;
   var ATLAS_HEIGHT = ATLAS_ROWS * TILE_RES;
   var TexId = {
@@ -2564,6 +2564,10 @@
     n = (n ^ n >> 13) * 1274126177;
     return ((n ^ n >> 16) >>> 0) / 4294967295;
   }
+  function smoothstep(edge0, edge1, x) {
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+  }
   function setTilePixel(data, tileId, x, y, r, g2, b, a = 255) {
     const col = tileId % ATLAS_COLS;
     const row = Math.floor(tileId / ATLAS_COLS);
@@ -2590,133 +2594,124 @@
       for (let x = 0; x < TILE_RES; x++) {
         const u = x / TILE_RES * Math.PI * 2;
         const v = y / TILE_RES * Math.PI * 2;
-        const swirl = Math.sin(u * 2 + Math.sin(v * 2) * 1.4) * 0.5 + Math.cos(v * 2 - Math.cos(u) * 1.3) * 0.5;
-        let shade = 250;
-        let blueTint = 255;
-        if (swirl > 0.58) {
-          shade = 255;
-          blueTint = 255;
-        } else if (swirl < -0.52) {
-          shade = 228;
-          blueTint = 248;
-        } else {
-          shade = 242;
-          blueTint = 252;
-        }
-        setTilePixel(data, TexId.SNOW, x, y, shade, shade + 2, blueTint, 255);
+        const swirl = Math.sin(u * 2 + Math.sin(v * 2) * 1.45) * 0.5 + Math.cos(v * 2 - Math.cos(u * 2) * 1.35) * 0.5;
+        const bandHi = smoothstep(0.42, 0.56, swirl);
+        const bandLo = 1 - smoothstep(-0.56, -0.4, swirl);
+        const sparkle = hash2d(x, y, 101) > 0.992 ? 12 : 0;
+        const r = 240 + bandHi * 15 - bandLo * 18 + sparkle;
+        const g2 = 245 + bandHi * 10 - bandLo * 12 + sparkle;
+        const b = 254 + bandHi * 1 - bandLo * 4;
+        setTilePixel(data, TexId.SNOW, x, y, r, g2, b, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
       for (let x = 0; x < TILE_RES; x++) {
-        const cellX = Math.floor(x / 8);
-        const cellY = Math.floor(y / 8);
-        const lx = x % 8 - 4;
-        const ly = y % 8 - 4;
+        const cellX = Math.floor(x / 16);
+        const cellY = Math.floor(y / 16);
+        const lx = (x % 16 - 8) / 8;
+        const ly = (y % 16 - 8) / 8;
         const dist = Math.hypot(lx, ly);
         const rnd = hash2d(cellX, cellY, 2);
-        let v = 225;
-        if (dist < 3.1) {
-          v = rnd > 0.65 ? 245 : rnd > 0.3 ? 212 : 194;
-        } else if (dist < 3.8) {
-          v = 176;
-        }
-        setTilePixel(data, TexId.GRAVEL, x, y, v, v, v + 4, 255);
+        const dome = Math.sqrt(Math.max(0, 1 - dist * dist));
+        const base = rnd > 0.65 ? 236 : rnd > 0.3 ? 208 : 190;
+        const rim = smoothstep(0.75, 0.92, dist);
+        const v = (base + dome * 22) * (1 - rim * 0.22);
+        setTilePixel(data, TexId.GRAVEL, x, y, v, v + 2, v + 7, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
-      const plankRow = y % 16;
-      const plankIdx = Math.floor(y / 16);
+      const plankRow = y % 32;
+      const plankIdx = Math.floor(y / 32);
       for (let x = 0; x < TILE_RES; x++) {
-        const grain = Math.sin(x / TILE_RES * Math.PI * 6 + plankIdx * 1.7) * 4;
-        let v = 246 + grain;
-        if (plankRow === 0 || plankRow === 1) {
-          v = 192;
-        } else if (plankRow === 2) {
+        const grain = Math.sin(x / TILE_RES * Math.PI * 8 + plankIdx * 1.7 + Math.sin(y * 0.15) * 0.8) * 5;
+        const bevel = plankRow / 32 * 10;
+        let v = 242 + bevel + grain;
+        if (plankRow < 3) {
+          v = 178 + plankRow * 12;
+        } else if (plankRow === 3 || plankRow === 4) {
           v = 255;
         }
         setTilePixel(data, TexId.HOUSE_SIDING, x, y, v, v, v, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
-      const row = Math.floor(y / 16);
-      const ry = y % 16;
+      const row = Math.floor(y / 32);
+      const ry = y % 32;
       for (let x = 0; x < TILE_RES; x++) {
-        const offsetX = (x + row % 2 * 16) % 32;
-        const cx = offsetX - 16;
-        const arch = Math.sqrt(Math.max(0, 16 * 16 - cx * cx)) * 0.35;
-        let v = 232;
-        if (ry < 2 || Math.abs(cx) >= 15) {
-          v = 165;
-        } else if (ry > 12 - arch * 0.3) {
+        const offsetX = (x + row % 2 * 32) % 64;
+        const cx = (offsetX - 32) / 32;
+        const arch = Math.sqrt(Math.max(0, 1 - cx * cx)) * 10;
+        const tileIdHash = hash2d(Math.floor((x + row % 2 * 32) / 64), row, 4);
+        let v = 224 + (tileIdHash - 0.5) * 26 + ry / 32 * 14;
+        if (ry < 3 || Math.abs(offsetX - 32) >= 30) {
+          v = 148;
+        } else if (ry > 25 - arch * 0.35) {
           v = 252;
-        } else if ((row + Math.floor((x + row % 2 * 16) / 32)) % 3 === 0) {
-          v = 216;
         }
-        setTilePixel(data, TexId.ROOF_SLATE, x, y, v, v + 2, v + 6, 255);
+        setTilePixel(data, TexId.ROOF_SLATE, x, y, v, v + 3, v + 8, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
-      const ry = y % 21;
-      const logIdx = Math.floor(y / 21);
+      const ry = y % 42;
+      const logIdx = Math.floor(y / 42);
       for (let x = 0; x < TILE_RES; x++) {
-        const normY = (ry - 10.5) / 10.5;
+        const normY = (ry - 21) / 21;
         const cyl = Math.sqrt(Math.max(0, 1 - normY * normY));
-        const whorl = Math.sin(x / TILE_RES * Math.PI * 4 + logIdx * 2.1) * Math.cos(normY * 2.5) * 8;
-        let v = 185 + cyl * 62 + whorl;
-        if (ry <= 1 || ry >= 20) {
-          v = 135;
+        const whorl = Math.sin(x / TILE_RES * Math.PI * 6 + logIdx * 2.3 + Math.sin(normY * 3) * 1.4) * 10;
+        let v = 172 + cyl * 74 + whorl;
+        if (ry <= 2 || ry >= 40) {
+          v = 118;
         }
         setTilePixel(data, TexId.LOG_WALL, x, y, v, v * 0.95, v * 0.88, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
-      const row = Math.floor(y / 16);
-      const ry = y % 16;
+      const row = Math.floor(y / 32);
+      const ry = y % 32;
       for (let x = 0; x < TILE_RES; x++) {
-        const bx = (x + row % 2 * 16) % 32;
-        const brickId = Math.floor((x + row % 2 * 16) / 32);
-        const isMortar = ry < 2 || bx < 2;
+        const bx = (x + row % 2 * 32) % 64;
+        const brickId = Math.floor((x + row % 2 * 32) / 64);
+        const isMortar = ry < 4 || bx < 4;
         if (isMortar) {
-          setTilePixel(data, TexId.BRICK_RED, x, y, 228, 222, 214, 255);
+          const m = 220 + (ry === 2 || bx === 2 ? -12 : 4);
+          setTilePixel(data, TexId.BRICK_RED, x, y, m, m - 4, m - 10, 255);
         } else {
           const rnd = hash2d(brickId, row, 6);
-          const shade = rnd > 0.6 ? 248 : rnd > 0.25 ? 226 : 204;
-          setTilePixel(
-            data,
-            TexId.BRICK_RED,
-            x,
-            y,
-            shade,
-            shade * 0.85,
-            shade * 0.8,
-            255
-          );
+          const bevel = ry < 7 || bx < 7 ? 14 : ry > 28 || bx > 60 ? -16 : 0;
+          const shade = (rnd > 0.65 ? 244 : rnd > 0.25 ? 224 : 202) + bevel;
+          setTilePixel(data, TexId.BRICK_RED, x, y, shade, shade * 0.85, shade * 0.8, 255);
         }
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
       for (let x = 0; x < TILE_RES; x++) {
-        const rx = x % 16;
-        let v = 240;
-        if (rx === 0 || rx === 1) {
-          v = 180;
-        } else if (rx === 2 || rx === 3) {
+        const rx = x % 32;
+        const grain = Math.sin(y / TILE_RES * Math.PI * 8 + Math.floor(x / 32)) * 4;
+        let v = 238 + grain;
+        if (rx < 3) {
+          v = 168;
+        } else if (rx >= 3 && rx <= 6) {
           v = 255;
+        } else if (rx >= 22 && rx <= 24) {
+          v = 212;
         }
         setTilePixel(data, TexId.BLUE_SIDING, x, y, v, v, v, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
-      const plankCol = Math.floor(y / 16);
-      const py = y % 16;
+      const plankCol = Math.floor(y / 32);
+      const py = y % 32;
       for (let x = 0; x < TILE_RES; x++) {
-        const jointX = (x + plankCol % 2 * 48) % 96;
-        const isSeam = py === 0 || jointX === 0;
+        const jointX = (x + plankCol % 2 * 96) % 192;
+        const isSeam = py < 2 || jointX < 2;
         if (isSeam) {
-          setTilePixel(data, TexId.WOOD_FLOOR, x, y, 172, 160, 148, 255);
+          setTilePixel(data, TexId.WOOD_FLOOR, x, y, 156, 142, 128, 255);
         } else {
-          const wave = Math.sin(x / TILE_RES * Math.PI * 6 + plankCol * 1.9 + py * 0.25) * 8;
-          const plankTone = (plankCol % 3 === 0 ? 246 : plankCol % 3 === 1 ? 236 : 228) + wave;
+          const cathedral = Math.sin(
+            Math.hypot(x % 192 - 96, (py - 16) * 4.5) * 0.18 + plankCol * 1.7
+          ) * 9;
+          const bevel = py === 2 || jointX === 2 ? 10 : 0;
+          const plankTone = (plankCol % 3 === 0 ? 245 : plankCol % 3 === 1 ? 235 : 226) + cathedral + bevel;
           setTilePixel(
             data,
             TexId.WOOD_FLOOR,
@@ -2731,107 +2726,129 @@
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
+      const ty = y % 64;
+      const row = Math.floor(y / 64);
+      for (let x = 0; x < TILE_RES; x++) {
+        const tx = x % 64;
+        const col = Math.floor(x / 64);
+        if (tx < 3 || ty < 3) {
+          setTilePixel(data, TexId.STONE_FLOOR, x, y, 158, 154, 148, 255);
+        } else {
+          const bevel = tx < 7 || ty < 7 ? 14 : tx > 59 || ty > 59 ? -12 : 0;
+          const marble = Math.sin((x + y) * 0.08 + Math.sin(x * 0.05) * 2) * 5;
+          const checker = (row + col) % 2 === 0 ? 238 : 224;
+          const v = checker + bevel + marble;
+          setTilePixel(data, TexId.STONE_FLOOR, x, y, v, v, v, 255);
+        }
+      }
+    }
+    for (let y = 0; y < TILE_RES; y++) {
       const ty = y % 32;
-      const row = Math.floor(y / 32);
       for (let x = 0; x < TILE_RES; x++) {
         const tx = x % 32;
-        const col = Math.floor(x / 32);
         if (tx < 2 || ty < 2) {
-          setTilePixel(data, TexId.STONE_FLOOR, x, y, 175, 170, 165, 255);
-        } else if (tx === 2 || ty === 2) {
-          setTilePixel(data, TexId.STONE_FLOOR, x, y, 252, 250, 246, 255);
+          setTilePixel(data, TexId.BATHROOM_TILE, x, y, 192, 214, 222, 255);
         } else {
-          const checker = (row + col) % 2 === 0 ? 238 : 226;
-          setTilePixel(data, TexId.STONE_FLOOR, x, y, checker, checker, checker, 255);
-        }
-      }
-    }
-    for (let y = 0; y < TILE_RES; y++) {
-      const ty = y % 16;
-      for (let x = 0; x < TILE_RES; x++) {
-        const tx = x % 16;
-        if (tx === 0 || ty === 0) {
-          setTilePixel(data, TexId.BATHROOM_TILE, x, y, 200, 220, 225, 255);
-        } else if (tx >= 3 && tx <= 6 && ty >= 3 && ty <= 5) {
-          setTilePixel(data, TexId.BATHROOM_TILE, x, y, 255, 255, 255, 255);
-        } else {
-          setTilePixel(data, TexId.BATHROOM_TILE, x, y, 236, 246, 248, 255);
+          const distHi = Math.hypot(tx - 10, ty - 10);
+          const spec = distHi < 6 ? (1 - distHi / 6) * 22 : 0;
+          const bevel = tx < 5 || ty < 5 ? 10 : tx > 28 || ty > 28 ? -10 : 0;
+          setTilePixel(
+            data,
+            TexId.BATHROOM_TILE,
+            x,
+            y,
+            232 + spec + bevel,
+            244 + spec + bevel,
+            248 + spec + bevel,
+            255
+          );
         }
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
       for (let x = 0; x < TILE_RES; x++) {
-        const stripe = Math.floor(x / 16) % 2 === 0 ? 248 : 240;
+        const stripe = Math.floor(x / 32) % 2 === 0 ? 248 : 241;
         let v = stripe;
-        if (y > 96 && y < 102) {
-          v = 210;
-        } else if (y >= 102) {
-          v = x % 32 < 3 || y > 123 ? 205 : 232;
+        if (y >= 176 && y < 186) {
+          v = y < 180 ? 255 : 196;
+        } else if (y >= 186) {
+          const px = x % 64;
+          const py = y - 186;
+          const inFrame = px >= 8 && px <= 56 && py >= 8 && py <= 58;
+          const onFrameEdge = (px === 8 || px === 56 || py === 8 || py === 58) && inFrame;
+          v = onFrameEdge ? 192 : inFrame ? 244 : 230;
         }
         setTilePixel(data, TexId.INTERIOR_WALL, x, y, v, v, v, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
-      const row = Math.floor(y / 24);
-      const ry = y % 24;
+      const row = Math.floor(y / 48);
+      const ry = y % 48;
       for (let x = 0; x < TILE_RES; x++) {
-        const ox = (x + row % 2 * 16) % 32;
-        const dx = ox - 16;
-        const scallop = 18 - dx * dx / 18;
-        let v = 235;
-        if (ry > scallop && ry <= scallop + 3) {
-          v = 175;
-        } else if (ry > scallop - 4 && ry <= scallop) {
+        const ox = (x + row % 2 * 32) % 64;
+        const dx = (ox - 32) / 32;
+        const scallop = 36 - dx * dx * 18;
+        const needleAngle = Math.atan2(ry, ox - 32);
+        const needleWave = Math.sin(needleAngle * 18) * 5;
+        let v = 232 + needleWave;
+        if (ry > scallop && ry <= scallop + 5) {
+          v = 162;
+        } else if (ry > scallop - 8 && ry <= scallop) {
           v = 255;
-        } else if ((x + y) % 7 === 0) {
-          v = 220;
         }
         setTilePixel(data, TexId.PINE_FOLIAGE, x, y, v, v, v, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
       for (let x = 0; x < TILE_RES; x++) {
-        const nx = (x - 64) / 64;
-        const ny = (y - 64) / 64;
-        const ring = Math.sin(Math.hypot(nx * 0.7, ny * 1.8) * 18 + Math.sin(ny * 4) * 1.5);
-        const v = ring > 0.55 ? 212 : ring < -0.55 ? 252 : 236;
+        const nx = (x - 128) / 128;
+        const ny = (y - 128) / 128;
+        const ring = Math.sin(
+          Math.hypot(nx * 0.75, ny * 1.85) * 22 + Math.sin(ny * 5) * 1.6
+        );
+        const v = 236 + smoothstep(0.45, 0.65, ring) * 18 - (1 - smoothstep(-0.65, -0.45, ring)) * 26;
         setTilePixel(data, TexId.WOOD_GRAIN, x, y, v, v * 0.96, v * 0.9, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
-      const band = Math.floor(y / 6);
+      const band = Math.floor(y / 10);
       for (let x = 0; x < TILE_RES; x++) {
-        const rnd = hash2d(Math.floor(x / 20), band, 14);
-        const isKnot = rnd > 0.76 && (y % 6 >= 1 && y % 6 <= 4);
-        const v = isKnot ? 110 : 248;
+        const rnd = hash2d(Math.floor(x / 36), band, 14);
+        const isKnot = rnd > 0.76 && y % 10 >= 2 && y % 10 <= 7;
+        const v = isKnot ? 96 : 248 - Math.sin(x * 0.05) * 6;
         setTilePixel(data, TexId.BIRCH_BARK, x, y, v, v, v, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
       for (let x = 0; x < TILE_RES; x++) {
-        const d = (x + y) % 16 < 8 !== (x - y + 128) % 16 < 8;
-        const stitch = x % 8 === 0 || y % 8 === 0;
-        const v = stitch ? 218 : d ? 248 : 234;
-        setTilePixel(data, TexId.FABRIC, x, y, v, v, v, 255);
+        const u = x % 64 - 32;
+        const v = y % 64 - 32;
+        const diamondDist = (Math.abs(u) + Math.abs(v)) / 32;
+        const puff = Math.cos(Math.min(1, diamondDist) * Math.PI * 0.5) * 18;
+        const weave = (x + y) % 4 === 0 ? -4 : 2;
+        const shade = 228 + puff + weave;
+        setTilePixel(data, TexId.FABRIC, x, y, shade, shade, shade, 255);
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
       for (let x = 0; x < TILE_RES; x++) {
-        const isBorder = x < 10 || x >= TILE_RES - 10 || y < 10 || y >= TILE_RES - 10;
-        const isCrossbar = Math.abs(x - 64) < 5 || Math.abs(y - 64) < 5;
+        const isBorder = x < 16 || x >= TILE_RES - 16 || y < 16 || y >= TILE_RES - 16;
+        const isCrossbar = Math.abs(x - 128) < 7 || Math.abs(y - 128) < 7;
         if (isBorder || isCrossbar) {
-          setTilePixel(data, TexId.WINDOW_GLOW, x, y, 75, 52, 38, 255);
+          const bevel = Math.abs(x - 128) < 3 || Math.abs(y - 128) < 3 ? 92 : 68;
+          setTilePixel(data, TexId.WINDOW_GLOW, x, y, bevel, bevel * 0.72, bevel * 0.52, 255);
         } else {
-          const dist = Math.hypot(x - 64, y - 64) / 75;
-          const glow = Math.max(0, 1 - dist * 0.35);
+          const dist = Math.hypot(x - 128, y - 128) / 150;
+          const glow = Math.max(0, 1 - dist * 0.38);
+          const sheen = Math.abs(x + y - 220) < 18 ? 18 : 0;
           setTilePixel(
             data,
             TexId.WINDOW_GLOW,
             x,
             y,
             255,
-            Math.round(230 * glow + 20),
-            Math.round(145 * glow + 15),
+            Math.min(255, Math.round(232 * glow + 20 + sheen)),
+            Math.min(255, Math.round(150 * glow + 15 + sheen)),
             255
           );
         }
@@ -2846,57 +2863,61 @@
       [184, 92, 56]
     ];
     for (let y = 0; y < TILE_RES; y++) {
-      const shelfRow = Math.floor(y / 32);
-      const sy = y % 32;
+      const shelfRow = Math.floor(y / 64);
+      const sy = y % 64;
       for (let x = 0; x < TILE_RES; x++) {
-        if (sy >= 27 || x < 6 || x >= TILE_RES - 6) {
-          setTilePixel(data, TexId.BOOKSHELF, x, y, 142, 92, 52, 255);
+        if (sy >= 54 || x < 10 || x >= TILE_RES - 10) {
+          const bevel = sy === 54 ? 172 : 142;
+          setTilePixel(data, TexId.BOOKSHELF, x, y, bevel, bevel * 0.65, bevel * 0.38, 255);
         } else {
-          const bookIdx = Math.floor(x / 12) + shelfRow * 7;
-          const bx = x % 12;
-          const topHeight = 3 + Math.floor(hash2d(bookIdx, shelfRow, 17) * 5);
+          const bookIdx = Math.floor(x / 22) + shelfRow * 11;
+          const bx = x % 22;
+          const topHeight = 6 + Math.floor(hash2d(bookIdx, shelfRow, 17) * 10);
           if (sy < topHeight) {
-            setTilePixel(data, TexId.BOOKSHELF, x, y, 54, 34, 22, 255);
-          } else if (bx === 0) {
-            setTilePixel(data, TexId.BOOKSHELF, x, y, 42, 28, 18, 255);
-          } else if (sy === topHeight + 3 || sy === 23) {
-            setTilePixel(data, TexId.BOOKSHELF, x, y, 245, 212, 92, 255);
+            setTilePixel(data, TexId.BOOKSHELF, x, y, 48, 30, 20, 255);
+          } else if (bx <= 1 || bx >= 21) {
+            setTilePixel(data, TexId.BOOKSHELF, x, y, 38, 24, 16, 255);
+          } else if (sy === topHeight + 5 || sy === topHeight + 6 || sy === 46 || sy === 47) {
+            setTilePixel(data, TexId.BOOKSHELF, x, y, 250, 216, 96, 255);
           } else {
             const [br, bg, bb] = bookColors[bookIdx % bookColors.length];
-            setTilePixel(data, TexId.BOOKSHELF, x, y, br, bg, bb, 255);
+            const cyl = Math.sin(bx / 22 * Math.PI) * 18;
+            setTilePixel(data, TexId.BOOKSHELF, x, y, br + cyl, bg + cyl, bb + cyl, 255);
           }
         }
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
-      const cy = Math.floor(y / 16);
+      const cy = Math.floor(y / 32);
       for (let x = 0; x < TILE_RES; x++) {
-        const cx = Math.floor(x / 16);
+        const cx = Math.floor(x / 32);
         const isLight = (cx + cy) % 2 === 0;
+        const grain = Math.sin(x * 0.25 + cy) * 4;
         if (isLight) {
-          setTilePixel(data, TexId.CHESSBOARD, x, y, 248, 236, 208, 255);
+          setTilePixel(data, TexId.CHESSBOARD, x, y, 248 + grain, 236 + grain, 208 + grain, 255);
         } else {
-          setTilePixel(data, TexId.CHESSBOARD, x, y, 88, 52, 32, 255);
+          setTilePixel(data, TexId.CHESSBOARD, x, y, 88 + grain, 52 + grain, 32 + grain, 255);
         }
       }
     }
     for (let y = 0; y < TILE_RES; y++) {
       for (let x = 0; x < TILE_RES; x++) {
-        const isRibbon = Math.abs(x - 64) < 11 || Math.abs(y - 64) < 11;
+        const isRibbon = Math.abs(x - 128) < 22 || Math.abs(y - 128) < 22;
         if (isRibbon) {
-          const isEdge = Math.abs(Math.abs(x - 64) - 10) <= 1 || Math.abs(Math.abs(y - 64) - 10) <= 1;
+          const isEdge = Math.abs(Math.abs(x - 128) - 20) <= 2 || Math.abs(Math.abs(y - 128) - 20) <= 2;
           setTilePixel(
             data,
             TexId.GIFT_WRAP,
             x,
             y,
             255,
-            isEdge ? 200 : 232,
-            isEdge ? 40 : 95,
+            isEdge ? 200 : 236,
+            isEdge ? 42 : 98,
             255
           );
         } else {
-          const stripe = (x + y) % 24 < 12 ? 252 : 222;
+          const wave = Math.sin((x + y) / 48 * Math.PI * 2);
+          const stripe = wave > 0 ? 252 : 224;
           setTilePixel(data, TexId.GIFT_WRAP, x, y, stripe, stripe, stripe, 255);
         }
       }
@@ -2921,6 +2942,17 @@
     const g2 = num >> 8 & 255;
     const b = num & 255;
     return [r / 255, g2 / 255, b / 255, a];
+  }
+  function darkenColor(c, factor) {
+    return [c[0] * factor, c[1] * factor, c[2] * factor, c[3]];
+  }
+  function lightenColor(c, boost) {
+    return [
+      Math.min(1, c[0] + boost),
+      Math.min(1, c[1] + boost),
+      Math.min(1, c[2] + boost),
+      c[3]
+    ];
   }
   var MeshBuilder = class {
     constructor() {
@@ -2947,7 +2979,7 @@
         outlineScale
       );
     }
-    addTriangle(p0, p1, p2, color, texId = TexId.SOLID, outlineScale = 0.7, customNormal) {
+    addTriangle(p0, p1, p2, color, texId = TexId.SOLID, outlineScale = 0.65, customNormal) {
       let nx = 0;
       let ny = 1;
       let nz = 0;
@@ -2972,7 +3004,7 @@
       this.pushVertex(p1[0], p1[1], p1[2], nx, ny, nz, 1, 0, color, texId, outlineScale);
       this.pushVertex(p2[0], p2[1], p2[2], nx, ny, nz, 1, 1, color, texId, outlineScale);
     }
-    addQuad(p0, p1, p2, p3, normal, color, texId = TexId.SOLID, outlineScale = 0.7, uvScaleU = 1, uvScaleV = 1) {
+    addQuad(p0, p1, p2, p3, normal, color, texId = TexId.SOLID, outlineScale = 0.65, uvScaleU = 1, uvScaleV = 1) {
       const [nx, ny, nz] = normal;
       this.pushVertex(p0[0], p0[1], p0[2], nx, ny, nz, 0, uvScaleV, color, texId, outlineScale);
       this.pushVertex(p1[0], p1[1], p1[2], nx, ny, nz, uvScaleU, uvScaleV, color, texId, outlineScale);
@@ -2981,7 +3013,7 @@
       this.pushVertex(p2[0], p2[1], p2[2], nx, ny, nz, uvScaleU, 0, color, texId, outlineScale);
       this.pushVertex(p3[0], p3[1], p3[2], nx, ny, nz, 0, 0, color, texId, outlineScale);
     }
-    addBox(cx, baseY, cz, w, h, d, color, texId = TexId.SOLID, outlineScale = 0.75) {
+    addBox(cx, baseY, cz, w, h, d, color, texId = TexId.SOLID, outlineScale = 0.65) {
       const hx = w * 0.5;
       const hy = h * 0.5;
       const hz = d * 0.5;
@@ -3022,7 +3054,18 @@
       pushCornerQuad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], [0, 1, 0]);
       pushCornerQuad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0, -1, 0]);
     }
-    addOrientedBox(cx, cy, cz, w, h, d, yaw, pitch, color, texId = TexId.SOLID, outlineScale = 0.65) {
+    /**
+     * Adds a chamfered/beveled 3D box whose top and side edges are beveled to catch
+     * Wind Waker HD specular & rim highlights.
+     */
+    addBeveledBox(cx, baseY, cz, w, h, d, bevel, color, texId = TexId.SOLID, outlineScale = 0.65) {
+      const b = Math.min(bevel, w * 0.25, h * 0.35, d * 0.25);
+      const bodyH = Math.max(0.2, h - b);
+      this.addBox(cx, baseY, cz, w, bodyH, d, color, texId, outlineScale);
+      const topColor = lightenColor(color, 0.04);
+      this.addBox(cx, baseY + bodyH - 0.05, cz, w - b * 1.4, b + 0.05, d - b * 1.4, topColor, texId, outlineScale * 0.8);
+    }
+    addOrientedBox(cx, cy, cz, w, h, d, yaw, pitch, color, texId = TexId.SOLID, outlineScale = 0.6) {
       const hx = w * 0.5;
       const hy = h * 0.5;
       const hz = d * 0.5;
@@ -3062,12 +3105,13 @@
         this.addQuad(p0, p1, p2, p3, wn, color, texId, outlineScale);
       }
     }
-    addCylinder(cx, baseY, cz, radiusBottom, radiusTop, height, segments, color, texId = TexId.SOLID, outlineScale = 0.7) {
+    addCylinder(cx, baseY, cz, radiusBottom, radiusTop, height, segments, color, texId = TexId.SOLID, outlineScale = 0.65) {
+      const segs = Math.max(10, segments);
       const topY = baseY + height;
       const slopeY = (radiusBottom - radiusTop) / (height || 1);
-      for (let i = 0; i < segments; i++) {
-        const a0 = i / segments * Math.PI * 2;
-        const a1 = (i + 1) / segments * Math.PI * 2;
+      for (let i = 0; i < segs; i++) {
+        const a0 = i / segs * Math.PI * 2;
+        const a1 = (i + 1) / segs * Math.PI * 2;
         const c0 = Math.cos(a0);
         const s0 = Math.sin(a0);
         const c1 = Math.cos(a1);
@@ -3080,8 +3124,8 @@
         const b1 = [cx + c1 * radiusBottom, baseY, cz + s1 * radiusBottom];
         const t1 = [cx + c1 * radiusTop, topY, cz + s1 * radiusTop];
         const t0 = [cx + c0 * radiusTop, topY, cz + s0 * radiusTop];
-        const u0 = i / segments;
-        const u1 = (i + 1) / segments;
+        const u0 = i / segs;
+        const u1 = (i + 1) / segs;
         this.pushVertex(b0[0], b0[1], b0[2], n0[0], n0[1], n0[2], u0, 1, color, texId, outlineScale);
         this.pushVertex(b1[0], b1[1], b1[2], n1[0], n1[1], n1[2], u1, 1, color, texId, outlineScale);
         this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
@@ -3100,20 +3144,25 @@
         }
       }
     }
-    addCone(cx, baseY, cz, radius, height, segments, color, texId = TexId.SOLID, outlineScale = 0.75) {
-      this.addCylinder(cx, baseY, cz, radius, 0.02, height, segments, color, texId, outlineScale);
+    addCone(cx, baseY, cz, radius, height, segments, color, texId = TexId.SOLID, outlineScale = 0.65) {
+      this.addCylinder(cx, baseY, cz, radius, 0.02, height, Math.max(12, segments), color, texId, outlineScale);
     }
-    addSphere(cx, cy, cz, rx, ry, rz, latBands, lonBands, color, texId = TexId.SOLID, outlineScale = 0.75) {
-      for (let lat = 0; lat < latBands; lat++) {
-        const theta0 = lat / latBands * Math.PI;
-        const theta1 = (lat + 1) / latBands * Math.PI;
+    /**
+     * Adds a smooth high-segment ellipsoid / sphere centered at `(cx, cy, cz)`.
+     */
+    addSphere(cx, cy, cz, rx, ry, rz, latBands, lonBands, color, texId = TexId.SOLID, outlineScale = 0.65) {
+      const lats = Math.max(8, latBands);
+      const lons = Math.max(12, lonBands);
+      for (let lat = 0; lat < lats; lat++) {
+        const theta0 = lat / lats * Math.PI;
+        const theta1 = (lat + 1) / lats * Math.PI;
         const sinT0 = Math.sin(theta0);
         const cosT0 = Math.cos(theta0);
         const sinT1 = Math.sin(theta1);
         const cosT1 = Math.cos(theta1);
-        for (let lon = 0; lon < lonBands; lon++) {
-          const phi0 = lon / lonBands * Math.PI * 2;
-          const phi1 = (lon + 1) / lonBands * Math.PI * 2;
+        for (let lon = 0; lon < lons; lon++) {
+          const phi0 = lon / lons * Math.PI * 2;
+          const phi1 = (lon + 1) / lons * Math.PI * 2;
           const cosP0 = Math.cos(phi0);
           const sinP0 = Math.sin(phi0);
           const cosP1 = Math.cos(phi1);
@@ -3126,10 +3175,10 @@
           const p10 = [cx + n10[0] * rx, cy + n10[1] * ry, cz + n10[2] * rz];
           const p11 = [cx + n11[0] * rx, cy + n11[1] * ry, cz + n11[2] * rz];
           const p01 = [cx + n01[0] * rx, cy + n01[1] * ry, cz + n01[2] * rz];
-          const u0 = lon / lonBands;
-          const u1 = (lon + 1) / lonBands;
-          const v0 = lat / latBands;
-          const v1 = (lat + 1) / latBands;
+          const u0 = lon / lons;
+          const u1 = (lon + 1) / lons;
+          const v0 = lat / lats;
+          const v1 = (lat + 1) / lats;
           this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], u0, v0, color, texId, outlineScale);
           this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], u1, v1, color, texId, outlineScale);
           this.pushVertex(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], u0, v1, color, texId, outlineScale);
@@ -3139,7 +3188,75 @@
         }
       }
     }
-    addGableRoof(cx, baseY, cz, w, h, d, ridgeAlongX, roofColor, gableColor, texId = TexId.ROOF_SLATE, outlineScale = 0.85) {
+    /**
+     * Adds a 3D torus (donut ring) centered at `(cx, cy, cz)`, oriented around `'x'`, `'y'`, or `'z'`.
+     * Used for scarves, wreaths, rubber tires, cushions, collars, and halo rings.
+     */
+    addTorus(cx, cy, cz, majorR, minorR, ringSegs, tubeSegs, axis, color, texId = TexId.SOLID, outlineScale = 0.55) {
+      const mapAxis = (x, y, z) => {
+        if (axis === "y") return [x, y, z];
+        if (axis === "x") return [y, x, z];
+        return [x, z, y];
+      };
+      for (let i = 0; i < ringSegs; i++) {
+        const u0 = i / ringSegs * Math.PI * 2;
+        const u1 = (i + 1) / ringSegs * Math.PI * 2;
+        const cu0 = Math.cos(u0);
+        const su0 = Math.sin(u0);
+        const cu1 = Math.cos(u1);
+        const su1 = Math.sin(u1);
+        for (let j = 0; j < tubeSegs; j++) {
+          const v0 = j / tubeSegs * Math.PI * 2;
+          const v1 = (j + 1) / tubeSegs * Math.PI * 2;
+          const cv0 = Math.cos(v0);
+          const sv0 = Math.sin(v0);
+          const cv1 = Math.cos(v1);
+          const sv1 = Math.sin(v1);
+          const pt = (cu, su, cv, sv) => {
+            const r = majorR + minorR * cv;
+            const [lx, ly, lz] = mapAxis(r * cu, minorR * sv, r * su);
+            return [cx + lx, cy + ly, cz + lz];
+          };
+          const nm = (cu, su, cv, sv) => {
+            return mapAxis(cv * cu, sv, cv * su);
+          };
+          const p00 = pt(cu0, su0, cv0, sv0);
+          const p10 = pt(cu1, su1, cv0, sv0);
+          const p11 = pt(cu1, su1, cv1, sv1);
+          const p01 = pt(cu0, su0, cv1, sv1);
+          const n00 = nm(cu0, su0, cv0, sv0);
+          const n10 = nm(cu1, su1, cv0, sv0);
+          const n11 = nm(cu1, su1, cv1, sv1);
+          const n01 = nm(cu0, su0, cv1, sv1);
+          this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], 0, 0, color, texId, outlineScale);
+          this.pushVertex(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], 1, 0, color, texId, outlineScale);
+          this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
+          this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], 0, 0, color, texId, outlineScale);
+          this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
+          this.pushVertex(p01[0], p01[1], p01[2], n01[0], n01[1], n01[2], 0, 1, color, texId, outlineScale);
+        }
+      }
+    }
+    /**
+     * Adds a soft dark-blue contact shadow disc on the floor/snow to ground characters and props.
+     */
+    addShadowDisc(cx, y, cz, rx, rz, alpha = 0.32) {
+      const segs = 12;
+      const centerColor = [0.04, 0.06, 0.14, alpha];
+      const edgeColor = [0.04, 0.06, 0.14, 0.02];
+      const sy = y + 0.12;
+      for (let i = 0; i < segs; i++) {
+        const a0 = i / segs * Math.PI * 2;
+        const a1 = (i + 1) / segs * Math.PI * 2;
+        this.pushVertex(cx, sy, cz, 0, 1, 0, 0.5, 0.5, centerColor, TexId.SOLID, 0);
+        this.pushVertex(cx + Math.cos(a1) * rx, sy, cz + Math.sin(a1) * rz, 0, 1, 0, 1, 1, edgeColor, TexId.SOLID, 0);
+        this.pushVertex(cx + Math.cos(a0) * rx, sy, cz + Math.sin(a0) * rz, 0, 1, 0, 0, 1, edgeColor, TexId.SOLID, 0);
+      }
+    }
+    /**
+     * Adds a pitched gable roof with overhang eaves, fascia trim, snow ridge cap, and optional icicles.
+     */
+    addGableRoof(cx, baseY, cz, w, h, d, ridgeAlongX, roofColor, gableColor, texId = TexId.ROOF_SLATE, outlineScale = 0.75, withIcicles = true) {
       const hx = w * 0.5;
       const hz = d * 0.5;
       const topY = baseY + h;
@@ -3156,7 +3273,17 @@
         this.addTriangle(nwL, swL, rW, gableColor, TexId.HOUSE_SIDING, outlineScale, [-1, 0, 0]);
         this.addTriangle(seL, neL, rE, gableColor, TexId.HOUSE_SIDING, outlineScale, [1, 0, 0]);
         this.addQuad(nwL, neL, seL, swL, [0, -1, 0], gableColor, TexId.SOLID, 0);
-        this.addBox(cx, topY - 1.5, cz, w + 1.5, 2.2, 4.5, rgb(244, 249, 255), TexId.SNOW, 0.5);
+        this.addBox(cx, topY - 1.5, cz, w + 1.8, 2.4, 5.2, rgb(246, 250, 255), TexId.SNOW, 0.45);
+        this.addBox(cx, baseY - 0.4, cz + hz, w + 1, 1.4, 2.2, rgb(244, 249, 255), TexId.SNOW, 0.4);
+        this.addBox(cx, baseY - 0.4, cz - hz, w + 1, 1.4, 2.2, rgb(244, 249, 255), TexId.SNOW, 0.4);
+        if (withIcicles) {
+          const icicleCount = Math.max(3, Math.floor(w / 14));
+          for (let i = 0; i < icicleCount; i++) {
+            const ix = cx - hx + 6 + i / Math.max(1, icicleCount - 1) * (w - 12);
+            const ih = 2.6 + i * 7 % 3 * 0.9;
+            this.addCone(ix, baseY - ih, cz + hz, 0.65, ih, 6, rgb(212, 238, 255), TexId.SOLID, 0.25);
+          }
+        }
       } else {
         const swL = [cx - hx, baseY, cz + hz];
         const seL = [cx + hx, baseY, cz + hz];
@@ -3170,7 +3297,7 @@
         this.addTriangle(swL, seL, rS, gableColor, TexId.HOUSE_SIDING, outlineScale, [0, 0, 1]);
         this.addTriangle(neL, nwL, rN, gableColor, TexId.HOUSE_SIDING, outlineScale, [0, 0, -1]);
         this.addQuad(nwL, neL, seL, swL, [0, -1, 0], gableColor, TexId.SOLID, 0);
-        this.addBox(cx, topY - 1.5, cz, 4.5, 2.2, d + 1.5, rgb(244, 249, 255), TexId.SNOW, 0.5);
+        this.addBox(cx, topY - 1.5, cz, 5.2, 2.4, d + 1.8, rgb(246, 250, 255), TexId.SNOW, 0.45);
       }
     }
     build() {
@@ -3182,51 +3309,68 @@
     }
   };
   function addPineTree3D(mb, cx, baseY, cz, variant, scale = 1) {
+    mb.addSphere(cx, baseY + 0.4, cz, 4.2 * scale, 1.4 * scale, 4.2 * scale, 6, 10, rgb(242, 248, 255), TexId.SNOW, 0.35);
     if (variant === 0) {
-      mb.addCylinder(cx, baseY, cz, 2.2 * scale, 1.5 * scale, 9 * scale, 7, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.65);
-      mb.addCone(cx, baseY + 5 * scale, cz, 8.8 * scale, 11 * scale, 8, rgb(29, 92, 51), TexId.PINE_FOLIAGE, 0.8);
-      mb.addCone(cx, baseY + 11 * scale, cz, 7 * scale, 10 * scale, 8, rgb(39, 117, 65), TexId.PINE_FOLIAGE, 0.8);
-      mb.addCone(cx, baseY + 17 * scale, cz, 5 * scale, 9 * scale, 8, rgb(52, 138, 79), TexId.PINE_FOLIAGE, 0.8);
-      mb.addCone(cx, baseY + 21.5 * scale, cz, 3 * scale, 5.2 * scale, 8, rgb(242, 248, 255), TexId.SNOW, 0.6);
+      mb.addCylinder(cx, baseY, cz, 2.5 * scale, 1.5 * scale, 9.5 * scale, 12, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.6);
+      mb.addCone(cx, baseY + 4.5 * scale, cz, 9.4 * scale, 9.5 * scale, 14, rgb(26, 88, 48), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 9.8 * scale, cz, 7.8 * scale, 9 * scale, 14, rgb(34, 108, 58), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 15 * scale, cz, 6 * scale, 8.2 * scale, 14, rgb(44, 126, 68), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 19.8 * scale, cz, 4.2 * scale, 7.2 * scale, 14, rgb(56, 142, 80), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 23 * scale, cz, 2.8 * scale, 4.8 * scale, 14, rgb(246, 250, 255), TexId.SNOW, 0.55);
     } else if (variant === 1) {
-      addPineTree3D(mb, cx - 3.2 * scale, baseY, cz + 1.5 * scale, 0, 0.72 * scale);
-      addPineTree3D(mb, cx + 3.2 * scale, baseY, cz - 1.2 * scale, 2, 0.85 * scale);
+      addPineTree3D(mb, cx - 3.4 * scale, baseY, cz + 1.5 * scale, 0, 0.74 * scale);
+      addPineTree3D(mb, cx + 3.2 * scale, baseY, cz - 1.2 * scale, 2, 0.88 * scale);
     } else if (variant === 2) {
-      mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.3 * scale, 7 * scale, 6, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.65);
-      mb.addCone(cx, baseY + 4 * scale, cz, 7.4 * scale, 14 * scale, 8, rgb(36, 108, 78), TexId.PINE_FOLIAGE, 0.8);
-      mb.addCone(cx, baseY + 11 * scale, cz, 5.4 * scale, 12 * scale, 8, rgb(54, 134, 98), TexId.PINE_FOLIAGE, 0.8);
-      mb.addCone(cx, baseY + 18 * scale, cz, 3.2 * scale, 6 * scale, 8, rgb(240, 248, 255), TexId.SNOW, 0.6);
+      mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.3 * scale, 7.5 * scale, 12, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.6);
+      mb.addCone(cx, baseY + 3.8 * scale, cz, 8 * scale, 11.5 * scale, 14, rgb(32, 102, 74), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 9.8 * scale, cz, 6.2 * scale, 10.5 * scale, 14, rgb(46, 124, 92), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 15.5 * scale, cz, 4.4 * scale, 9 * scale, 14, rgb(60, 144, 108), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 20.2 * scale, cz, 2.8 * scale, 5.2 * scale, 14, rgb(244, 250, 255), TexId.SNOW, 0.55);
     } else if (variant === 3) {
-      mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.4 * scale, 18 * scale, 7, rgb(146, 78, 42), TexId.WOOD_GRAIN, 0.7);
-      mb.addSphere(cx - 2 * scale, baseY + 18 * scale, cz, 6.2 * scale, 4 * scale, 6.2 * scale, 5, 7, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.8);
-      mb.addSphere(cx + 2.5 * scale, baseY + 20 * scale, cz - 1 * scale, 5.8 * scale, 3.8 * scale, 5.8 * scale, 5, 7, rgb(44, 118, 64), TexId.PINE_FOLIAGE, 0.8);
-      mb.addSphere(cx, baseY + 22 * scale, cz, 5.2 * scale, 2.4 * scale, 5.2 * scale, 4, 7, rgb(242, 248, 255), TexId.SNOW, 0.6);
+      mb.addCylinder(cx, baseY, cz, 2.3 * scale, 1.8 * scale, 9 * scale, 12, rgb(132, 70, 38), TexId.WOOD_GRAIN, 0.65);
+      mb.addOrientedBox(cx + 0.6 * scale, baseY + 13.5 * scale, cz, 2.8 * scale, 11 * scale, 2.8 * scale, 0.2, 0.14, rgb(156, 84, 44), TexId.WOOD_GRAIN, 0.6);
+      mb.addSphere(cx - 2.4 * scale, baseY + 18.5 * scale, cz + 0.8 * scale, 6.4 * scale, 3.8 * scale, 6.4 * scale, 8, 12, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.7);
+      mb.addSphere(cx + 2.8 * scale, baseY + 20.5 * scale, cz - 1 * scale, 6 * scale, 3.6 * scale, 6 * scale, 8, 12, rgb(46, 118, 64), TexId.PINE_FOLIAGE, 0.7);
+      mb.addSphere(cx + 0.2 * scale, baseY + 22.8 * scale, cz, 5.6 * scale, 2.5 * scale, 5.6 * scale, 8, 12, rgb(246, 250, 255), TexId.SNOW, 0.55);
     } else {
-      mb.addCylinder(cx, baseY, cz, 1.7 * scale, 1.1 * scale, 16 * scale, 7, rgb(242, 240, 236), TexId.BIRCH_BARK, 0.7);
-      mb.addOrientedBox(cx - 2.5 * scale, baseY + 13 * scale, cz, 1 * scale, 7 * scale, 1 * scale, 0.3, 0.55, rgb(235, 232, 228), TexId.BIRCH_BARK, 0.55);
-      mb.addOrientedBox(cx + 2.5 * scale, baseY + 14 * scale, cz, 1 * scale, 6.5 * scale, 1 * scale, -0.4, -0.5, rgb(235, 232, 228), TexId.BIRCH_BARK, 0.55);
-      mb.addSphere(cx, baseY + 17.5 * scale, cz, 5.5 * scale, 4.2 * scale, 5.5 * scale, 5, 7, rgb(228, 238, 250), TexId.SNOW, 0.7);
+      mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.2 * scale, 16 * scale, 12, rgb(244, 242, 238), TexId.BIRCH_BARK, 0.65);
+      mb.addOrientedBox(cx - 2.6 * scale, baseY + 13.5 * scale, cz + 0.6 * scale, 1.1 * scale, 7.5 * scale, 1.1 * scale, 0.3, 0.52, rgb(238, 235, 230), TexId.BIRCH_BARK, 0.5);
+      mb.addOrientedBox(cx + 2.6 * scale, baseY + 14.2 * scale, cz - 0.6 * scale, 1.1 * scale, 7 * scale, 1.1 * scale, -0.4, -0.48, rgb(238, 235, 230), TexId.BIRCH_BARK, 0.5);
+      mb.addSphere(cx - 2.2 * scale, baseY + 17.2 * scale, cz + 0.6 * scale, 4.4 * scale, 3.2 * scale, 4.4 * scale, 8, 12, rgb(232, 242, 252), TexId.SNOW, 0.6);
+      mb.addSphere(cx + 2.2 * scale, baseY + 18 * scale, cz - 0.6 * scale, 4.2 * scale, 3 * scale, 4.2 * scale, 8, 12, rgb(236, 245, 255), TexId.SNOW, 0.6);
+      mb.addSphere(cx, baseY + 19.6 * scale, cz, 4.8 * scale, 3.4 * scale, 4.8 * scale, 8, 12, rgb(246, 250, 255), TexId.SNOW, 0.6);
     }
   }
   function addThujaTree3D(mb, cx, baseY, cz) {
-    mb.addCylinder(cx, baseY, cz, 1.5, 1, 4.5, 6, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.6);
-    mb.addCone(cx, baseY + 3, cz, 5.2, 18, 8, rgb(42, 126, 68), TexId.PINE_FOLIAGE, 0.75);
-    mb.addCone(cx, baseY + 14.5, cz, 2.5, 6.8, 8, rgb(240, 248, 255), TexId.SNOW, 0.55);
+    mb.addSphere(cx, baseY + 0.3, cz, 3.2, 1, 3.2, 6, 10, rgb(242, 248, 255), TexId.SNOW, 0.3);
+    mb.addCylinder(cx, baseY, cz, 1.5, 1, 4.5, 10, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.55);
+    mb.addCone(cx, baseY + 3, cz, 5.4, 9.5, 12, rgb(36, 114, 60), TexId.PINE_FOLIAGE, 0.65);
+    mb.addCone(cx, baseY + 8.5, cz, 4.4, 9, 12, rgb(44, 130, 70), TexId.PINE_FOLIAGE, 0.65);
+    mb.addCone(cx, baseY + 14, cz, 3.1, 7.2, 12, rgb(54, 144, 80), TexId.PINE_FOLIAGE, 0.65);
+    mb.addCone(cx, baseY + 17.5, cz, 2, 4.5, 12, rgb(244, 250, 255), TexId.SNOW, 0.5);
   }
   function addHedgeTile3D(mb, cx, baseY, cz) {
-    mb.addBox(cx, baseY, cz, 15.5, 8.5, 15.5, rgb(38, 112, 58), TexId.PINE_FOLIAGE, 0.75);
-    mb.addBox(cx, baseY + 7.8, cz, 16, 2.2, 16, rgb(242, 248, 255), TexId.SNOW, 0.55);
+    mb.addBeveledBox(cx, baseY, cz, 15.6, 8.8, 15.6, 1.8, rgb(38, 114, 58), TexId.PINE_FOLIAGE, 0.65);
+    mb.addBeveledBox(cx, baseY + 7.6, cz, 16, 2.4, 16, 1, rgb(244, 250, 255), TexId.SNOW, 0.45);
   }
   function addGraniteCliff3D(mb, cx, baseY, cz, seed) {
-    const h = 14 + seed % 5 * 3;
-    const rx = 10 + seed % 3 * 1.5;
-    mb.addCylinder(cx, baseY - 2, cz, rx, rx * 0.7, h, 7, rgb(108, 116, 128), TexId.STONE_FLOOR, 0.85);
-    mb.addSphere(cx, baseY + h - 2.2, cz, rx * 0.68, 2.5, rx * 0.68, 4, 7, rgb(242, 248, 255), TexId.SNOW, 0.6);
+    const h = 15 + seed % 5 * 3;
+    const rx = 10.5 + seed % 3 * 1.5;
+    mb.addCylinder(cx, baseY - 2, cz, rx, rx * 0.72, h, 10, rgb(108, 116, 128), TexId.STONE_FLOOR, 0.75);
+    mb.addSphere(cx, baseY + h - 2, cz, rx * 0.7, 2.8, rx * 0.7, 8, 12, rgb(244, 250, 255), TexId.SNOW, 0.55);
+  }
+  function addWindowWithShutters3D(mb, cx, cy, cz, w, h, shutterColor) {
+    mb.addBox(cx, cy - 0.8, cz + 0.3, w + 2.4, 1.2, 2.2, rgb(238, 240, 246), TexId.SOLID, 0.4);
+    mb.addBox(cx, cy + 0.2, cz, w, h, 1.4, rgb(255, 232, 142), TexId.WINDOW_GLOW, 0.45);
+    const sw = Math.max(2.6, w * 0.22);
+    mb.addBox(cx - w * 0.5 - sw * 0.55, cy + 0.2, cz + 0.2, sw, h, 1.2, shutterColor, TexId.WOOD_GRAIN, 0.45);
+    mb.addBox(cx + w * 0.5 + sw * 0.55, cy + 0.2, cz + 0.2, sw, h, 1.2, shutterColor, TexId.WOOD_GRAIN, 0.45);
+    mb.addBox(cx, cy + h + 0.2, cz + 0.3, w + 2, 1, 1.8, rgb(246, 250, 255), TexId.SNOW, 0.3);
   }
   function buildOutsideStaticMesh(map) {
     const mb = new MeshBuilder();
     const ts = map.tileSize;
-    const step = 8;
+    const step = 4;
     const gridCols = Math.floor(map.cols * ts / step);
     const gridRows = Math.floor(map.rows * ts / step);
     for (let gz = 0; gz < gridRows; gz++) {
@@ -3238,13 +3382,13 @@
         const tileCol = Math.min(map.cols - 1, Math.floor((x0 + step * 0.5) / ts));
         const tileRow = Math.min(map.rows - 1, Math.floor((z0 + step * 0.5) / ts));
         const tile = map.tiles[tileRow][tileCol];
-        let color = rgb(238, 245, 255);
+        let color = rgb(240, 246, 255);
         let texId = TexId.SNOW;
         let yOffset = 0;
         if (tile === 2 /* Road */ || tile === 14 /* ElectricCar */ || tile === 15 /* Motorcycle */) {
-          color = rgb(166, 174, 188);
+          color = rgb(168, 176, 190);
           texId = TexId.GRAVEL;
-          yOffset = -0.25;
+          yOffset = -0.28;
         }
         const y00 = getTerrainHeight(x0, z0, "level-outside") + yOffset;
         const y10 = getTerrainHeight(x1, z0, "level-outside") + yOffset;
@@ -3254,10 +3398,10 @@
         const n10 = getTerrainNormal(x1, z0, "level-outside");
         const n11 = getTerrainNormal(x1, z1, "level-outside");
         const n01 = getTerrainNormal(x0, z1, "level-outside");
-        const u0 = gx % 2 * 0.5;
-        const u1 = u0 + 0.5;
-        const v0 = gz % 2 * 0.5;
-        const v1 = v0 + 0.5;
+        const u0 = gx % 4 * 0.25;
+        const u1 = u0 + 0.25;
+        const v0 = gz % 4 * 0.25;
+        const v1 = v0 + 0.25;
         mb.pushVertex(x0, y00, z0, n00.x, n00.y, n00.z, u0, v0, color, texId, 0);
         mb.pushVertex(x0, y01, z1, n01.x, n01.y, n01.z, u0, v1, color, texId, 0);
         mb.pushVertex(x1, y11, z1, n11.x, n11.y, n11.z, u1, v1, color, texId, 0);
@@ -3296,16 +3440,18 @@
       const w = x1 - x0;
       const d = z1 - z0;
       const baseY = getTerrainHeight(5 * ts, 9 * ts, "level-outside");
-      mb.addBox(cx, baseY - 4, cz, w + 4, 6, d + 4, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.85);
+      mb.addBeveledBox(cx, baseY - 4, cz, w + 4, 6.2, d + 4, 0.8, rgb(122, 126, 138), TexId.STONE_FLOOR, 0.8);
       const wallH = MAIN_HOUSE_WALL_HEIGHT;
-      mb.addBox(cx, baseY + 2, cz, w, wallH, d, rgb(246, 222, 166), TexId.HOUSE_SIDING, 1);
+      mb.addBox(cx, baseY + 2, cz, w, wallH, d, rgb(246, 222, 166), TexId.HOUSE_SIDING, 0.9);
+      mb.addBox(cx, baseY + 18, cz, w + 1.6, 1.6, d + 1.6, rgb(248, 248, 252), TexId.SOLID, 0.45);
+      mb.addBox(cx, baseY + wallH + 0.5, cz, w + 2, 1.8, d + 2, rgb(248, 248, 252), TexId.SOLID, 0.45);
       for (const [tx, tz] of [
         [x0, z0],
         [x1, z0],
         [x0, z1],
         [x1, z1]
       ]) {
-        mb.addBox(tx, baseY + 2, tz, 4, wallH + 0.5, 4, rgb(248, 248, 252), TexId.SOLID, 0.6);
+        mb.addBox(tx, baseY + 2, tz, 4.4, wallH + 0.5, 4.4, rgb(248, 248, 252), TexId.SOLID, 0.55);
       }
       const roofBaseY = baseY + 2 + wallH;
       mb.addGableRoof(
@@ -3319,52 +3465,67 @@
         rgb(62, 74, 94),
         rgb(238, 212, 152),
         TexId.ROOF_SLATE,
-        1
+        0.9,
+        true
       );
       const roofWalkY = baseY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
-      mb.addBox(96, roofWalkY - 1.5, ROOF_WALK_Y + 6, 76, 2.2, 14, rgb(242, 248, 255), TexId.SNOW, 0.55);
+      mb.addBeveledBox(96, roofWalkY - 1.5, ROOF_WALK_Y + 6, 76, 2.2, 14, 0.5, rgb(242, 248, 255), TexId.SNOW, 0.5);
       const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
       const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
-      mb.addBox(chimX, roofWalkY - 4, chimZ, 16, 18, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.9);
-      mb.addBox(chimX, roofWalkY + 13.5, chimZ, 18, 2.4, 18, rgb(245, 250, 255), TexId.SNOW, 0.6);
-      mb.addBox(chimX, roofWalkY + 15, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
+      mb.addBox(chimX, roofWalkY - 4, chimZ, 16, 17, 16, rgb(188, 62, 48), TexId.BRICK_RED, 0.8);
+      mb.addBeveledBox(chimX, roofWalkY + 12.5, chimZ, 18.5, 2.8, 18.5, 0.6, rgb(245, 250, 255), TexId.SNOW, 0.55);
+      mb.addBox(chimX, roofWalkY + 14.8, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
+      mb.addCylinder(chimX - 3, roofWalkY + 14.8, chimZ, 2, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+      mb.addCylinder(chimX + 3, roofWalkY + 14.8, chimZ, 2, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+      const greenShutter = rgb(44, 108, 68);
       for (const winCol of [5.5, 14.5]) {
         const wx = (winCol + 0.5) * ts;
-        mb.addBox(wx, baseY + 8, z1 + 0.5, 22, 10, 1.4, rgb(255, 228, 135), TexId.WINDOW_GLOW, 0.45);
-        mb.addBox(wx, baseY + 22, z1 + 0.5, 22, 10, 1.4, rgb(255, 228, 135), TexId.WINDOW_GLOW, 0.45);
+        addWindowWithShutters3D(mb, wx, baseY + 7.5, z1 + 0.3, 18, 9.5, greenShutter);
+        addWindowWithShutters3D(mb, wx, baseY + 21.5, z1 + 0.3, 18, 9.5, greenShutter);
       }
-      mb.addBox(168, baseY, z1 + 5, 48, 4, 12, rgb(164, 114, 68), TexId.WOOD_FLOOR, 0.7);
-      mb.addCylinder(148, baseY + 4, z1 + 9, 1.4, 1.4, 20, 6, rgb(248, 248, 252), TexId.SOLID, 0.55);
-      mb.addCylinder(188, baseY + 4, z1 + 9, 1.4, 1.4, 20, 6, rgb(248, 248, 252), TexId.SOLID, 0.55);
-      mb.addGableRoof(168, baseY + 24, z1 + 5, 52, 7, 14, false, rgb(62, 74, 94), rgb(246, 222, 166), TexId.ROOF_SLATE, 0.75);
-      mb.addBox(168, baseY + 9, z1 + 0.6, 36, 12, 1.4, rgb(255, 232, 145), TexId.WINDOW_GLOW, 0.45);
+      mb.addBeveledBox(168, baseY, z1 + 5.5, 50, 4.2, 13, 0.6, rgb(164, 114, 68), TexId.WOOD_FLOOR, 0.65);
+      mb.addBeveledBox(168, baseY, z1 + 13.5, 22, 2.2, 4.5, 0.4, rgb(148, 152, 162), TexId.STONE_FLOOR, 0.5);
+      for (const colX of [146, 158, 178, 190]) {
+        mb.addCylinder(colX, baseY + 4.2, z1 + 10.5, 1.6, 1.3, 20, 12, rgb(248, 248, 252), TexId.SOLID, 0.5);
+        mb.addBox(colX, baseY + 4.2, z1 + 10.5, 3.8, 1.8, 3.8, rgb(238, 240, 246), TexId.SOLID, 0.4);
+      }
+      mb.addBox(152, baseY + 8.5, z1 + 10.5, 12, 1.2, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.4);
+      mb.addBox(184, baseY + 8.5, z1 + 10.5, 12, 1.2, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.4);
+      mb.addGableRoof(168, baseY + 24, z1 + 5.5, 54, 7.5, 15, false, rgb(62, 74, 94), rgb(246, 222, 166), TexId.ROOF_SLATE, 0.7, false);
+      mb.addBox(168, baseY + 8.5, z1 + 0.6, 36, 13, 1.4, rgb(255, 232, 145), TexId.WINDOW_GLOW, 0.45);
       const doorX = 13.5 * ts;
-      mb.addBox(doorX, baseY + 2, z1 + 0.6, 13, 18, 1.8, rgb(124, 64, 34), TexId.WOOD_GRAIN, 0.65);
-      mb.addSphere(doorX, baseY + 13, z1 + 1.8, 3, 3, 0.9, 5, 7, rgb(36, 128, 56), TexId.PINE_FOLIAGE, 0.4);
+      mb.addBox(doorX, baseY + 2, z1 + 0.4, 15, 19.5, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.5);
+      mb.addBeveledBox(doorX, baseY + 2, z1 + 0.8, 12.5, 18, 1.6, 0.5, rgb(124, 64, 34), TexId.WOOD_GRAIN, 0.6);
+      mb.addTorus(doorX, baseY + 13.5, z1 + 2, 2.6, 0.95, 14, 8, "z", rgb(34, 128, 54), TexId.PINE_FOLIAGE, 0.4);
+      mb.addSphere(doorX, baseY + 15.8, z1 + 2.4, 1.1, 0.8, 0.7, 6, 8, rgb(224, 36, 42), TexId.SOLID, 0.3);
+      mb.addSphere(doorX - 9.5, baseY + 14.5, z1 + 1.6, 1.3, 1.8, 1.3, 6, 8, rgb(255, 228, 120), TexId.SOLID, 0.35);
+      mb.addSphere(doorX + 9.5, baseY + 14.5, z1 + 1.6, 1.3, 1.8, 1.3, 6, 8, rgb(255, 228, 120), TexId.SOLID, 0.35);
     }
-    {
-      const cx = 21 * ts;
+    for (const [stugaCol, wallColor, gableColor] of [
+      [21, rgb(172, 106, 58), rgb(156, 94, 48)],
+      [27, rgb(164, 98, 52), rgb(148, 88, 44)]
+    ]) {
+      const cx = stugaCol * ts;
       const cz = 7 * ts;
       const w = 4 * ts;
       const d = 4 * ts;
       const baseY = getTerrainHeight(cx, cz, "level-outside");
-      mb.addBox(cx, baseY - 3, cz, w + 2, 4, d + 2, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.75);
-      mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(172, 106, 58), TexId.LOG_WALL, 0.9);
-      mb.addGableRoof(cx, baseY + 21, cz, w + 6, 12, d + 6, true, rgb(58, 68, 86), rgb(156, 94, 48), TexId.ROOF_SLATE, 0.9);
-      mb.addBox(cx - 10, baseY + 1, cz + d * 0.5 + 0.5, 10, 15, 1.4, rgb(112, 62, 32), TexId.WOOD_GRAIN, 0.55);
-      mb.addBox(cx + 12, baseY + 7, cz + d * 0.5 + 0.5, 12, 9, 1.4, rgb(255, 226, 130), TexId.WINDOW_GLOW, 0.4);
-    }
-    {
-      const cx = 27 * ts;
-      const cz = 7 * ts;
-      const w = 4 * ts;
-      const d = 4 * ts;
-      const baseY = getTerrainHeight(cx, cz, "level-outside");
-      mb.addBox(cx, baseY - 3, cz, w + 2, 4, d + 2, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.75);
-      mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(164, 98, 52), TexId.LOG_WALL, 0.9);
-      mb.addGableRoof(cx, baseY + 21, cz, w + 6, 12, d + 6, true, rgb(58, 68, 86), rgb(148, 88, 44), TexId.ROOF_SLATE, 0.9);
-      mb.addBox(cx - 10, baseY + 1, cz + d * 0.5 + 0.5, 10, 15, 1.4, rgb(112, 62, 32), TexId.WOOD_GRAIN, 0.55);
-      mb.addBox(cx + 12, baseY + 7, cz + d * 0.5 + 0.5, 12, 9, 1.4, rgb(255, 226, 130), TexId.WINDOW_GLOW, 0.4);
+      mb.addBeveledBox(cx, baseY - 3, cz, w + 3, 4.2, d + 3, 0.6, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.7);
+      mb.addBox(cx, baseY + 1, cz, w, 20, d, wallColor, TexId.LOG_WALL, 0.85);
+      for (const [kx, kz] of [
+        [cx - w * 0.5, cz - d * 0.5],
+        [cx + w * 0.5, cz - d * 0.5],
+        [cx - w * 0.5, cz + d * 0.5],
+        [cx + w * 0.5, cz + d * 0.5]
+      ]) {
+        mb.addBox(kx, baseY + 1, kz, 5.2, 20.2, 5.2, gableColor, TexId.LOG_WALL, 0.6);
+      }
+      mb.addGableRoof(cx, baseY + 21, cz, w + 7, 12, d + 7, true, rgb(58, 68, 86), gableColor, TexId.ROOF_SLATE, 0.85, true);
+      mb.addBox(cx + 12, baseY + 26, cz - 8, 7, 9, 7, rgb(182, 60, 46), TexId.BRICK_RED, 0.6);
+      mb.addBox(cx + 12, baseY + 34.5, cz - 8, 8.2, 1.5, 8.2, rgb(245, 250, 255), TexId.SNOW, 0.4);
+      mb.addBeveledBox(cx - 11, baseY + 1, cz + d * 0.5 + 0.5, 10.5, 15.5, 1.6, 0.4, rgb(112, 62, 32), TexId.WOOD_GRAIN, 0.55);
+      mb.addBeveledBox(cx - 11, baseY, cz + d * 0.5 + 3.5, 13, 2, 5.5, 0.4, rgb(138, 142, 152), TexId.STONE_FLOOR, 0.45);
+      addWindowWithShutters3D(mb, cx + 11, baseY + 7, cz + d * 0.5 + 0.3, 12, 8.5, rgb(186, 44, 42));
     }
     {
       const cx = 27.5 * ts;
@@ -3372,10 +3533,14 @@
       const w = 5 * ts;
       const d = 4 * ts;
       const baseY = getTerrainHeight(cx, cz, "level-outside");
-      mb.addBox(cx, baseY - 2, cz, w + 2, 3, d + 2, rgb(114, 118, 126), TexId.STONE_FLOOR, 0.75);
-      mb.addBox(cx, baseY + 1, cz, w, 18, d, rgb(236, 238, 244), TexId.HOUSE_SIDING, 0.9);
-      mb.addGableRoof(cx, baseY + 19, cz, w + 5, 10, d + 5, true, rgb(64, 72, 86), rgb(224, 228, 236), TexId.ROOF_SLATE, 0.9);
-      mb.addBox(cx, baseY + 1, cz + d * 0.5 + 0.5, 24, 15, 1.5, rgb(214, 38, 38), TexId.WOOD_GRAIN, 0.7);
+      mb.addBeveledBox(cx, baseY - 2, cz, w + 2, 3.2, d + 2, 0.5, rgb(114, 118, 126), TexId.STONE_FLOOR, 0.7);
+      mb.addBox(cx, baseY + 1, cz, w, 18.5, d, rgb(238, 240, 246), TexId.HOUSE_SIDING, 0.85);
+      mb.addGableRoof(cx, baseY + 19.5, cz, w + 6, 10.5, d + 6, true, rgb(64, 72, 86), rgb(224, 228, 236), TexId.ROOF_SLATE, 0.85, true);
+      const doorZ = cz + d * 0.5 + 0.5;
+      mb.addBox(cx, baseY + 1, doorZ, 26, 15.5, 1.4, rgb(214, 38, 38), TexId.WOOD_GRAIN, 0.65);
+      mb.addBox(cx, baseY + 1, doorZ + 0.3, 1.4, 15.5, 1.2, rgb(245, 245, 250), TexId.SOLID, 0.35);
+      mb.addOrientedBox(cx - 6.5, baseY + 8.5, doorZ + 0.4, 1.1, 14, 1, 0, 0.62, rgb(245, 245, 250), TexId.SOLID, 0.3);
+      mb.addOrientedBox(cx + 6.5, baseY + 8.5, doorZ + 0.4, 1.1, 14, 1, 0, -0.62, rgb(245, 245, 250), TexId.SOLID, 0.3);
     }
     {
       const cx = 5 * ts;
@@ -3383,45 +3548,60 @@
       const w = 6 * ts;
       const d = 5 * ts;
       const baseY = getTerrainHeight(cx, cz, "level-outside");
-      mb.addBox(cx, baseY - 2, cz, w + 2, 3, d + 2, rgb(118, 122, 130), TexId.STONE_FLOOR, 0.75);
-      mb.addBox(cx, baseY + 1, cz, w, 20, d, rgb(68, 124, 196), TexId.BLUE_SIDING, 0.9);
-      mb.addGableRoof(cx, baseY + 21, cz, w + 6, 11, d + 6, true, rgb(54, 64, 82), rgb(58, 108, 176), TexId.ROOF_SLATE, 0.9);
+      mb.addBeveledBox(cx, baseY - 2, cz, w + 2, 3.2, d + 2, 0.5, rgb(118, 122, 130), TexId.STONE_FLOOR, 0.7);
+      mb.addBox(cx, baseY + 1, cz, w, 20.5, d, rgb(64, 122, 196), TexId.BLUE_SIDING, 0.85);
+      mb.addGableRoof(cx, baseY + 21.5, cz, w + 6, 11.5, d + 6, true, rgb(54, 64, 82), rgb(58, 108, 176), TexId.ROOF_SLATE, 0.85, true);
+      mb.addBeveledBox(cx - 20, baseY + 1, cz + d * 0.5 + 0.5, 32, 15.5, 1.5, 0.4, rgb(234, 240, 248), TexId.HOUSE_SIDING, 0.55);
+      mb.addBeveledBox(cx + 20, baseY + 1, cz + d * 0.5 + 0.5, 32, 15.5, 1.5, 0.4, rgb(234, 240, 248), TexId.HOUSE_SIDING, 0.55);
       const wbY = getTerrainHeight(128, 358, "level-outside");
-      mb.addBox(129, wbY + 8, 358, 3, 6.5, 5, rgb(42, 48, 58), TexId.SOLID, 0.6);
-      mb.addSphere(130.8, wbY + 12, 358, 0.8, 0.8, 0.8, 4, 5, rgb(64, 245, 128), TexId.SOLID, 0.25);
+      mb.addBeveledBox(129, wbY + 7.5, 358, 3.4, 7.2, 5.6, 0.5, rgb(38, 44, 54), TexId.SOLID, 0.55);
+      mb.addTorus(130.9, wbY + 11.5, 358, 1.2, 0.35, 10, 6, "x", rgb(64, 248, 136), TexId.SOLID, 0.25);
     }
     {
       const carX = 18.5 * ts;
       const carZ = 22 * ts;
       const baseY = getTerrainHeight(carX, carZ, "level-outside");
+      mb.addShadowDisc(carX, baseY, carZ, 24, 13, 0.38);
       for (const [wx, wz] of [
-        [-14, -9],
-        [14, -9],
-        [-14, 9],
-        [14, 9]
+        [-14, -9.8],
+        [14, -9.8],
+        [-14, 9.8],
+        [14, 9.8]
       ]) {
-        mb.addCylinder(carX + wx, baseY, carZ + wz, 3.6, 3.6, 3.6, 8, rgb(32, 34, 40), TexId.SOLID, 0.55);
+        mb.addTorus(carX + wx, baseY + 3.6, carZ + wz, 2.6, 1.2, 14, 8, "z", rgb(26, 28, 34), TexId.SOLID, 0.5);
+        mb.addCylinder(carX + wx, baseY + 2.2, carZ + wz, 1.8, 1.8, 2.8, 10, rgb(212, 220, 232), TexId.SOLID, 0.35);
       }
-      mb.addBox(carX, baseY + 2.4, carZ, 44, 7, 22, rgb(44, 138, 158), TexId.SOLID, 0.85);
-      mb.addBox(carX - 2, baseY + 9, carZ, 24, 6, 18, rgb(56, 158, 178), TexId.WINDOW_GLOW, 0.8);
-      mb.addBox(carX - 2, baseY + 14.8, carZ, 22, 1.5, 16, rgb(242, 248, 255), TexId.SNOW, 0.5);
-      for (let segX = 132; segX < 272; segX += 12) {
+      mb.addBeveledBox(carX, baseY + 2.4, carZ, 45, 6.8, 21, 1.4, rgb(38, 134, 156), TexId.SOLID, 0.75);
+      mb.addBeveledBox(carX, baseY + 2, carZ, 47, 2.8, 20, 0.8, rgb(28, 36, 46), TexId.SOLID, 0.55);
+      mb.addBeveledBox(carX - 1.5, baseY + 8.6, carZ, 26, 5.8, 17.5, 1.6, rgb(24, 34, 48), TexId.SOLID, 0.7);
+      mb.addBeveledBox(carX - 1.5, baseY + 13.6, carZ, 21, 1.4, 15.5, 0.5, rgb(44, 148, 170), TexId.SOLID, 0.55);
+      mb.addBeveledBox(carX - 1.5, baseY + 14.6, carZ, 19, 1.3, 14, 0.5, rgb(244, 250, 255), TexId.SNOW, 0.4);
+      mb.addSphere(carX - 9, baseY + 9.2, carZ - 10.2, 1.2, 0.9, 1.5, 6, 8, rgb(38, 134, 156), TexId.SOLID, 0.4);
+      mb.addSphere(carX - 9, baseY + 9.2, carZ + 10.2, 1.2, 0.9, 1.5, 6, 8, rgb(38, 134, 156), TexId.SOLID, 0.4);
+      mb.addBox(carX - 22.8, baseY + 5.8, carZ, 1, 1.6, 17, rgb(255, 248, 200), TexId.SOLID, 0.3);
+      mb.addBox(carX + 22.8, baseY + 6, carZ, 1, 1.6, 17, rgb(238, 38, 48), TexId.SOLID, 0.3);
+      for (let segX = 132; segX < 272; segX += 10) {
         const cy = getTerrainHeight(segX, 358, "level-outside");
-        mb.addBox(segX + 6, cy + 0.5, 358, 12.5, 1.3, 1.6, rgb(28, 32, 38), TexId.SOLID, 0.45);
+        mb.addBeveledBox(segX + 5, cy + 0.4, 358, 10.5, 1.4, 1.6, 0.4, rgb(26, 30, 38), TexId.SOLID, 0.4);
       }
       const hx = DAMAGED_WIRE_HAZARD.x + DAMAGED_WIRE_HAZARD.width * 0.5;
       const hz = DAMAGED_WIRE_HAZARD.y + DAMAGED_WIRE_HAZARD.height * 0.5;
       const hy = getTerrainHeight(hx, hz, "level-outside");
-      mb.addBox(hx, hy + 0.7, hz, 8, 1.8, 2.8, rgb(235, 136, 42), TexId.SOLID, 0.55);
+      mb.addBeveledBox(hx, hy + 0.6, hz, 8.5, 2, 3, 0.5, rgb(242, 138, 42), TexId.SOLID, 0.5);
     }
     {
       const px = 8 * ts;
       const pz = 15 * ts;
       const baseY = getTerrainHeight(px, pz, "level-outside");
-      mb.addBox(px, baseY, pz, 22, 6, 14, rgb(146, 94, 48), TexId.WOOD_GRAIN, 0.75);
-      mb.addBox(px, baseY + 5.8, pz, 24, 1.4, 15, rgb(242, 248, 255), TexId.SNOW, 0.5);
-      mb.addBox(px, baseY, pz - 10, 20, 3.5, 4, rgb(136, 86, 42), TexId.WOOD_GRAIN, 0.6);
-      mb.addBox(px, baseY, pz + 10, 20, 3.5, 4, rgb(136, 86, 42), TexId.WOOD_GRAIN, 0.6);
+      mb.addShadowDisc(px, baseY, pz, 15, 14, 0.3);
+      mb.addBox(px - 8, baseY, pz, 2, 5.8, 11, rgb(122, 76, 38), TexId.WOOD_GRAIN, 0.55);
+      mb.addBox(px + 8, baseY, pz, 2, 5.8, 11, rgb(122, 76, 38), TexId.WOOD_GRAIN, 0.55);
+      mb.addBeveledBox(px, baseY + 5.2, pz, 23, 1.4, 14.5, 0.4, rgb(152, 98, 50), TexId.WOOD_GRAIN, 0.65);
+      mb.addBeveledBox(px, baseY + 6.4, pz, 21, 1.1, 13, 0.4, rgb(244, 250, 255), TexId.SNOW, 0.4);
+      mb.addCylinder(px, baseY + 1, pz, 0.8, 0.8, 17, 8, rgb(92, 62, 36), TexId.WOOD_GRAIN, 0.45);
+      mb.addCone(px, baseY + 9.5, pz, 3.6, 9.5, 10, rgb(198, 52, 48), TexId.FABRIC, 0.55);
+      mb.addBeveledBox(px, baseY + 2.4, pz - 10.5, 21, 1.2, 4.2, 0.3, rgb(142, 90, 44), TexId.WOOD_GRAIN, 0.55);
+      mb.addBeveledBox(px, baseY + 2.4, pz + 10.5, 21, 1.2, 4.2, 0.3, rgb(142, 90, 44), TexId.WOOD_GRAIN, 0.55);
     }
     return mb;
   }
@@ -3435,17 +3615,18 @@
         const cz = r * ts + ts * 0.5;
         if (tile === 21 /* InteriorWall */) {
           const southTile = r + 1 < map.rows ? map.tiles[r + 1][c] : 20 /* VoidBlack */;
-          const h = southTile === 20 /* VoidBlack */ ? 9 : wallHeight;
-          mb.addBox(cx, 0, cz, ts, h, ts, rgb(232, 222, 204), TexId.INTERIOR_WALL, 0.75);
-          mb.addBox(cx, h, cz, ts + 0.3, 1.2, ts + 0.3, rgb(92, 62, 40), TexId.WOOD_GRAIN, 0.5);
+          const h = southTile === 20 /* VoidBlack */ ? 9.2 : wallHeight;
+          mb.addBox(cx, 0, cz, ts + 0.3, 1.6, ts + 0.3, rgb(116, 76, 46), TexId.WOOD_GRAIN, 0.4);
+          mb.addBox(cx, 1.4, cz, ts, h - 1.4, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.65);
+          mb.addBeveledBox(cx, h, cz, ts + 0.5, 1.4, ts + 0.5, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
         } else {
-          let floorColor = rgb(194, 142, 88);
+          let floorColor = rgb(198, 146, 92);
           let floorTex = TexId.WOOD_FLOOR;
           if (tile === 17 /* StoneTileFloor */) {
-            floorColor = rgb(178, 166, 156);
+            floorColor = rgb(182, 170, 160);
             floorTex = TexId.STONE_FLOOR;
           } else if (tile === 18 /* BathroomTileFloor */) {
-            floorColor = rgb(212, 236, 242);
+            floorColor = rgb(216, 238, 244);
             floorTex = TexId.BATHROOM_TILE;
           } else if (tile === 19 /* StairsFloor */) {
             floorColor = rgb(168, 116, 68);
@@ -3465,102 +3646,207 @@
       }
     }
   }
+  function addTuftedCouch3D(mb, cx, cz, w, d, facing, fabricColor, pillowColor) {
+    mb.addShadowDisc(cx, 0, cz, w * 0.54, d * 0.54, 0.32);
+    const darkFabric = darkenColor(fabricColor, 0.84);
+    mb.addBeveledBox(cx, 0.6, cz, w, 4.8, d, 0.9, fabricColor, TexId.FABRIC, 0.65);
+    if (facing === "east") {
+      mb.addBeveledBox(cx - w * 0.34, 4.8, cz, w * 0.32, 6.2, d, 1, darkFabric, TexId.FABRIC, 0.65);
+      mb.addTorus(cx + 1, 5.5, cz - d * 0.44, 2, 1.2, 10, 8, "x", darkFabric, TexId.FABRIC, 0.5);
+      mb.addTorus(cx + 1, 5.5, cz + d * 0.44, 2, 1.2, 10, 8, "x", darkFabric, TexId.FABRIC, 0.5);
+      mb.addSphere(cx + 0.5, 6.2, cz - d * 0.25, 1.8, 2.2, 3, 8, 10, pillowColor, TexId.FABRIC, 0.45);
+      mb.addSphere(cx + 0.5, 6.2, cz + d * 0.25, 1.8, 2.2, 3, 8, 10, pillowColor, TexId.FABRIC, 0.45);
+    } else {
+      mb.addBeveledBox(cx, 4.8, cz - d * 0.34, w, 6.2, d * 0.32, 1, darkFabric, TexId.FABRIC, 0.65);
+      mb.addTorus(cx - w * 0.44, 5.5, cz + 1, 2, 1.2, 10, 8, "z", darkFabric, TexId.FABRIC, 0.5);
+      mb.addTorus(cx + w * 0.44, 5.5, cz + 1, 2, 1.2, 10, 8, "z", darkFabric, TexId.FABRIC, 0.5);
+      mb.addSphere(cx - w * 0.26, 6.2, cz + 0.5, 3.2, 2.2, 1.8, 8, 10, pillowColor, TexId.FABRIC, 0.45);
+      mb.addSphere(cx + w * 0.26, 6.2, cz + 0.5, 3.2, 2.2, 1.8, 8, 10, pillowColor, TexId.FABRIC, 0.45);
+    }
+  }
   function buildBasementStaticMesh(map) {
     const mb = new MeshBuilder();
     const ts = map.tileSize;
     addIndoorTilesAndWalls(mb, map, 16);
-    mb.addBox(10 * ts, 0, 7.5 * ts, 6 * ts, 16, 12, rgb(132, 82, 44), TexId.BOOKSHELF, 0.8);
-    mb.addBox(12.5 * ts, 0, 9 * ts, 14, 11, 2 * ts, rgb(148, 92, 48), TexId.LOG_WALL, 0.75);
-    mb.addBox(7.5 * ts, 0, 10.5 * ts, 14, 5.5, 3 * ts, rgb(168, 152, 134), TexId.FABRIC, 0.75);
-    mb.addBox(7.2 * ts, 5.2, 10.5 * ts, 4.5, 6, 3 * ts, rgb(148, 132, 114), TexId.FABRIC, 0.75);
-    mb.addBox(12 * ts, 0, 12 * ts, 2 * ts, 19, 2 * ts, rgb(186, 62, 48), TexId.BRICK_RED, 0.85);
-    mb.addBox(12 * ts, 18.5, 12 * ts, 2 * ts + 3, 2.2, 2 * ts + 3, rgb(112, 72, 42), TexId.WOOD_GRAIN, 0.7);
-    mb.addBox(11 * ts - 0.5, 1, 12 * ts, 1.5, 10, 16, rgb(28, 22, 22), TexId.SOLID, 0);
-    mb.addBox(9.5 * ts, 0, 14.5 * ts, 3 * ts, 5.5, 15, rgb(168, 152, 134), TexId.FABRIC, 0.75);
-    mb.addBox(9.5 * ts, 5.2, 14.2 * ts, 3 * ts, 6, 4.5, rgb(148, 132, 114), TexId.FABRIC, 0.75);
-    mb.addBox(9 * ts, 0, 17.5 * ts, 22, 6.2, 16, rgb(128, 78, 42), TexId.WOOD_GRAIN, 0.75);
-    mb.addBox(9 * ts, 6.1, 17.5 * ts, 14, 0.8, 14, rgb(245, 236, 212), TexId.CHESSBOARD, 0.4);
-    mb.addCone(9 * ts - 3, 6.9, 17.5 * ts - 3, 1.1, 3, 5, rgb(246, 214, 92), TexId.SOLID, 0.35);
-    mb.addCone(9 * ts + 3, 6.9, 17.5 * ts + 3, 1.1, 3, 5, rgb(72, 76, 88), TexId.SOLID, 0.35);
-    mb.addBox(8.5 * ts, 3, 20.2 * ts, 2.6 * ts, 8, 2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
-    mb.addBox(11.5 * ts, 3, 20.2 * ts, 2.6 * ts, 8, 2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
-    mb.addCylinder(14.5 * ts, 0, 18 * ts, 3.5, 1, 14, 6, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.65);
-    mb.addSphere(14.5 * ts, 10.5, 18 * ts, 3.6, 4, 3.6, 4, 6, rgb(186, 48, 48), TexId.FABRIC, 0.55);
-    mb.addBox(16 * ts, 0, 12.5 * ts, 2 * ts, 15, 6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.7);
-    mb.addBox(16 * ts, 0, 20.5 * ts, 2 * ts, 11, 6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.7);
+    mb.addBeveledBox(10 * ts, 0, 7.5 * ts, 6 * ts, 16.5, 12.5, 0.8, rgb(128, 78, 40), TexId.BOOKSHELF, 0.75);
+    mb.addBeveledBox(10 * ts, 16.2, 7.5 * ts, 6 * ts + 2, 1.5, 14, 0.4, rgb(98, 58, 28), TexId.WOOD_GRAIN, 0.55);
+    mb.addSphere(8.2 * ts, 19.8, 7.5 * ts, 2.2, 2.2, 2.2, 8, 12, rgb(76, 158, 198), TexId.SOLID, 0.45);
+    mb.addBeveledBox(12.5 * ts, 0, 9 * ts, 14, 11.5, 2 * ts, 0.7, rgb(148, 92, 48), TexId.LOG_WALL, 0.65);
+    for (let i = 0; i < 4; i++) {
+      mb.addCylinder(12.5 * ts, 11.5, 8.3 * ts + i * 6.5, 2.2, 2.2, 2.5, 10, rgb(238, 234, 226), TexId.BIRCH_BARK, 0.4);
+    }
+    addTuftedCouch3D(mb, 7.55 * ts, 10.5 * ts, 15, 3 * ts - 2, "east", rgb(172, 154, 134), rgb(186, 56, 56));
+    mb.addBeveledBox(12 * ts, 0, 12 * ts, 2 * ts + 1, 1.8, 2 * ts + 2, 0.4, rgb(118, 122, 132), TexId.STONE_FLOOR, 0.55);
+    mb.addBox(12 * ts, 1.8, 12 * ts, 2 * ts, 17.2, 2 * ts, rgb(186, 62, 48), TexId.BRICK_RED, 0.8);
+    mb.addBeveledBox(12 * ts, 18.5, 12 * ts, 2 * ts + 4, 2.4, 2 * ts + 4, 0.6, rgb(108, 68, 38), TexId.WOOD_GRAIN, 0.65);
+    mb.addTorus(11 * ts - 0.5, 18.2, 12 * ts, 6.5, 1.2, 12, 8, "x", rgb(36, 124, 54), TexId.PINE_FOLIAGE, 0.4);
+    mb.addBox(11 * ts - 0.4, 1.8, 12 * ts, 1.6, 10.5, 17, rgb(24, 18, 18), TexId.SOLID, 0);
+    mb.addSphere(11.3 * ts, 2.6, 12 * ts, 2.5, 1.4, 6.5, 6, 10, rgb(255, 92, 28), TexId.SOLID, 0.3);
+    addTuftedCouch3D(mb, 9.5 * ts, 14.5 * ts, 3 * ts - 2, 15, "south", rgb(172, 154, 134), rgb(64, 128, 178));
+    {
+      const cx = 9 * ts;
+      const cz = 17.5 * ts;
+      mb.addShadowDisc(cx, 0, cz, 14, 11, 0.32);
+      mb.addCylinder(cx, 0, cz, 5.5, 2.2, 1.6, 12, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.5);
+      mb.addCylinder(cx, 1.6, cz, 2.2, 2.2, 4.4, 12, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.5);
+      mb.addBeveledBox(cx, 5.8, cz, 22, 1.2, 16, 0.4, rgb(134, 82, 44), TexId.WOOD_GRAIN, 0.65);
+      mb.addBox(cx, 6.9, cz, 13.5, 0.5, 13.5, rgb(245, 236, 212), TexId.CHESSBOARD, 0.35);
+      for (let p = -4; p <= 4; p += 2.6) {
+        mb.addCone(cx + p, 7.4, cz - 4.2, 0.85, 2.6, 8, rgb(248, 216, 92), TexId.SOLID, 0.3);
+        mb.addCone(cx + p, 7.4, cz + 4.2, 0.85, 2.6, 8, rgb(76, 82, 96), TexId.SOLID, 0.3);
+      }
+    }
+    mb.addBox(8.5 * ts, 2.5, 20.2 * ts, 2.6 * ts, 8.5, 2.2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
+    mb.addBox(11.5 * ts, 2.5, 20.2 * ts, 2.6 * ts, 8.5, 2.2, rgb(255, 228, 138), TexId.WINDOW_GLOW, 0.45);
+    mb.addShadowDisc(14.5 * ts, 0, 18 * ts, 5, 5, 0.28);
+    mb.addCylinder(14.5 * ts, 0, 18 * ts, 4, 0.9, 14.5, 10, rgb(104, 64, 34), TexId.WOOD_GRAIN, 0.6);
+    mb.addSphere(14.5 * ts, 10.2, 18 * ts, 3.6, 4.2, 3.6, 8, 10, rgb(186, 48, 48), TexId.FABRIC, 0.55);
+    mb.addCylinder(14.5 * ts, 14.2, 18 * ts, 2.4, 2.6, 2.8, 10, rgb(34, 36, 44), TexId.SOLID, 0.5);
+    mb.addBeveledBox(16 * ts, 0, 12.5 * ts, 2 * ts, 15.5, 6, 0.6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
+    mb.addBeveledBox(16 * ts, 0, 20.5 * ts, 2 * ts, 11.2, 6, 0.6, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
     for (let s = 0; s < 8; s++) {
       const sx = 18 * ts + s * 8 + 4;
-      const sh = (s + 1) * 1.6;
-      mb.addBox(sx, 0, 17 * ts, 8.2, sh, 4 * ts - 4, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.65);
+      const sh = (s + 1) * 1.65;
+      mb.addBeveledBox(sx, 0, 17 * ts, 8.2, sh, 4 * ts - 4, 0.35, rgb(168, 116, 68), TexId.WOOD_GRAIN, 0.55);
+      mb.addCylinder(sx, sh, 18.8 * ts, 0.6, 0.5, 5.5, 8, rgb(242, 238, 230), TexId.SOLID, 0.35);
     }
-    mb.addBox(19.5 * ts, 0, 10 * ts, 13, 7.5, 22, rgb(242, 246, 252), TexId.SOLID, 0.7);
-    mb.addBox(21.7 * ts, 0, 9.5 * ts, 5, 10.5, 10, rgb(246, 250, 255), TexId.SOLID, 0.7);
-    mb.addCylinder(21.3 * ts, 0, 9.5 * ts, 4.4, 4.8, 5.5, 8, rgb(246, 250, 255), TexId.SOLID, 0.7);
+    mb.addOrientedBox(20 * ts, 11.5, 18.8 * ts, 4 * ts, 1.3, 1.5, 0, 0.22, rgb(112, 68, 36), TexId.WOOD_GRAIN, 0.5);
+    mb.addBeveledBox(19.5 * ts, 0, 10 * ts, 13.5, 7.8, 23, 0.6, rgb(242, 246, 252), TexId.SOLID, 0.65);
+    mb.addTorus(19.6 * ts, 8, 10 * ts, 3.8, 0.9, 12, 8, "y", rgb(252, 254, 255), TexId.SOLID, 0.4);
+    mb.addCylinder(19.2 * ts, 8, 10 * ts, 0.5, 0.5, 2.6, 8, rgb(210, 220, 232), TexId.SOLID, 0.3);
+    mb.addBeveledBox(21.75 * ts, 4.5, 9.5 * ts, 5.2, 6.8, 9.5, 0.7, rgb(246, 250, 255), TexId.SOLID, 0.65);
+    mb.addCylinder(21.3 * ts, 0, 9.5 * ts, 3.6, 4.8, 5.2, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
+    mb.addTorus(21.3 * ts, 5.3, 9.5 * ts, 3.8, 1, 12, 8, "y", rgb(252, 254, 255), TexId.SOLID, 0.45);
     return mb;
   }
   function buildUpstairsStaticMesh(map) {
     const mb = new MeshBuilder();
     const ts = map.tileSize;
     addIndoorTilesAndWalls(mb, map, 16);
-    mb.addBox(2.5 * ts, 0, 7 * ts, 14, 15, 2 * ts, rgb(134, 82, 42), TexId.WOOD_GRAIN, 0.8);
-    mb.addBox(5 * ts, 0, 8 * ts, 2 * ts - 2, 6.8, 4 * ts - 4, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.8);
-    mb.addBox(5 * ts, 6.7, 8 * ts, 10, 0.5, 4 * ts - 10, rgb(248, 244, 240), TexId.FABRIC, 0.35);
-    mb.addBox(11 * ts, 0, 7 * ts, 2 * ts - 2, 8.2, 2 * ts - 2, rgb(232, 228, 218), TexId.SOLID, 0.75);
-    mb.addBox(11 * ts, 8, 7 * ts, 2 * ts, 1.4, 2 * ts, rgb(168, 114, 66), TexId.WOOD_GRAIN, 0.65);
-    mb.addBox(15.5 * ts, 0, 7 * ts, 14, 8.5, 4 * ts - 2, rgb(224, 228, 234), TexId.SOLID, 0.75);
-    mb.addBox(11 * ts, 0, 10.5 * ts, 2 * ts - 2, 10, 14, rgb(138, 44, 44), TexId.WOOD_GRAIN, 0.75);
-    mb.addCylinder(10.5 * ts, 10, 10.5 * ts, 1.1, 1.1, 3.8, 6, rgb(255, 224, 110), TexId.SOLID, 0.35);
-    mb.addCylinder(11.5 * ts, 10, 10.5 * ts, 1.1, 1.1, 3.8, 6, rgb(255, 224, 110), TexId.SOLID, 0.35);
-    mb.addBox(5.5 * ts, 0, 11.5 * ts, 3 * ts - 2, 5.8, 15, rgb(214, 84, 58), TexId.FABRIC, 0.8);
-    mb.addBox(5.5 * ts, 5.5, 11.2 * ts, 3 * ts - 2, 6.2, 4.5, rgb(64, 134, 188), TexId.FABRIC, 0.8);
-    mb.addBox(2.5 * ts, 0, 12.5 * ts, 14, 7.5, 14, rgb(236, 178, 52), TexId.FABRIC, 0.75);
-    mb.addBox(7.5 * ts, 0, 13.5 * ts, 14, 7.5, 14, rgb(68, 156, 124), TexId.FABRIC, 0.75);
+    mb.addBeveledBox(2.5 * ts, 0, 7 * ts, 14.5, 7.5, 2 * ts, 0.6, rgb(134, 82, 42), TexId.WOOD_GRAIN, 0.7);
+    mb.addBeveledBox(2.4 * ts, 7.5, 7 * ts, 11.5, 8.2, 2 * ts - 2, 0.5, rgb(148, 94, 50), TexId.BOOKSHELF, 0.7);
+    {
+      const tx = 5 * ts;
+      const tz = 8 * ts;
+      mb.addShadowDisc(tx, 0, tz, 17, 32, 0.34);
+      mb.addBeveledBox(tx, 0, tz, 2 * ts - 2, 6.8, 4 * ts - 4, 0.7, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.75);
+      mb.addBeveledBox(tx, 6.7, tz, 12, 0.5, 4 * ts - 8, 0.2, rgb(250, 246, 242), TexId.FABRIC, 0.35);
+      mb.addCylinder(tx, 7.2, tz, 2, 0.7, 4.5, 10, rgb(250, 214, 78), TexId.SOLID, 0.4);
+      mb.addSphere(tx, 12.2, tz, 0.7, 1.3, 0.7, 6, 8, rgb(255, 200, 64), TexId.SOLID, 0.2);
+      for (const rowOff of [-18, 0, 18]) {
+        mb.addCylinder(tx - 8, 7.1, tz + rowOff, 3.2, 3.4, 0.5, 12, rgb(250, 252, 255), TexId.SOLID, 0.3);
+        mb.addCylinder(tx + 8, 7.1, tz + rowOff, 3.2, 3.4, 0.5, 12, rgb(250, 252, 255), TexId.SOLID, 0.3);
+        mb.addBeveledBox(tx - 15.5, 0, tz + rowOff, 4.5, 4.5, 6.5, 0.4, rgb(124, 74, 38), TexId.WOOD_GRAIN, 0.5);
+        mb.addBeveledBox(tx - 17.2, 4.5, tz + rowOff, 1.4, 5.5, 6.5, 0.3, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.5);
+        mb.addBeveledBox(tx + 15.5, 0, tz + rowOff, 4.5, 4.5, 6.5, 0.4, rgb(124, 74, 38), TexId.WOOD_GRAIN, 0.5);
+        mb.addBeveledBox(tx + 17.2, 4.5, tz + rowOff, 1.4, 5.5, 6.5, 0.3, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.5);
+      }
+    }
+    {
+      const ix = 11 * ts;
+      const iz = 7 * ts;
+      mb.addShadowDisc(ix, 0, iz, 17, 17, 0.32);
+      mb.addBeveledBox(ix, 0, iz, 2 * ts - 2, 8, 2 * ts - 2, 0.5, rgb(236, 232, 224), TexId.SOLID, 0.7);
+      mb.addBeveledBox(ix, 7.8, iz, 2 * ts + 1, 1.6, 2 * ts + 1, 0.5, rgb(168, 114, 66), TexId.WOOD_GRAIN, 0.6);
+      mb.addCylinder(ix, 9.4, iz, 3.2, 4.6, 1.8, 12, rgb(248, 250, 255), TexId.SOLID, 0.4);
+      mb.addSphere(ix - 1.2, 11.2, iz, 1.5, 1.4, 1.5, 6, 8, rgb(220, 42, 42), TexId.SOLID, 0.3);
+      mb.addSphere(ix + 1.4, 11.2, iz + 0.8, 1.4, 1.4, 1.4, 6, 8, rgb(245, 148, 38), TexId.SOLID, 0.3);
+      mb.addBeveledBox(15.5 * ts, 0, 7 * ts, 14.5, 8.6, 4 * ts - 2, 0.6, rgb(228, 232, 238), TexId.SOLID, 0.7);
+      mb.addBox(15.5 * ts, 8.6, 6 * ts, 11, 0.4, 18, rgb(32, 36, 44), TexId.SOLID, 0.35);
+      mb.addTorus(15.5 * ts, 8.9, 5.7 * ts, 2.2, 0.35, 10, 6, "y", rgb(238, 64, 48), TexId.SOLID, 0.2);
+      mb.addTorus(15.5 * ts, 8.9, 6.4 * ts, 2.2, 0.35, 10, 6, "y", rgb(238, 64, 48), TexId.SOLID, 0.2);
+      mb.addCylinder(15.8 * ts, 8.6, 8 * ts, 0.5, 0.5, 3.2, 8, rgb(210, 220, 232), TexId.SOLID, 0.3);
+      mb.addBeveledBox(11 * ts, 0, 10.5 * ts, 2 * ts - 2, 9.5, 14, 0.6, rgb(142, 42, 46), TexId.WOOD_GRAIN, 0.7);
+      mb.addBeveledBox(11 * ts, 9.4, 10.3 * ts, 18, 2.2, 8, 0.4, rgb(242, 198, 72), TexId.SOLID, 0.5);
+      mb.addCylinder(10.4 * ts, 9.5, 10.6 * ts, 1.1, 1.1, 4, 10, rgb(255, 232, 128), TexId.SOLID, 0.35);
+      mb.addCylinder(11.6 * ts, 9.5, 10.6 * ts, 1.1, 1.1, 4, 10, rgb(255, 232, 128), TexId.SOLID, 0.35);
+    }
+    addTuftedCouch3D(mb, 5.5 * ts, 11.5 * ts, 3 * ts - 2, 15, "south", rgb(214, 84, 58), rgb(248, 206, 68));
+    mb.addShadowDisc(2.5 * ts, 0, 12.5 * ts, 8.5, 8.5, 0.3);
+    mb.addBeveledBox(2.5 * ts, 0.5, 12.5 * ts, 14.5, 5.2, 14.5, 0.9, rgb(236, 178, 52), TexId.FABRIC, 0.65);
+    mb.addBeveledBox(2.1 * ts, 5.2, 12.5 * ts, 4.2, 5.8, 14.5, 0.8, rgb(214, 156, 38), TexId.FABRIC, 0.65);
+    mb.addShadowDisc(7.5 * ts, 0, 13.5 * ts, 8.5, 8.5, 0.3);
+    mb.addBeveledBox(7.5 * ts, 0.5, 13.5 * ts, 14.5, 5.2, 14.5, 0.9, rgb(68, 156, 124), TexId.FABRIC, 0.65);
+    mb.addBeveledBox(7.9 * ts, 5.2, 13.5 * ts, 4.2, 5.8, 14.5, 0.8, rgb(52, 134, 104), TexId.FABRIC, 0.65);
     {
       const tx = 3 * ts;
       const tz = 15.5 * ts;
-      mb.addCylinder(tx, 0.2, tz, 14, 13.5, 0.9, 12, rgb(198, 36, 42), TexId.FABRIC, 0.45);
-      mb.addCylinder(tx, 0.9, tz, 2.8, 2, 9, 7, rgb(96, 58, 32), TexId.WOOD_GRAIN, 0.65);
-      mb.addCone(tx, 6, tz, 13, 11.5, 10, rgb(26, 108, 48), TexId.PINE_FOLIAGE, 0.85);
-      mb.addCone(tx, 12.5, tz, 10.4, 10.5, 10, rgb(34, 128, 58), TexId.PINE_FOLIAGE, 0.85);
-      mb.addCone(tx, 18.5, tz, 7.6, 9.5, 10, rgb(44, 146, 68), TexId.PINE_FOLIAGE, 0.85);
-      mb.addCone(tx, 24, tz, 4.8, 7.5, 10, rgb(54, 162, 78), TexId.PINE_FOLIAGE, 0.85);
+      mb.addShadowDisc(tx, 0, tz, 16, 16, 0.38);
+      mb.addCylinder(tx, 0.2, tz, 14.2, 13.5, 0.9, 16, rgb(198, 36, 42), TexId.FABRIC, 0.4);
+      mb.addTorus(tx, 0.6, tz, 13.8, 0.6, 16, 8, "y", rgb(250, 212, 72), TexId.SOLID, 0.3);
+      mb.addCylinder(tx, 0.9, tz, 3, 2, 9, 12, rgb(96, 58, 32), TexId.WOOD_GRAIN, 0.6);
+      mb.addCone(tx, 5.5, tz, 13.5, 10.5, 16, rgb(24, 104, 46), TexId.PINE_FOLIAGE, 0.75);
+      mb.addCone(tx, 11.2, tz, 11.4, 9.8, 16, rgb(32, 122, 54), TexId.PINE_FOLIAGE, 0.75);
+      mb.addCone(tx, 16.5, tz, 9, 9, 16, rgb(40, 138, 64), TexId.PINE_FOLIAGE, 0.75);
+      mb.addCone(tx, 21.5, tz, 6.6, 8, 16, rgb(48, 154, 72), TexId.PINE_FOLIAGE, 0.75);
+      mb.addCone(tx, 26, tz, 4.2, 6.8, 16, rgb(58, 168, 82), TexId.PINE_FOLIAGE, 0.75);
       const ornamentPalette = [
-        rgb(238, 44, 48),
-        rgb(252, 212, 62),
-        rgb(56, 152, 245),
-        rgb(236, 92, 214)
+        rgb(242, 42, 48),
+        rgb(255, 216, 64),
+        rgb(56, 156, 250),
+        rgb(240, 88, 218)
       ];
-      for (let i = 0; i < 12; i++) {
-        const ang = i / 12 * Math.PI * 2;
-        const tier = i % 3;
-        const rad = tier === 0 ? 10.2 : tier === 1 ? 8 : 5.4;
-        const oy = tier === 0 ? 8.5 : tier === 1 ? 15 : 21;
+      for (let i = 0; i < 18; i++) {
+        const ang = i / 18 * Math.PI * 2 * 2;
+        const tNorm = i / 18;
+        const rad = 11.8 * (1 - tNorm * 0.68);
+        const oy = 7.2 + tNorm * 19.5;
         mb.addSphere(
           tx + Math.cos(ang) * rad,
           oy,
           tz + Math.sin(ang) * rad,
-          1.45,
-          1.45,
-          1.45,
-          4,
-          6,
+          1.5,
+          1.5,
+          1.5,
+          8,
+          10,
           ornamentPalette[i % ornamentPalette.length],
           TexId.SOLID,
-          0.4
+          0.38
         );
       }
-      mb.addSphere(tx, 32.2, tz, 3, 3, 1.5, 5, 8, rgb(255, 232, 75), TexId.SOLID, 0.65);
-      mb.addOrientedBox(tx, 32.2, tz, 5.6, 5.6, 1.5, 0, Math.PI * 0.25, rgb(255, 238, 95), TexId.SOLID, 0.55);
-      mb.addBox(tx - 8, 0.8, tz + 8, 6, 5, 6, rgb(218, 44, 48), TexId.GIFT_WRAP, 0.6);
-      mb.addBox(tx + 7, 0.8, tz + 8, 5.5, 4.5, 5.5, rgb(48, 128, 214), TexId.GIFT_WRAP, 0.6);
+      mb.addSphere(tx, 33.6, tz, 3, 3, 1.5, 8, 12, rgb(255, 236, 82), TexId.SOLID, 0.55);
+      mb.addOrientedBox(tx, 33.6, tz, 5.8, 5.8, 1.5, 0, Math.PI * 0.25, rgb(255, 242, 104), TexId.SOLID, 0.5);
+      mb.addTorus(tx, 33.6, tz, 4.2, 0.45, 14, 6, "z", rgb(255, 245, 140), TexId.SOLID, 0.25);
+      for (const [gx, gz, gw, gh, gc] of [
+        [tx - 8.5, tz + 8, 6.2, 5.2, rgb(222, 42, 48)],
+        [tx + 7.5, tz + 8.2, 5.6, 4.6, rgb(48, 128, 218)],
+        [tx - 1.5, tz + 10.2, 5, 4.2, rgb(52, 168, 86)],
+        [tx + 8.8, tz - 5.5, 5.2, 4.4, rgb(168, 64, 196)]
+      ]) {
+        mb.addBeveledBox(gx, 0.8, gz, gw, gh, gw, 0.5, gc, TexId.GIFT_WRAP, 0.55);
+        mb.addTorus(gx, 0.8 + gh + 0.5, gz, 1.3, 0.45, 8, 6, "x", rgb(255, 218, 72), TexId.SOLID, 0.35);
+        mb.addTorus(gx, 0.8 + gh + 0.5, gz, 1.3, 0.45, 8, 6, "z", rgb(255, 218, 72), TexId.SOLID, 0.35);
+      }
     }
-    mb.addBox(12 * ts, 0, 18 * ts, 2 * ts - 2, 6.8, 2 * ts - 2, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.75);
-    mb.addBox(17.5 * ts, 0, 8 * ts, 13, 7.5, 22, rgb(242, 246, 252), TexId.SOLID, 0.7);
-    mb.addCylinder(19.5 * ts, 0, 8.5 * ts, 4.4, 4.8, 5.5, 8, rgb(246, 250, 255), TexId.SOLID, 0.7);
-    mb.addBox(27 * ts, 0, 7 * ts, 2 * ts - 2, 5.5, 2 * ts - 2, rgb(132, 82, 42), TexId.WOOD_GRAIN, 0.75);
-    mb.addBox(27 * ts, 5.2, 7 * ts, 2 * ts - 4, 2.2, 2 * ts - 4, rgb(198, 52, 58), TexId.FABRIC, 0.55);
-    mb.addBox(21.5 * ts, 0, 16.5 * ts, 3 * ts - 4, 6.8, 2 * ts - 2, rgb(142, 90, 48), TexId.WOOD_GRAIN, 0.75);
-    mb.addBox(21.5 * ts, 6.8, 16.5 * ts, 9.5, 7, 2, rgb(42, 46, 56), TexId.WINDOW_GLOW, 0.55);
+    mb.addShadowDisc(12 * ts, 0, 18 * ts, 16, 16, 0.32);
+    mb.addBeveledBox(12 * ts, 0, 18 * ts, 2 * ts - 2, 6.8, 2 * ts - 2, 0.6, rgb(148, 92, 48), TexId.WOOD_GRAIN, 0.7);
+    mb.addBeveledBox(17.5 * ts, 0, 8 * ts, 13.5, 7.8, 22, 0.6, rgb(242, 246, 252), TexId.SOLID, 0.65);
+    mb.addCylinder(19.5 * ts, 0, 8.5 * ts, 3.8, 4.8, 5.4, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
+    mb.addTorus(19.5 * ts, 5.4, 8.5 * ts, 3.8, 1, 12, 8, "y", rgb(252, 254, 255), TexId.SOLID, 0.45);
+    {
+      const bx = 27 * ts;
+      const bz = 7 * ts;
+      mb.addShadowDisc(bx, 0, bz, 17, 17, 0.34);
+      mb.addBeveledBox(bx, 0, bz, 2 * ts - 2, 4.8, 2 * ts - 2, 0.6, rgb(128, 78, 38), TexId.WOOD_GRAIN, 0.7);
+      mb.addBeveledBox(bx, 4.8, bz - ts + 2.5, 2 * ts - 2, 7.2, 3.2, 0.6, rgb(112, 66, 32), TexId.WOOD_GRAIN, 0.65);
+      mb.addBeveledBox(bx, 4.6, bz, 2 * ts - 4, 2, 2 * ts - 4, 0.6, rgb(248, 248, 252), TexId.FABRIC, 0.45);
+      mb.addBeveledBox(bx, 5.2, bz + 2.5, 2 * ts - 3.5, 2.2, 2 * ts - 9, 0.7, rgb(198, 48, 56), TexId.FABRIC, 0.55);
+      mb.addSphere(bx - 6.5, 7.2, bz - 8.5, 5.2, 1.8, 3.2, 8, 10, rgb(252, 252, 255), TexId.FABRIC, 0.45);
+      mb.addSphere(bx + 6.5, 7.2, bz - 8.5, 5.2, 1.8, 3.2, 8, 10, rgb(252, 252, 255), TexId.FABRIC, 0.45);
+    }
+    {
+      const ox = 21.5 * ts;
+      const oz = 16.5 * ts;
+      mb.addShadowDisc(ox, 0, oz, 22, 16, 0.32);
+      mb.addBeveledBox(ox, 0, oz, 3 * ts - 4, 6.8, 2 * ts - 2, 0.6, rgb(142, 90, 48), TexId.WOOD_GRAIN, 0.7);
+      mb.addCylinder(ox, 6.8, oz - 4, 2.6, 0.8, 2.2, 10, rgb(52, 58, 70), TexId.SOLID, 0.4);
+      mb.addBeveledBox(ox, 8.6, oz - 4, 14, 7.5, 1.8, 0.35, rgb(36, 40, 50), TexId.WINDOW_GLOW, 0.55);
+      mb.addBeveledBox(ox, 6.8, oz + 3, 9, 0.6, 3.6, 0.2, rgb(48, 54, 66), TexId.SOLID, 0.35);
+      mb.addCylinder(ox, 0, oz + 14, 4.2, 1, 4.2, 10, rgb(44, 48, 58), TexId.SOLID, 0.45);
+      mb.addBeveledBox(ox, 4, oz + 14, 8.5, 1.6, 8.5, 0.5, rgb(58, 66, 82), TexId.FABRIC, 0.55);
+      mb.addBeveledBox(ox, 5.4, oz + 17.5, 8, 6.5, 2, 0.5, rgb(52, 60, 76), TexId.FABRIC, 0.55);
+    }
     return mb;
   }
   function buildPeopleStaticMesh(map) {
@@ -3588,228 +3874,147 @@
     staticMeshCache.set(levelId, mesh);
     return mesh;
   }
-  function addHumanoid3D(mb, cx, baseY, cz, yaw, walkPhase, isMoving, style, isSanta = false, carryingLadder = false) {
+  function addHumanoid3D(mb, cx, baseY, cz, yaw, walkPhase, isMoving, style, isSanta = false, carryingLadder = false, translucentMb) {
+    if (translucentMb) {
+      translucentMb.addShadowDisc(cx, baseY, cz, 5.6, 5.6, 0.36);
+    }
     const cyaw = Math.cos(yaw);
     const syaw = Math.sin(yaw);
     const fx = cyaw;
     const fz = syaw;
     const rx = -syaw;
     const rz = cyaw;
-    const swing = isMoving ? Math.sin(walkPhase * 11) * 0.55 : 0;
-    const bob = isMoving ? Math.abs(Math.sin(walkPhase * 11)) * 0.8 : 0;
+    const swing = isMoving ? Math.sin(walkPhase * 11) * 0.58 : 0;
+    const bob = isMoving ? Math.abs(Math.sin(walkPhase * 11)) * 0.85 : 0;
     const y0 = baseY + bob;
-    const legSpread = 1.65;
-    const legSwingDist = style.sitting ? 1.8 : Math.sin(swing) * 1.8;
-    mb.addOrientedBox(
-      cx + rx * legSpread + fx * legSwingDist,
-      y0 + 2.2,
-      cz + rz * legSpread + fz * legSwingDist,
-      2.4,
-      4.4,
-      2.4,
-      yaw,
-      style.sitting ? 0.9 : swing,
-      style.pants,
-      TexId.SOLID,
-      0.75
-    );
-    mb.addOrientedBox(
-      cx - rx * legSpread - fx * legSwingDist,
-      y0 + 2.2,
-      cz - rz * legSpread - fz * legSwingDist,
-      2.4,
-      4.4,
-      2.4,
-      yaw,
-      style.sitting ? 0.9 : -swing,
-      style.pants,
-      TexId.SOLID,
-      0.75
-    );
-    mb.addCylinder(cx, y0 + 3.8, cz, 4.2, 3.4, 6.8, 8, style.coat, TexId.FABRIC, 0.85);
+    const legSpread = 1.75;
+    const legSwingDist = style.sitting ? 1.9 : Math.sin(swing) * 1.9;
+    const bootColor = isSanta ? rgb(28, 30, 38) : darkenColor(style.pants, 0.65);
+    for (const side of [1, -1]) {
+      const sSwing = style.sitting ? 0.9 : side * swing;
+      const sDist = style.sitting ? 1.9 : side * legSwingDist;
+      const lx = cx + rx * legSpread * side + fx * sDist;
+      const lz = cz + rz * legSpread * side + fz * sDist;
+      mb.addSphere(lx + fx * 0.5, y0 + 1, lz + fz * 0.5, 1.45, 1.05, 1.65, 6, 8, bootColor, TexId.SOLID, 0.6);
+      if (isSanta) {
+        mb.addTorus(lx, y0 + 2.1, lz, 1.15, 0.45, 8, 6, "y", style.trim, TexId.SNOW, 0.4);
+      }
+      mb.addOrientedBox(lx, y0 + 2.8, lz, 2.3, 3.6, 2.3, yaw, sSwing, style.pants, TexId.SOLID, 0.65);
+    }
+    mb.addCylinder(cx, y0 + 3.6, cz, 4.45, 3.65, 3.8, 14, style.coat, TexId.FABRIC, 0.75);
+    mb.addCylinder(cx, y0 + 6.8, cz, 3.65, 3.25, 3.8, 14, style.coat, TexId.FABRIC, 0.75);
     if (isSanta) {
-      mb.addCylinder(cx, y0 + 3.6, cz, 4.45, 4.35, 1.4, 8, style.trim, TexId.SNOW, 0.5);
-      mb.addCylinder(cx, y0 + 5.8, cz, 4.05, 3.95, 1.3, 8, rgb(32, 32, 38), TexId.SOLID, 0.45);
+      mb.addTorus(cx, y0 + 3.8, cz, 4.15, 0.7, 14, 8, "y", style.trim, TexId.SNOW, 0.5);
+      mb.addCylinder(cx, y0 + 5.8, cz, 4.05, 3.95, 1.35, 14, rgb(28, 30, 38), TexId.SOLID, 0.45);
       mb.addOrientedBox(
-        cx + fx * 3.9,
-        y0 + 6.4,
-        cz + fz * 3.9,
-        0.8,
-        1.5,
-        1.8,
+        cx + fx * 3.95,
+        y0 + 6.45,
+        cz + fz * 3.95,
+        0.85,
+        1.65,
+        2,
         yaw,
         0,
-        rgb(250, 212, 64),
+        rgb(252, 214, 68),
         TexId.SOLID,
         0.35
       );
+      mb.addTorus(cx, y0 + 10.2, cz, 3, 0.85, 12, 8, "y", style.trim, TexId.SNOW, 0.5);
+    } else {
+      mb.addTorus(cx, y0 + 10.2, cz, 2.85, 0.75, 12, 8, "y", style.trim, TexId.FABRIC, 0.45);
     }
-    const armSpread = 4.4;
-    mb.addOrientedBox(
-      cx + rx * armSpread - fx * legSwingDist * 0.7,
-      y0 + 7.5,
-      cz + rz * armSpread - fz * legSwingDist * 0.7,
-      2.1,
-      5,
-      2.1,
-      yaw,
-      -swing * 0.9,
-      style.coat,
-      TexId.FABRIC,
-      0.7
-    );
-    mb.addOrientedBox(
-      cx - rx * armSpread + fx * legSwingDist * 0.7,
-      y0 + 7.5,
-      cz - rz * armSpread + fz * legSwingDist * 0.7,
-      2.1,
-      5,
-      2.1,
-      yaw,
-      swing * 0.9,
-      style.coat,
-      TexId.FABRIC,
-      0.7
-    );
-    const headY = y0 + 13;
-    mb.addSphere(cx, headY, cz, 3.6, 3.5, 3.6, 6, 8, style.skin, TexId.SOLID, 0.85);
-    const eyeForward = 3.25;
-    const eyeSpread = 1.25;
-    mb.addSphere(
-      cx + fx * eyeForward + rx * eyeSpread,
-      headY + 0.4,
-      cz + fz * eyeForward + rz * eyeSpread,
-      0.58,
-      0.72,
-      0.58,
-      4,
-      5,
-      rgb(24, 28, 38),
-      TexId.SOLID,
-      0.2
-    );
-    mb.addSphere(
-      cx + fx * eyeForward - rx * eyeSpread,
-      headY + 0.4,
-      cz + fz * eyeForward - rz * eyeSpread,
-      0.58,
-      0.72,
-      0.58,
-      4,
-      5,
-      rgb(24, 28, 38),
-      TexId.SOLID,
-      0.2
-    );
+    const armSpread = 4.35;
+    const mittenColor = isSanta ? rgb(224, 232, 245) : style.skin;
+    for (const side of [1, -1]) {
+      const aSwing = -side * swing * 0.9;
+      const aDist = -side * legSwingDist * 0.72;
+      const ax = cx + rx * armSpread * side + fx * aDist;
+      const az = cz + rz * armSpread * side + fz * aDist;
+      mb.addSphere(cx + rx * 3.7 * side, y0 + 9.4, cz + rz * 3.7 * side, 1.4, 1.4, 1.4, 6, 8, style.coat, TexId.FABRIC, 0.5);
+      mb.addOrientedBox(ax, y0 + 7.5, az, 2, 4.4, 2, yaw, aSwing, style.coat, TexId.FABRIC, 0.65);
+      mb.addSphere(ax + fx * Math.sin(aSwing) * 1.4, y0 + 5.1, az + fz * Math.sin(aSwing) * 1.4, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
+    }
+    const headY = y0 + 13.3;
+    mb.addSphere(cx, headY, cz, 3.75, 3.65, 3.75, 12, 16, style.skin, TexId.SOLID, 0.8);
+    mb.addSphere(cx + rx * 3.65, headY - 0.1, cz + rz * 3.65, 0.75, 1.05, 0.75, 6, 8, style.skin, TexId.SOLID, 0.45);
+    mb.addSphere(cx - rx * 3.65, headY - 0.1, cz - rz * 3.65, 0.75, 1.05, 0.75, 6, 8, style.skin, TexId.SOLID, 0.45);
+    const noseColor = lightenColor(style.skin, -0.06);
+    mb.addSphere(cx + fx * 3.75, headY - 0.15, cz + fz * 3.75, 0.72, 0.68, 0.72, 6, 8, noseColor, TexId.SOLID, 0.35);
+    const eyeForward = 3.35;
+    const eyeSpread = 1.35;
+    for (const side of [1, -1]) {
+      const ex = cx + fx * eyeForward + rx * eyeSpread * side;
+      const ez = cz + fz * eyeForward + rz * eyeSpread * side;
+      mb.addSphere(ex, headY + 0.45, ez, 0.78, 0.9, 0.65, 6, 8, rgb(252, 254, 255), TexId.SOLID, 0.15);
+      mb.addSphere(ex + fx * 0.22, headY + 0.45, ez + fz * 0.22, 0.56, 0.72, 0.52, 6, 8, rgb(22, 26, 38), TexId.SOLID, 0.15);
+      mb.addSphere(ex + fx * 0.38 + rx * 0.18, headY + 0.68, ez + fz * 0.38 + rz * 0.18, 0.22, 0.22, 0.22, 4, 6, rgb(255, 255, 255), TexId.SOLID, 0);
+      mb.addOrientedBox(ex + fx * 0.1, headY + 1.45, ez + fz * 0.1, 0.4, 0.32, 1.1, yaw, 0, style.hair, TexId.SOLID, 0.2);
+    }
     if (style.hasBeard || isSanta) {
-      mb.addSphere(
-        cx + fx * 2.2,
-        headY - 1.5,
-        cz + fz * 2.2,
-        3.1,
-        2.6,
-        2.6,
-        5,
-        7,
-        rgb(250, 252, 255),
-        TexId.SNOW,
-        0.7
-      );
+      mb.addSphere(cx + fx * 2.35, headY - 1.65, cz + fz * 2.35, 3.25, 2.75, 2.95, 10, 12, rgb(250, 252, 255), TexId.SNOW, 0.65);
+      mb.addSphere(cx + fx * 3.1, headY - 2.9, cz + fz * 3.1, 2.1, 1.8, 2.1, 8, 10, rgb(252, 254, 255), TexId.SNOW, 0.55);
+      mb.addSphere(cx + fx * 3.45 + rx * 0.95, headY - 0.65, cz + fz * 3.45 + rz * 0.95, 1.1, 0.65, 1.1, 6, 8, rgb(255, 255, 255), TexId.SNOW, 0.35);
+      mb.addSphere(cx + fx * 3.45 - rx * 0.95, headY - 0.65, cz + fz * 3.45 - rz * 0.95, 1.1, 0.65, 1.1, 6, 8, rgb(255, 255, 255), TexId.SNOW, 0.35);
     }
     if (style.hat || isSanta) {
       const hatColor = style.hat ?? rgb(220, 36, 42);
-      mb.addCylinder(cx, headY + 2, cz, 3.9, 3.8, 1.4, 8, style.trim, TexId.SNOW, 0.65);
-      mb.addCone(cx - fx * 0.6, headY + 3.2, cz - fz * 0.6, 3.5, 5.8, 8, hatColor, TexId.FABRIC, 0.8);
+      mb.addTorus(cx, headY + 2.25, cz, 3.35, 0.85, 14, 8, "y", style.trim, TexId.SNOW, 0.55);
+      mb.addCylinder(cx - fx * 0.3, headY + 2.6, cz - fz * 0.3, 3.35, 2.3, 3.2, 12, hatColor, TexId.FABRIC, 0.7);
+      mb.addCone(cx - fx * 1.15, headY + 5.4, cz - fz * 1.15, 2.35, 4.2, 12, hatColor, TexId.FABRIC, 0.7);
       mb.addSphere(
-        cx - fx * 1.8,
-        headY + 8.6,
-        cz - fz * 1.8,
-        1.45,
-        1.45,
-        1.45,
-        5,
-        6,
+        cx - fx * 2.1,
+        headY + 9.2 + bob * 0.3,
+        cz - fz * 2.1,
+        1.55,
+        1.55,
+        1.55,
+        8,
+        10,
         rgb(252, 254, 255),
         TexId.SNOW,
-        0.65
+        0.6
       );
     } else {
-      mb.addSphere(cx, headY + 1.2, cz, 3.75, 2.8, 3.75, 5, 8, style.hair, TexId.SOLID, 0.75);
+      mb.addSphere(cx - fx * 0.2, headY + 1.15, cz - fz * 0.2, 3.95, 3.05, 3.95, 10, 14, style.hair, TexId.SOLID, 0.7);
+      mb.addSphere(cx + fx * 1.8, headY + 2.15, cz + fz * 1.8, 3.1, 1.45, 3.3, 8, 10, style.hair, TexId.SOLID, 0.5);
+      mb.addSphere(cx - fx * 2.6, headY - 0.2, cz - fz * 2.6, 2.4, 2.4, 2.4, 8, 10, style.hair, TexId.SOLID, 0.55);
     }
     if (style.holdingClub) {
-      mb.addOrientedBox(
-        cx + fx * 4.5 + rx * 2.5,
-        y0 + 4.5,
-        cz + fz * 4.5 + rz * 2.5,
-        0.8,
-        9,
-        0.8,
-        yaw,
-        0.35,
-        rgb(212, 218, 228),
-        TexId.SOLID,
-        0.5
-      );
+      const gx = cx + fx * 4.5 + rx * 2.5;
+      const gz = cz + fz * 4.5 + rz * 2.5;
+      mb.addOrientedBox(gx, y0 + 4.5, gz, 0.65, 9.2, 0.65, yaw, 0.35, rgb(216, 222, 234), TexId.SOLID, 0.45);
+      mb.addBox(gx + fx * 1.6, y0 + 0.6, gz + fz * 1.6, 1.6, 1.1, 2.8, rgb(180, 190, 206), TexId.SOLID, 0.45);
+      mb.addSphere(gx + fx * 3.4, y0 + 0.6, gz + fz * 3.4, 0.7, 0.7, 0.7, 6, 8, rgb(252, 254, 255), TexId.SOLID, 0.3);
     }
     if (style.holdingBook) {
-      mb.addOrientedBox(
-        cx + fx * 4.2,
-        y0 + 7.2,
-        cz + fz * 4.2,
-        3,
-        2.4,
-        3.8,
-        yaw,
-        0.4,
-        rgb(192, 48, 52),
-        TexId.BOOKSHELF,
-        0.5
-      );
+      mb.addOrientedBox(cx + fx * 4.2, y0 + 7.2, cz + fz * 4.2, 3.2, 2.5, 4, yaw, 0.4, rgb(192, 48, 52), TexId.BOOKSHELF, 0.5);
+      mb.addOrientedBox(cx + fx * 4, y0 + 7.45, cz + fz * 4, 2.9, 2.2, 3.6, yaw, 0.4, rgb(250, 246, 236), TexId.SOLID, 0.3);
     }
     if (style.hasPresentInLap) {
-      mb.addBox(
-        cx + fx * 4.2,
-        y0 + 5,
-        cz + fz * 4.2,
-        5.2,
-        4.6,
-        5.2,
-        rgb(220, 42, 48),
-        TexId.GIFT_WRAP,
-        0.65
-      );
+      const gx = cx + fx * 4.2;
+      const gz = cz + fz * 4.2;
+      mb.addBeveledBox(gx, y0 + 4.8, gz, 5.4, 4.8, 5.4, 0.45, rgb(220, 42, 48), TexId.GIFT_WRAP, 0.6);
+      mb.addTorus(gx, y0 + 9.8, gz, 1.2, 0.4, 8, 6, "z", rgb(255, 218, 72), TexId.SOLID, 0.35);
     }
     if (carryingLadder) {
-      mb.addOrientedBox(
-        cx - fx * 3.2,
-        y0 + 8.5,
-        cz - fz * 3.2,
-        1.4,
-        12,
-        5.2,
-        yaw,
-        0.2,
-        rgb(168, 112, 58),
-        TexId.WOOD_GRAIN,
-        0.65
-      );
+      mb.addOrientedBox(cx - fx * 3.3, y0 + 8.5, cz - fz * 3.3, 1.4, 12.5, 5.4, yaw, 0.2, rgb(168, 112, 58), TexId.WOOD_GRAIN, 0.6);
     }
   }
   function addWoodenLadder3D(mb, cx, baseY, cz, height, standingVertical) {
     const wood = rgb(176, 118, 62);
     if (standingVertical) {
-      mb.addBox(cx - 2.6, baseY, cz, 1.4, height, 1.4, wood, TexId.WOOD_GRAIN, 0.7);
-      mb.addBox(cx + 2.6, baseY, cz, 1.4, height, 1.4, wood, TexId.WOOD_GRAIN, 0.7);
+      mb.addCylinder(cx - 2.7, baseY, cz, 0.85, 0.8, height, 10, wood, TexId.WOOD_GRAIN, 0.6);
+      mb.addCylinder(cx + 2.7, baseY, cz, 0.85, 0.8, height, 10, wood, TexId.WOOD_GRAIN, 0.6);
       const rungs = 8;
       for (let i = 0; i < rungs; i++) {
         const ry = baseY + 3 + i / (rungs - 1) * (height - 5);
-        mb.addBox(cx, ry, cz, 5.8, 1.1, 1.2, wood, TexId.WOOD_GRAIN, 0.55);
+        mb.addBeveledBox(cx, ry, cz, 6, 1, 1.1, 0.25, wood, TexId.WOOD_GRAIN, 0.5);
       }
     } else {
-      mb.addBox(cx, baseY + 0.6, cz - 2.5, 24, 1.5, 1.4, wood, TexId.WOOD_GRAIN, 0.65);
-      mb.addBox(cx, baseY + 0.6, cz + 2.5, 24, 1.5, 1.4, wood, TexId.WOOD_GRAIN, 0.65);
+      mb.addBeveledBox(cx, baseY + 0.6, cz - 2.6, 24, 1.5, 1.4, 0.3, wood, TexId.WOOD_GRAIN, 0.6);
+      mb.addBeveledBox(cx, baseY + 0.6, cz + 2.6, 24, 1.5, 1.4, 0.3, wood, TexId.WOOD_GRAIN, 0.6);
       for (let i = -9; i <= 9; i += 3.6) {
-        mb.addBox(cx + i, baseY + 0.8, cz, 1.2, 1.3, 5.6, wood, TexId.WOOD_GRAIN, 0.55);
+        mb.addBeveledBox(cx + i, baseY + 0.8, cz, 1.2, 1.3, 5.8, 0.25, wood, TexId.WOOD_GRAIN, 0.5);
       }
     }
   }
@@ -3817,6 +4022,7 @@
     const cx = dog.x + dog.width * 0.5;
     const cz = dog.y + dog.height * 0.5;
     const baseY = getTerrainHeight(cx, cz, "level-outside");
+    translucentMb.addShadowDisc(cx, baseY, cz, 5.8, 4.4, 0.35);
     const yaw = directionToYaw(dog.facing);
     const cyaw = Math.cos(yaw);
     const syaw = Math.sin(yaw);
@@ -3826,7 +4032,8 @@
     const rz = cyaw;
     const isRunning = dog.mode === "chasing" || Math.hypot(dog.vx, dog.vy) > 2;
     const legBounce = isRunning ? Math.sin(elapsedTime * 16) * 1.2 : 0;
-    const bodyColor = rgb(198, 134, 68);
+    const bodyColor = rgb(206, 142, 74);
+    const chestColor = rgb(238, 196, 138);
     const earColor = rgb(128, 76, 34);
     for (const [fSign, rSign] of [
       [1, 1],
@@ -3834,85 +4041,102 @@
       [-1, 1],
       [-1, -1]
     ]) {
-      mb.addBox(
-        cx + fx * fSign * 3 + rx * rSign * 1.8,
-        baseY + Math.max(0, fSign * legBounce * 0.4),
-        cz + fz * fSign * 3 + rz * rSign * 1.8,
-        1.6,
-        3.2,
-        1.6,
-        bodyColor,
-        TexId.SOLID,
-        0.6
-      );
+      const lx = cx + fx * fSign * 3.1 + rx * rSign * 1.85;
+      const lz = cz + fz * fSign * 3.1 + rz * rSign * 1.85;
+      const ly = baseY + Math.max(0, fSign * legBounce * 0.45);
+      mb.addCylinder(lx, ly + 0.5, lz, 0.85, 0.95, 3, 8, bodyColor, TexId.SOLID, 0.55);
+      mb.addSphere(lx + fx * 0.3, ly + 0.55, lz + fz * 0.3, 1, 0.65, 1.1, 6, 8, chestColor, TexId.SOLID, 0.45);
     }
-    mb.addOrientedBox(cx, baseY + 4, cz, 8.2, 3.8, 4.4, yaw, 0, bodyColor, TexId.FABRIC, 0.75);
-    mb.addOrientedBox(cx + fx * 3.2, baseY + 4.8, cz + fz * 3.2, 1.4, 4.2, 4.6, yaw, 0, rgb(220, 38, 42), TexId.SOLID, 0.5);
-    mb.addSphere(cx + fx * 4.6, baseY + 6.8, cz + fz * 4.6, 2.8, 2.6, 2.8, 5, 7, bodyColor, TexId.SOLID, 0.75);
-    mb.addSphere(cx + fx * 6.8, baseY + 6.2, cz + fz * 6.8, 1.5, 1.2, 1.5, 4, 5, earColor, TexId.SOLID, 0.55);
-    mb.addSphere(cx + fx * 4.2 + rx * 2.6, baseY + 6.2, cz + fz * 4.2 + rz * 2.6, 1, 2.2, 1.2, 4, 5, earColor, TexId.SOLID, 0.55);
-    mb.addSphere(cx + fx * 4.2 - rx * 2.6, baseY + 6.2, cz + fz * 4.2 - rz * 2.6, 1, 2.2, 1.2, 4, 5, earColor, TexId.SOLID, 0.55);
-    const wag = Math.sin(elapsedTime * 18) * 1.4;
+    mb.addSphere(cx - fx * 1.4, baseY + 4.3, cz - fz * 1.4, 3.4, 2.3, 2.4, 8, 12, bodyColor, TexId.FABRIC, 0.65);
+    mb.addSphere(cx + fx * 1.8, baseY + 4.6, cz + fz * 1.8, 3, 2.5, 2.5, 8, 12, bodyColor, TexId.FABRIC, 0.65);
+    mb.addSphere(cx + fx * 3.2, baseY + 4.4, cz + fz * 3.2, 2.1, 2, 2.1, 6, 10, chestColor, TexId.FABRIC, 0.5);
+    mb.addTorus(cx + fx * 3.5, baseY + 5.6, cz + fz * 3.5, 2.1, 0.52, 12, 6, "y", rgb(224, 36, 42), TexId.SOLID, 0.45);
+    mb.addSphere(cx + fx * 5.4, baseY + 4.8, cz + fz * 5.4, 0.55, 0.55, 0.55, 6, 6, rgb(252, 214, 68), TexId.SOLID, 0.25);
+    const hx = cx + fx * 4.8;
+    const hz = cz + fz * 4.8;
+    const hy = baseY + 7.1;
+    mb.addSphere(hx, hy, hz, 2.85, 2.65, 2.85, 10, 14, bodyColor, TexId.SOLID, 0.7);
+    mb.addSphere(hx + fx * 2.2, hy - 0.5, hz + fz * 2.2, 1.65, 1.35, 1.55, 8, 10, chestColor, TexId.SOLID, 0.6);
+    mb.addSphere(hx + fx * 3.65, hy - 0.15, hz + fz * 3.65, 0.65, 0.55, 0.65, 6, 8, rgb(24, 24, 30), TexId.SOLID, 0.25);
+    mb.addSphere(hx + fx * 2.9, hy - 1.45, hz + fz * 2.9, 0.55, 0.75, 0.45, 6, 6, rgb(245, 112, 138), TexId.SOLID, 0.2);
+    for (const side of [1, -1]) {
+      mb.addSphere(hx + fx * 2.2 + rx * 1.25 * side, hy + 0.55, hz + fz * 2.2 + rz * 1.25 * side, 0.5, 0.58, 0.5, 6, 6, rgb(22, 24, 32), TexId.SOLID, 0.15);
+    }
+    mb.addSphere(hx - fx * 0.2 + rx * 2.75, hy - 0.3, hz - fz * 0.2 + rz * 2.75, 0.95, 2.35, 1.35, 8, 10, earColor, TexId.SOLID, 0.55);
+    mb.addSphere(hx - fx * 0.2 - rx * 2.75, hy - 0.3, hz - fz * 0.2 - rz * 2.75, 0.95, 2.35, 1.35, 8, 10, earColor, TexId.SOLID, 0.55);
+    const wag = Math.sin(elapsedTime * 18) * 1.5;
     mb.addOrientedBox(
       cx - fx * 4.6 + rx * wag,
-      baseY + 5.8,
+      baseY + 5.9,
       cz - fz * 4.6 + rz * wag,
-      3.2,
-      1.2,
-      1.2,
+      3.4,
+      1.1,
+      1.1,
       yaw,
-      0.55,
+      0.58,
       earColor,
       TexId.SOLID,
-      0.55
+      0.5
     );
     if (dog.mode === "chasing" || dog.hearts.length > 0) {
-      const hy = baseY + 12.5 + Math.sin(elapsedTime * 6) * 1.2;
-      translucentMb.addSphere(cx - 1.1, hy, cz, 1.5, 1.5, 1.2, 4, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
-      translucentMb.addSphere(cx + 1.1, hy, cz, 1.5, 1.5, 1.2, 4, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
-      translucentMb.addCone(cx, hy - 2.4, cz, 2.2, 2.6, 6, rgb(245, 48, 78, 0.92), TexId.SOLID, 0.45);
+      const heartY = baseY + 13 + Math.sin(elapsedTime * 6) * 1.2;
+      translucentMb.addSphere(cx - 1.15, heartY, cz, 1.55, 1.55, 1.25, 8, 10, rgb(248, 48, 82, 0.94), TexId.SOLID, 0.45);
+      translucentMb.addSphere(cx + 1.15, heartY, cz, 1.55, 1.55, 1.25, 8, 10, rgb(248, 48, 82, 0.94), TexId.SOLID, 0.45);
+      translucentMb.addCone(cx, heartY - 2.4, cz, 2.25, 2.6, 10, rgb(248, 48, 82, 0.94), TexId.SOLID, 0.45);
     }
   }
-  function addCat3D(mb, cat) {
+  function addCat3D(mb, translucentMb, cat, elapsedTime = 0) {
     const cx = cat.x + cat.width * 0.5;
     const cz = cat.y + cat.height * 0.5;
-    const catBlack = rgb(28, 30, 38);
-    mb.addCylinder(cx, 0, cz, 3, 2.4, 5.2, 7, catBlack, TexId.SOLID, 0.75);
-    mb.addSphere(cx, 6.5, cz + 1, 2.5, 2.3, 2.5, 5, 7, catBlack, TexId.SOLID, 0.75);
-    mb.addCone(cx - 1.5, 8.2, cz + 1, 0.9, 2.2, 4, catBlack, TexId.SOLID, 0.55);
-    mb.addCone(cx + 1.5, 8.2, cz + 1, 0.9, 2.2, 4, catBlack, TexId.SOLID, 0.55);
-    mb.addSphere(cx - 0.9, 6.8, cz + 3.2, 0.45, 0.45, 0.45, 4, 4, rgb(84, 245, 112), TexId.SOLID, 0.2);
-    mb.addSphere(cx + 0.9, 6.8, cz + 3.2, 0.45, 0.45, 0.45, 4, 4, rgb(84, 245, 112), TexId.SOLID, 0.2);
+    translucentMb.addShadowDisc(cx, 0, cz, 4.4, 4.4, 0.32);
+    const catBlack = rgb(28, 30, 40);
+    mb.addCylinder(cx, 0, cz, 3, 2.2, 5.2, 12, catBlack, TexId.SOLID, 0.65);
+    mb.addSphere(cx - 1.1, 0.55, cz + 2.4, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+    mb.addSphere(cx + 1.1, 0.55, cz + 2.4, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+    mb.addSphere(cx, 6.6, cz + 1, 2.6, 2.4, 2.6, 10, 12, catBlack, TexId.SOLID, 0.65);
+    mb.addCone(cx - 1.55, 8.2, cz + 1, 0.95, 2.3, 8, catBlack, TexId.SOLID, 0.5);
+    mb.addCone(cx + 1.55, 8.2, cz + 1, 0.95, 2.3, 8, catBlack, TexId.SOLID, 0.5);
+    mb.addSphere(cx - 0.95, 6.85, cz + 3.25, 0.52, 0.58, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+    mb.addSphere(cx + 0.95, 6.85, cz + 3.25, 0.52, 0.58, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+    const swish = Math.sin(elapsedTime * 5) * 0.9;
+    mb.addSphere(cx + swish, 2.2, cz - 3.2, 0.7, 2.2, 0.7, 6, 8, catBlack, TexId.SOLID, 0.45);
   }
-  function addMotorcycle3D(mb, motorcycle, elapsedTime) {
+  function addMotorcycle3D(mb, translucentMb, motorcycle, elapsedTime) {
     const cx = motorcycle.x + motorcycle.width * 0.5;
     const cz = motorcycle.y + motorcycle.height * 0.5;
     const baseY = getTerrainHeight(cx, cz, "level-outside");
+    translucentMb.addShadowDisc(cx, baseY, cz, 11, 5.5, 0.36);
     if (motorcycle.status === "crashed") {
-      mb.addOrientedBox(cx, baseY + 2.5, cz, 18, 3.8, 7, 0.4, 1.1, rgb(42, 46, 56), TexId.SOLID, 0.75);
-      for (let i = 0; i < 3; i++) {
-        const p = (elapsedTime * 0.9 + i * 0.33) % 1;
-        mb.addSphere(
+      mb.addOrientedBox(cx, baseY + 2.5, cz, 18, 3.8, 7, 0.4, 1.1, rgb(42, 46, 56), TexId.SOLID, 0.7);
+      for (let i = 0; i < 4; i++) {
+        const p = (elapsedTime * 0.9 + i * 0.25) % 1;
+        translucentMb.addSphere(
           cx + Math.sin(elapsedTime * 3 + i) * 2.5,
-          baseY + 5 + p * 14,
+          baseY + 5 + p * 15,
           cz,
-          2 + p * 2.5,
-          1.8 + p * 2,
-          2 + p * 2.5,
-          4,
-          6,
-          rgb(168, 174, 184),
+          2 + p * 2.6,
+          1.8 + p * 2.2,
+          2 + p * 2.6,
+          8,
+          10,
+          rgb(176, 184, 196, (1 - p) * 0.65),
           TexId.SOLID,
-          0.4
+          0
         );
       }
       return;
     }
-    mb.addCylinder(cx - 6.5, baseY, cz, 3.5, 3.5, 2.4, 8, rgb(28, 30, 36), TexId.SOLID, 0.65);
-    mb.addCylinder(cx + 6.5, baseY, cz, 3.5, 3.5, 2.4, 8, rgb(28, 30, 36), TexId.SOLID, 0.65);
-    mb.addBox(cx, baseY + 3, cz, 14, 4, 4, rgb(46, 52, 64), TexId.SOLID, 0.75);
-    mb.addBox(cx + 5, baseY + 6.5, cz, 1.5, 3.5, 7.5, rgb(192, 198, 210), TexId.SOLID, 0.55);
-    mb.addSphere(cx + 6.8, baseY + 6.8, cz, 1.5, 1.5, 1.5, 4, 5, rgb(255, 242, 156), TexId.SOLID, 0.35);
+    for (const wx of [-6.8, 6.8]) {
+      mb.addTorus(cx + wx, baseY + 3.4, cz, 2.5, 1, 14, 8, "z", rgb(24, 26, 32), TexId.SOLID, 0.55);
+      mb.addCylinder(cx + wx, baseY + 2.2, cz, 1.7, 1.7, 2.2, 10, rgb(210, 218, 232), TexId.SOLID, 0.35);
+    }
+    mb.addBeveledBox(cx, baseY + 2.8, cz, 9.5, 3.8, 3.8, 0.6, rgb(56, 62, 74), TexId.SOLID, 0.6);
+    mb.addOrientedBox(cx - 3.5, baseY + 2.6, cz + 2.2, 9, 1, 1, 0, 0.12, rgb(216, 224, 236), TexId.SOLID, 0.4);
+    mb.addSphere(cx + 2.2, baseY + 6.4, cz, 3.8, 2, 2.2, 8, 12, rgb(32, 36, 46), TexId.SOLID, 0.6);
+    mb.addSphere(cx - 3.2, baseY + 5.8, cz, 4.2, 1.4, 2.1, 8, 10, rgb(64, 42, 30), TexId.FABRIC, 0.55);
+    mb.addOrientedBox(cx + 5.2, baseY + 5.8, cz, 1.2, 6.8, 2.8, 0, -0.35, rgb(206, 214, 228), TexId.SOLID, 0.45);
+    mb.addBox(cx + 4.4, baseY + 8.6, cz, 1.2, 1.2, 8.2, rgb(42, 46, 56), TexId.SOLID, 0.45);
+    mb.addSphere(cx + 6.8, baseY + 7.2, cz, 1.4, 1.5, 1.5, 8, 10, rgb(255, 244, 164), TexId.SOLID, 0.35);
   }
   function addConeOfSight3D(translucentMb, cone) {
     if (!cone || cone.sightPolygon.length < 3) return;
@@ -3948,27 +4172,28 @@
   }
   function addDoorAndFog3D(opaqueMb, door) {
     const b = door.bounds;
-    opaqueMb.addBox(
+    opaqueMb.addBeveledBox(
       b.x + b.width * 0.5,
       0,
       b.y + b.height * 0.5,
       b.width,
       15.5,
       b.height,
+      0.5,
       rgb(132, 78, 40),
       TexId.WOOD_GRAIN,
-      0.8
+      0.75
     );
     opaqueMb.addSphere(
       b.x + b.width * 0.75,
       7.5,
       b.y + b.height * 0.5 + 2.5,
-      1,
-      1,
-      1,
-      4,
-      5,
-      rgb(248, 212, 72),
+      1.05,
+      1.05,
+      1.05,
+      6,
+      8,
+      rgb(250, 214, 72),
       TexId.SOLID,
       0.35
     );
@@ -3988,10 +4213,10 @@
   }
   function addExclamationBadge3D(opaqueMb, cx, baseY, cz) {
     const ay = baseY + 19;
-    opaqueMb.addBox(cx - 1.5, ay + 2.5, cz, 1.5, 5.2, 1.5, rgb(255, 42, 42), TexId.SOLID, 0.55);
-    opaqueMb.addSphere(cx - 1.5, ay + 0.8, cz, 0.9, 0.9, 0.9, 4, 5, rgb(255, 42, 42), TexId.SOLID, 0.45);
-    opaqueMb.addBox(cx + 1.5, ay + 2.5, cz, 1.5, 5.2, 1.5, rgb(255, 42, 42), TexId.SOLID, 0.55);
-    opaqueMb.addSphere(cx + 1.5, ay + 0.8, cz, 0.9, 0.9, 0.9, 4, 5, rgb(255, 42, 42), TexId.SOLID, 0.45);
+    opaqueMb.addBeveledBox(cx - 1.5, ay + 2.5, cz, 1.6, 5.2, 1.6, 0.3, rgb(255, 42, 42), TexId.SOLID, 0.55);
+    opaqueMb.addSphere(cx - 1.5, ay + 0.8, cz, 0.95, 0.95, 0.95, 6, 8, rgb(255, 42, 42), TexId.SOLID, 0.45);
+    opaqueMb.addBeveledBox(cx + 1.5, ay + 2.5, cz, 1.6, 5.2, 1.6, 0.3, rgb(255, 42, 42), TexId.SOLID, 0.55);
+    opaqueMb.addSphere(cx + 1.5, ay + 0.8, cz, 0.95, 0.95, 0.95, 6, 8, rgb(255, 42, 42), TexId.SOLID, 0.45);
   }
   function buildDynamicSceneMeshes(state) {
     const opaque = new MeshBuilder();
@@ -4033,7 +4258,8 @@
         state.player.isMoving,
         santaStyle,
         true,
-        state.hasLadder && !state.ladderPlaced
+        state.hasLadder && !state.ladderPlaced,
+        translucent
       );
     }
     if (levelId === "level-outside") {
@@ -4041,7 +4267,7 @@
       for (const fp of state.footprints) {
         const alpha = Math.max(0, 1 - fp.age / fp.maxAge) * 0.65;
         const fy = getTerrainHeight(fp.x, fp.y, "level-outside") + 0.15;
-        translucent.addBox(fp.x, fy, fp.y, 2.2, 0.3, 2.8, rgb(138, 162, 198, alpha), TexId.SOLID, 0);
+        translucent.addSphere(fp.x, fy, fp.y, 1.2, 0.2, 1.6, 6, 8, rgb(138, 162, 198, alpha), TexId.SOLID, 0);
       }
       if (!state.hasLadder && !state.ladderPlaced) {
         const lx = GROUND_LADDER_BOUNDS.x + GROUND_LADDER_BOUNDS.width * 0.5;
@@ -4056,7 +4282,7 @@
         const roofY = houseGroundY2 + MAIN_HOUSE_ROOF_WALK_HEIGHT;
         addWoodenLadder3D(opaque, lx, ly, lz - 4, roofY - ly + 2, true);
       }
-      addMotorcycle3D(opaque, state.motorcycle, t);
+      addMotorcycle3D(opaque, translucent, state.motorcycle, t);
       addDog3D(opaque, translucent, state.dog, t);
       if (outside.alexNpc) {
         const ax = outside.alexNpc.x + outside.alexNpc.width * 0.5;
@@ -4077,7 +4303,10 @@
             skin: rgb(248, 206, 174),
             hair: rgb(168, 176, 160),
             holdingClub: true
-          }
+          },
+          false,
+          false,
+          translucent
         );
       }
       state.throwers.forEach((th, idx) => {
@@ -4101,41 +4330,42 @@
           hair: rgb(176, 104, 48),
           hat: rgb(128, 64, 112)
         };
-        addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style);
+        addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style, false, false, translucent);
       });
       for (const sb of state.snowballs) {
         const sx = sb.x + sb.width * 0.5;
         const sz = sb.y + sb.height * 0.5;
-        const sy = getTerrainHeight(sx, sz, "level-outside") + 7.5;
-        opaque.addSphere(sx, sy, sz, 3.2, 3.2, 3.2, 5, 7, rgb(248, 252, 255), TexId.SNOW, 0.65);
+        const groundY = getTerrainHeight(sx, sz, "level-outside");
+        translucent.addShadowDisc(sx, groundY, sz, 2.8, 2.8, 0.28);
+        opaque.addSphere(sx, groundY + 7.5, sz, 3.3, 3.3, 3.3, 10, 12, rgb(248, 252, 255), TexId.SNOW, 0.6);
       }
       const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
-      const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 14;
+      const chimTopY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT + 16;
       const chimX = ROOF_CHIMNEY_BOUNDS.x + ROOF_CHIMNEY_BOUNDS.width * 0.5;
       const chimZ = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height * 0.5;
-      for (let i = 0; i < 4; i++) {
-        const phase = (t * 0.45 + i * 0.25) % 1;
-        const sx = chimX + Math.sin(t * 1.8 + i * 2) * 3.5 * phase;
+      for (let i = 0; i < 5; i++) {
+        const phase = (t * 0.42 + i * 0.2) % 1;
+        const sx = chimX + Math.sin(t * 1.8 + i * 2) * 3.8 * phase;
         const sz = chimZ - phase * 6;
-        const sy = chimTopY + phase * 22;
-        const r = 2.2 + phase * 3.2;
-        translucent.addSphere(sx, sy, sz, r, r * 0.85, r, 4, 6, rgb(228, 236, 248, (1 - phase) * 0.55), TexId.SOLID, 0);
+        const sy = chimTopY + phase * 24;
+        const r = 2.2 + phase * 3.6;
+        translucent.addSphere(sx, sy, sz, r, r * 0.85, r, 8, 10, rgb(228, 236, 248, (1 - phase) * 0.52), TexId.SOLID, 0);
       }
       const sparkX = DAMAGED_WIRE_HAZARD.x + DAMAGED_WIRE_HAZARD.width * 0.5;
       const sparkZ = DAMAGED_WIRE_HAZARD.y + DAMAGED_WIRE_HAZARD.height * 0.5;
       const sparkBaseY = getTerrainHeight(sparkX, sparkZ, "level-outside") + 1.5;
-      for (let i = 0; i < 3; i++) {
-        const ang = t * 14 + i * 2.1;
+      for (let i = 0; i < 4; i++) {
+        const ang = t * 15 + i * 1.6;
         translucent.addOrientedBox(
           sparkX + Math.cos(ang) * 2.2,
           sparkBaseY + 1.2 + Math.abs(Math.sin(ang * 1.7)) * 2.8,
           sparkZ + Math.sin(ang) * 2.2,
-          4,
-          0.6,
-          0.6,
+          4.2,
+          0.55,
+          0.55,
           ang,
           0.6,
-          rgb(120, 235, 255, 0.95),
+          rgb(120, 238, 255, 0.95),
           TexId.SOLID,
           0.3
         );
@@ -4157,31 +4387,31 @@
         r: 1,
         g: 0.82,
         b: 0.42,
-        radius: 85,
-        intensity: 0.8
+        radius: 90,
+        intensity: 0.82
       });
-      for (let i = 0; i < 28; i++) {
+      for (let i = 0; i < 32; i++) {
         const seedX = i * 73 % 140 - 70;
         const seedZ = i * 47 % 140 - 70;
         const fall = (t * 14 + i * 9.3) % 42;
         const fx = px + seedX + Math.sin(t * 1.5 + i) * 4;
         const fz = pz + seedZ + Math.cos(t * 1.3 + i) * 4;
         const fy = py + 38 - fall;
-        translucent.addSphere(fx, fy, fz, 0.65, 0.65, 0.65, 3, 4, rgb(252, 254, 255, 0.85), TexId.SOLID, 0);
+        translucent.addSphere(fx, fy, fz, 0.6, 0.6, 0.6, 6, 6, rgb(252, 254, 255, 0.85), TexId.SOLID, 0);
       }
     } else if (levelId === "level-basement") {
       const basement = state.levels["level-basement"];
-      for (let i = 0; i < 4; i++) {
-        const flicker = Math.sin(t * 14 + i * 1.8) * 1.4;
-        const flameH = 5 + flicker;
+      for (let i = 0; i < 5; i++) {
+        const flicker = Math.sin(t * 14 + i * 1.6) * 1.5;
+        const flameH = 5.2 + flicker;
         translucent.addCone(
-          11 * TILE_SIZE - 1,
-          1.5,
-          11.5 * TILE_SIZE + i * 3.2,
+          11 * TILE_SIZE - 0.8,
+          1.8,
+          11.4 * TILE_SIZE + i * 2.8,
           1.8,
           flameH,
-          6,
-          i % 2 === 0 ? rgb(255, 146, 36, 0.92) : rgb(255, 224, 68, 0.92),
+          10,
+          i % 2 === 0 ? rgb(255, 146, 36, 0.92) : rgb(255, 226, 72, 0.92),
           TexId.SOLID,
           0
         );
@@ -4193,7 +4423,7 @@
         r: 1,
         g: 0.62,
         b: 0.22,
-        radius: 120,
+        radius: 125,
         intensity: 1.05 + Math.sin(t * 13) * 0.18
       });
       addHumanoid3D(
@@ -4210,7 +4440,10 @@
           pants: rgb(44, 52, 68),
           skin: rgb(248, 206, 174),
           hair: hexToColor4("#4e433c")
-        }
+        },
+        false,
+        false,
+        translucent
       );
       addHumanoid3D(
         opaque,
@@ -4226,7 +4459,10 @@
           pants: rgb(44, 52, 68),
           skin: rgb(248, 206, 174),
           hair: hexToColor4("#342618")
-        }
+        },
+        false,
+        false,
+        translucent
       );
       const isBathroomClosed = basement.doors.some((d) => d.id === "basement-bathroom-door");
       if (!isBathroomClosed) {
@@ -4247,7 +4483,10 @@
             skin: rgb(250, 208, 176),
             hair: hexToColor4("#8a4822"),
             sitting: true
-          }
+          },
+          false,
+          false,
+          translucent
         );
         if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) {
           addExclamationBadge3D(opaque, tx, 2, tz);
@@ -4267,10 +4506,10 @@
         r: 1,
         g: 0.86,
         b: 0.42,
-        radius: 130,
+        radius: 135,
         intensity: 1 + Math.sin(t * 4) * 0.1
       });
-      addCat3D(opaque, upstairs.cat);
+      addCat3D(opaque, translucent, upstairs.cat, t);
       if (upstairs.rosannaCutscene?.active) {
         const cs = upstairs.rosannaCutscene;
         addHumanoid3D(
@@ -4279,7 +4518,6 @@
           0,
           cs.santaY + 8,
           0,
-          // running East
           cs.walkTimer,
           true,
           {
@@ -4291,7 +4529,9 @@
             hat: rgb(220, 36, 42),
             hasBeard: true
           },
-          true
+          true,
+          false,
+          translucent
         );
         if (Math.floor(cs.elapsed * 10) % 2 === 0) {
           addExclamationBadge3D(opaque, px, py, pz);
@@ -4310,15 +4550,19 @@
         const pr = UPSTAIRS_DIANA_PRESENT_BOUNDS;
         const gx = pr.x + pr.width * 0.5;
         const gz = pr.y + pr.height * 0.5;
-        opaque.addBox(gx, 0, gz, 8, 7, 8, rgb(214, 40, 40), TexId.GIFT_WRAP, 0.75);
-        opaque.addSphere(gx, 7.5, gz, 2.2, 1.4, 2.2, 4, 6, rgb(255, 209, 102), TexId.SOLID, 0.5);
+        translucent.addShadowDisc(gx, 0, gz, 5.5, 5.5, 0.3);
+        opaque.addBeveledBox(gx, 0, gz, 8, 7, 8, 0.5, rgb(214, 40, 40), TexId.GIFT_WRAP, 0.7);
+        opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, "x", rgb(255, 209, 102), TexId.SOLID, 0.4);
+        opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, "z", rgb(255, 209, 102), TexId.SOLID, 0.4);
       }
       if (isOfficeDoorOpen && !state.player.states.get(SIMON_PRESENT_TAKEN_KEY)) {
         const pr = UPSTAIRS_SIMON_PRESENT_BOUNDS;
         const gx = pr.x + pr.width * 0.5;
         const gz = pr.y + pr.height * 0.5;
-        opaque.addBox(gx, 0, gz, 8, 7, 8, rgb(42, 117, 211), TexId.GIFT_WRAP, 0.75);
-        opaque.addSphere(gx, 7.5, gz, 2.2, 1.4, 2.2, 4, 6, rgb(255, 238, 84), TexId.SOLID, 0.5);
+        translucent.addShadowDisc(gx, 0, gz, 5.5, 5.5, 0.3);
+        opaque.addBeveledBox(gx, 0, gz, 8, 7, 8, 0.5, rgb(42, 117, 211), TexId.GIFT_WRAP, 0.7);
+        opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, "x", rgb(255, 238, 84), TexId.SOLID, 0.4);
+        opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, "z", rgb(255, 238, 84), TexId.SOLID, 0.4);
       }
       addHumanoid3D(
         opaque,
@@ -4334,7 +4578,10 @@
           pants: rgb(42, 48, 62),
           skin: rgb(248, 206, 174),
           hair: hexToColor4("#7a421c")
-        }
+        },
+        false,
+        false,
+        translucent
       );
       const isDianaDistracted = Boolean(state.player.states.get(DIANA_DISTRACTED_KEY));
       addHumanoid3D(
@@ -4353,7 +4600,10 @@
           hair: hexToColor4("#2a1a14"),
           sitting: isDianaDistracted,
           hasPresentInLap: isDianaDistracted
-        }
+        },
+        false,
+        false,
+        translucent
       );
       const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY));
       addHumanoid3D(
@@ -4372,7 +4622,10 @@
           hair: hexToColor4("#583822"),
           sitting: isSimonDistracted,
           hasPresentInLap: isSimonDistracted
-        }
+        },
+        false,
+        false,
+        translucent
       );
       if (isTableRoomDoorOpen) {
         addHumanoid3D(
@@ -4389,7 +4642,10 @@
             pants: rgb(42, 48, 62),
             skin: rgb(248, 206, 174),
             hair: hexToColor4("#6e4624")
-          }
+          },
+          false,
+          false,
+          translucent
         );
         addHumanoid3D(
           opaque,
@@ -4405,7 +4661,10 @@
             pants: rgb(44, 50, 64),
             skin: rgb(250, 208, 176),
             hair: hexToColor4("#743c20")
-          }
+          },
+          false,
+          false,
+          translucent
         );
       }
       if (isBedroomDoorOpen) {
@@ -4424,7 +4683,10 @@
             skin: rgb(250, 212, 182),
             hair: hexToColor4("#c88642"),
             holdingBook: true
-          }
+          },
+          false,
+          false,
+          translucent
         );
       }
       addConeOfSight3D(translucent, upstairs.albinCone);
@@ -4461,7 +4723,10 @@
             hair: hexToColor4(npc.hairColor),
             holdingClub: npc.name === "Alex",
             holdingBook: npc.name === "Anne-Marie"
-          }
+          },
+          false,
+          false,
+          translucent
         );
       }
     }
@@ -5704,6 +5969,7 @@
   // src/rendering/webgpuRenderer.ts
   var VERTEX_STRIDE_BYTES = FLOATS_PER_VERTEX * 4;
   var UNIFORM_BUFFER_SIZE = 256;
+  var MSAA_SAMPLE_COUNT = 4;
   var WGSL_SHADER_SOURCE = (
     /* wgsl */
     `
@@ -5772,7 +6038,7 @@ fn vs_outline(in: VertexInput) -> VertexOutput {
   var clip = scene.viewProj * vec4<f32>(extrudedPos, 1.0);
   // Push outline slightly back in depth so interior faces are occluded by the opaque pass
   // while outer silhouette edges remain crisp and unbroken.
-  clip.z = min(clip.w * 0.9999, clip.z + 0.0022 * clip.w);
+  clip.z = min(clip.w * 0.9999, clip.z + 0.0020 * clip.w);
 
   out.clipPos = clip;
   out.worldPos = extrudedPos;
@@ -5787,7 +6053,7 @@ fn sampleAtlas(texIdFloat: f32, rawUv: vec2<f32>) -> vec4<f32> {
   let tid = i32(round(texIdFloat));
   let col = f32(tid % ${ATLAS_COLS});
   let row = f32(tid / ${ATLAS_COLS});
-  let wrappedUv = clamp(fract(rawUv * 0.9999), vec2<f32>(0.05), vec2<f32>(0.95));
+  let wrappedUv = clamp(fract(rawUv * 0.9999), vec2<f32>(0.03), vec2<f32>(0.97));
   let atlasUv = vec2<f32>(
     (col + wrappedUv.x) / f32(${ATLAS_COLS}.0),
     (row + wrappedUv.y) / f32(${ATLAS_ROWS}.0)
@@ -5812,15 +6078,12 @@ fn computePointLightToon(
     return vec3<f32>(0.0);
   }
   let L = toLight / max(0.001, dist);
-  let ndl = max(0.25, dot(N, L));
+  let ndl = max(0.28, dot(N, L));
   let normDist = 1.0 - (dist / radius);
-  // Stepped Wind Waker lantern/hearth toon rings
-  var ring = 0.0;
-  if (normDist > 0.62) {
-    ring = 1.0;
-  } else if (normDist > 0.25) {
-    ring = 0.48;
-  }
+  // Smooth-edged Wind Waker HD lantern/hearth toon rings
+  let outerRing = smoothstep(0.20, 0.28, normDist) * 0.48;
+  let innerRing = smoothstep(0.58, 0.66, normDist) * 0.56;
+  let ring = outerRing + innerRing;
   return lightColorInt.rgb * (ring * intensity * ndl);
 }
 
@@ -5839,28 +6102,33 @@ fn fs_cel(in: VertexOutput) -> @location(0) vec4<f32> {
   let ambientBoost = scene.sunDirAndAmbient.w;
   let ndl = dot(N, sunDir);
 
-  // Wind Waker 3-band cel shading quantization
-  var toonBand = vec3<f32>(0.55, 0.60, 0.72); // cool winter shadow band
-  if (ndl > 0.36) {
-    toonBand = vec3<f32>(1.08, 1.05, 1.00); // warm sunlit band
-  } else if (ndl > -0.14) {
-    toonBand = vec3<f32>(0.82, 0.84, 0.90); // mid-tone band
-  }
+  // Hemispheric sky-to-ground bounce fill (Wind Waker HD soft ambient)
+  let hemiFactor = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+  let shadowTone = mix(vec3<f32>(0.50, 0.55, 0.68), vec3<f32>(0.62, 0.68, 0.80), hemiFactor);
+  let midTone = vec3<f32>(0.84, 0.87, 0.94);
+  let litTone = vec3<f32>(1.10, 1.07, 1.01);
+
+  // Anti-aliased 3-band Wind Waker HD cel shading
+  let band1 = smoothstep(-0.16, -0.09, ndl);
+  let band2 = smoothstep(0.32, 0.39, ndl);
+  var toonBand = mix(shadowTone, midTone, band1);
+  toonBand = mix(toonBand, litTone, band2);
   toonBand = toonBand + vec3<f32>(ambientBoost);
 
   // Stepped point lights (fireplace hearth, Christmas tree star, EV sparks, windows)
   let pl0 = computePointLightToon(in.worldPos, N, scene.light0PosRad, scene.light0ColorInt);
   let pl1 = computePointLightToon(in.worldPos, N, scene.light1PosRad, scene.light1ColorInt);
 
-  // Subtle stepped Wind Waker rim light on grazing silhouettes
+  // View vector for Wind Waker HD specular & Fresnel rim highlights
   let V = normalize(scene.cameraPosAndTime.xyz - in.worldPos);
-  let rimDot = 1.0 - max(0.0, dot(N, V));
-  var rim = 0.0;
-  if (rimDot > 0.74 && ndl > -0.1) {
-    rim = 0.14;
-  }
+  let H = normalize(sunDir + V);
+  let ndh = max(0.0, dot(N, H));
+  let spec = smoothstep(0.89, 0.93, ndh) * step(0.15, ndl) * 0.16;
 
-  var litColor = baseAlbedo * (toonBand + pl0 + pl1) + vec3<f32>(rim);
+  let rimDot = 1.0 - max(0.0, dot(N, V));
+  let rim = smoothstep(0.68, 0.78, rimDot) * smoothstep(-0.20, 0.15, ndl) * 0.18;
+
+  var litColor = baseAlbedo * (toonBand + pl0 + pl1) + vec3<f32>(spec + rim);
 
   // Atmospheric distance fog
   let camDist = length(in.worldPos - scene.cameraPosAndTime.xyz);
@@ -5880,7 +6148,7 @@ fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, 1.0);
   }
   // Deep Wind Waker cartoon ink contour tinted slightly by object color
-  let ink = mix(vec3<f32>(0.06, 0.07, 0.12), in.color.rgb * 0.22, 0.35);
+  let ink = mix(vec3<f32>(0.05, 0.06, 0.11), in.color.rgb * 0.22, 0.35);
   let camDist = length(in.worldPos - scene.cameraPosAndTime.xyz);
   let fogStart = scene.fogColorAndStart.w;
   let fogEnd = scene.fogEndAndFlags.x;
@@ -5902,18 +6170,20 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
 `
   );
   var WebGPURenderer = class _WebGPURenderer {
-    constructor(canvas, device, context, celOpaquePipeline, outlinePipeline, translucentPipeline, uniformBuffer, bindGroup) {
+    constructor(canvas, device, context, format, celOpaquePipeline, outlinePipeline, translucentPipeline, uniformBuffer, bindGroup) {
       __publicField(this, "device");
       __publicField(this, "context");
       __publicField(this, "canvas");
+      __publicField(this, "format");
       __publicField(this, "celOpaquePipeline");
       __publicField(this, "outlinePipeline");
       __publicField(this, "translucentPipeline");
       __publicField(this, "uniformBuffer");
       __publicField(this, "bindGroup");
+      __publicField(this, "msaaColorTexture", null);
       __publicField(this, "depthTexture", null);
-      __publicField(this, "depthWidth", 0);
-      __publicField(this, "depthHeight", 0);
+      __publicField(this, "attachmentWidth", 0);
+      __publicField(this, "attachmentHeight", 0);
       __publicField(this, "staticBuffers", /* @__PURE__ */ new Map());
       __publicField(this, "dynamicOpaqueBuffer");
       __publicField(this, "dynamicOpaqueCapacityBytes");
@@ -5923,17 +6193,18 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       this.canvas = canvas;
       this.device = device;
       this.context = context;
+      this.format = format;
       this.celOpaquePipeline = celOpaquePipeline;
       this.outlinePipeline = outlinePipeline;
       this.translucentPipeline = translucentPipeline;
       this.uniformBuffer = uniformBuffer;
       this.bindGroup = bindGroup;
-      this.dynamicOpaqueCapacityBytes = 512 * 1024;
+      this.dynamicOpaqueCapacityBytes = 2 * 1024 * 1024;
       this.dynamicOpaqueBuffer = this.device.createBuffer({
         size: this.dynamicOpaqueCapacityBytes,
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
       });
-      this.dynamicTranslucentCapacityBytes = 256 * 1024;
+      this.dynamicTranslucentCapacityBytes = 512 * 1024;
       this.dynamicTranslucentBuffer = this.device.createBuffer({
         size: this.dynamicTranslucentCapacityBytes,
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
@@ -6025,6 +6296,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
             format: "depth24plus",
             depthWriteEnabled: true,
             depthCompare: "less"
+          },
+          multisample: {
+            count: MSAA_SAMPLE_COUNT
           }
         });
         const outlinePipeline = device.createRenderPipeline({
@@ -6047,6 +6321,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
             format: "depth24plus",
             depthWriteEnabled: true,
             depthCompare: "less-equal"
+          },
+          multisample: {
+            count: MSAA_SAMPLE_COUNT
           }
         });
         const translucentPipeline = device.createRenderPipeline({
@@ -6085,6 +6362,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
             format: "depth24plus",
             depthWriteEnabled: false,
             depthCompare: "less-equal"
+          },
+          multisample: {
+            count: MSAA_SAMPLE_COUNT
           }
         });
         const atlas = getProceduralTextureAtlas();
@@ -6104,7 +6384,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           { width: atlas.width, height: atlas.height, depthOrArrayLayers: 1 }
         );
         const sampler = device.createSampler({
-          magFilter: "nearest",
+          magFilter: "linear",
           minFilter: "linear",
           addressModeU: "clamp-to-edge",
           addressModeV: "clamp-to-edge"
@@ -6121,11 +6401,12 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
             { binding: 2, resource: atlasTexture.createView() }
           ]
         });
-        debugLog("WebGPU 3D Wind Waker renderer initialized");
+        debugLog("WebGPU 3D Wind Waker HD renderer initialized (4x MSAA)");
         return new _WebGPURenderer(
           canvas,
           device,
           context,
+          format,
           celOpaquePipeline,
           outlinePipeline,
           translucentPipeline,
@@ -6137,20 +6418,31 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         return null;
       }
     }
-    ensureDepthTexture() {
+    ensureAttachments() {
       const w = Math.max(1, this.canvas.width);
       const h = Math.max(1, this.canvas.height);
-      if (!this.depthTexture || this.depthWidth !== w || this.depthHeight !== h) {
+      if (!this.depthTexture || !this.msaaColorTexture || this.attachmentWidth !== w || this.attachmentHeight !== h) {
+        this.msaaColorTexture?.destroy();
         this.depthTexture?.destroy();
+        this.msaaColorTexture = this.device.createTexture({
+          size: { width: w, height: h, depthOrArrayLayers: 1 },
+          sampleCount: MSAA_SAMPLE_COUNT,
+          format: this.format,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT
+        });
         this.depthTexture = this.device.createTexture({
           size: { width: w, height: h, depthOrArrayLayers: 1 },
+          sampleCount: MSAA_SAMPLE_COUNT,
           format: "depth24plus",
           usage: GPUTextureUsage.RENDER_ATTACHMENT
         });
-        this.depthWidth = w;
-        this.depthHeight = h;
+        this.attachmentWidth = w;
+        this.attachmentHeight = h;
       }
-      return this.depthTexture.createView();
+      return {
+        msaaColorView: this.msaaColorTexture.createView(),
+        depthView: this.depthTexture.createView()
+      };
     }
     getOrUploadStaticLevelBuffer(state) {
       const existing = this.staticBuffers.get(state.currentLevelId);
@@ -6274,23 +6566,24 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         u.byteOffset,
         u.byteLength
       );
-      const depthView = this.ensureDepthTexture();
+      const { msaaColorView, depthView } = this.ensureAttachments();
       const colorView = this.context.getCurrentTexture().createView();
       const encoder = this.device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
         colorAttachments: [
           {
-            view: colorView,
+            view: msaaColorView,
+            resolveTarget: colorView,
             clearValue: state.worldFadedToBlack ? { r: 0, g: 0, b: 0, a: 1 } : { r: clearR, g: clearG, b: clearB, a: 1 },
             loadOp: "clear",
-            storeOp: "store"
+            storeOp: "discard"
           }
         ],
         depthStencilAttachment: {
           view: depthView,
           depthClearValue: 1,
           depthLoadOp: "clear",
-          depthStoreOp: "store"
+          depthStoreOp: "discard"
         }
       });
       pass.setBindGroup(0, this.bindGroup);
@@ -7758,8 +8051,8 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     if (!webgpuCanvas && gameContainer) {
       webgpuCanvas = document.createElement("canvas");
       webgpuCanvas.id = "webgpu-canvas";
-      webgpuCanvas.width = 768;
-      webgpuCanvas.height = 672;
+      webgpuCanvas.width = 1280;
+      webgpuCanvas.height = 1120;
       gameContainer.insertBefore(webgpuCanvas, canvas);
     }
     const ctx = canvas.getContext("2d");
@@ -7819,6 +8112,13 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       if (webgpuCanvas) {
         webgpuCanvas.style.width = `${layout.canvasWidth}px`;
         webgpuCanvas.style.height = `${layout.canvasHeight}px`;
+        const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1.5));
+        const targetW = Math.max(1024, Math.min(2048, Math.round(layout.canvasWidth * dpr)));
+        const targetH = Math.max(896, Math.min(1792, Math.round(layout.canvasHeight * dpr)));
+        if (webgpuCanvas.width !== targetW || webgpuCanvas.height !== targetH) {
+          webgpuCanvas.width = targetW;
+          webgpuCanvas.height = targetH;
+        }
       }
       if (joystickContainer) {
         joystickContainer.style.width = `${layout.joystickSize}px`;

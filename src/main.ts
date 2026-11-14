@@ -64,8 +64,8 @@ async function startGame(): Promise<void> {
   if (!webgpuCanvas && gameContainer) {
     webgpuCanvas = document.createElement('canvas');
     webgpuCanvas.id = 'webgpu-canvas';
-    webgpuCanvas.width = 768;
-    webgpuCanvas.height = 672;
+    webgpuCanvas.width = 1280;
+    webgpuCanvas.height = 1120;
     gameContainer.insertBefore(webgpuCanvas, canvas);
   }
 
@@ -151,6 +151,13 @@ async function startGame(): Promise<void> {
     if (webgpuCanvas) {
       webgpuCanvas.style.width = `${layout.canvasWidth}px`;
       webgpuCanvas.style.height = `${layout.canvasHeight}px`;
+      const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1.5));
+      const targetW = Math.max(1024, Math.min(2048, Math.round(layout.canvasWidth * dpr)));
+      const targetH = Math.max(896, Math.min(1792, Math.round(layout.canvasHeight * dpr)));
+      if (webgpuCanvas.width !== targetW || webgpuCanvas.height !== targetH) {
+        webgpuCanvas.width = targetW;
+        webgpuCanvas.height = targetH;
+      }
     }
 
     if (joystickContainer) {

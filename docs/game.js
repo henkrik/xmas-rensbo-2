@@ -792,6 +792,7 @@
       uziAmmo: MAX_UZI_AMMO,
       uziDepleted: false,
       uziDropTimer: 0,
+      uziCheatRefillTimer: 0,
       unlockedFlamethrower: false,
       flamethrowerFireCooldown: 0,
       weaponVibrationTimer: 0,
@@ -1541,7 +1542,8 @@
       viewProjMatrix,
       lastLevelId: null,
       wasOnRoof: false,
-      shoulderOffset: 0
+      shoulderOffset: 0,
+      equippedDistanceScale: 1
     };
   }
   function computeUnobstructedCameraDistance(originX, originZ, cameraYaw, cameraPitch, maxDistance, map) {
@@ -1736,9 +1738,12 @@
     const backZ = -Math.sin(cam.yaw) * cosPitch;
     const backY = sinPitch;
     const wantsShoulderOffset = player.equippedItem !== "empty" && !rosannaCutscene?.active && !toiletCutscene?.active && !(state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") && !state.climbing;
-    const desiredShoulder = wantsShoulderOffset ? 7.5 : 0;
+    const desiredShoulder = wantsShoulderOffset ? 10.3125 : 0;
     const shoulderBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 10) : 1;
     cam.shoulderOffset = (cam.shoulderOffset ?? 0) + (desiredShoulder - (cam.shoulderOffset ?? 0)) * shoulderBlend;
+    const targetDistanceScale = wantsShoulderOffset ? 0.55 : 1;
+    cam.equippedDistanceScale = (cam.equippedDistanceScale ?? 1) + (targetDistanceScale - (cam.equippedDistanceScale ?? 1)) * shoulderBlend;
+    const scaledMaxDistance = maxCameraDistance * cam.equippedDistanceScale;
     const maxSafeShoulder = state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01 ? cam.shoulderOffset : computeUnobstructedCameraDistance(
       cam.target.x,
       cam.target.z,
@@ -1753,12 +1758,17 @@
       cam.target.x += rightX * maxSafeShoulder;
       cam.target.z += rightZ * maxSafeShoulder;
     }
-    const baseEffectiveDistance = state.isOnRoof || state.climbing ? maxCameraDistance : computeUnobstructedCameraDistance(
+    const equippedVerticalRatio = Math.max(
+      0,
+      Math.min(1, (cam.shoulderOffset ?? 0) / 10.3125)
+    );
+    cam.target.y += 1.3 * equippedVerticalRatio;
+    const baseEffectiveDistance = state.isOnRoof || state.climbing ? scaledMaxDistance : computeUnobstructedCameraDistance(
       cam.target.x,
       cam.target.z,
       cam.yaw,
       cam.pitch,
-      maxCameraDistance,
+      scaledMaxDistance,
       state.map
     );
     const effectiveDistance = baseEffectiveDistance * (1 - 0.42 * zoomEase);
@@ -4538,14 +4548,21 @@
   function tileKey(col, row) {
     return `${col},${row}`;
   }
-  function addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimAdjacentWidth = 0) {
+  function addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimAdjacentWidth = 0, hasWallX = false, hasWallZ = false) {
     const wainscotH = 10.6;
-    const trimW = Math.max(4, ts + 0.3 - trimAdjacentWidth);
-    mb.addBox(cx, 0, cz, trimW, 1.8, ts + 0.35, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
+    const trimW = hasWallX ? Math.max(4, ts - trimAdjacentWidth) : Math.max(4, ts + 0.3 - trimAdjacentWidth);
+    const trimDBase = hasWallZ ? ts : ts + 0.35;
+    const trimDRail = hasWallZ ? ts : ts + 0.45;
+    const crownW = hasWallX ? trimW : trimW + 0.1;
+    mb.addBox(cx, 0, cz, trimW, 1.8, trimDBase, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
     mb.addBox(cx, 1.8, cz, ts, wainscotH - 1.8, ts, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.45);
-    mb.addBox(cx, 3, cz, ts * 0.72, 6.2, ts + 0.28, rgb(242, 236, 224), TexId.SOLID, 0.25);
-    mb.addBox(cx, 3, cz, ts + 0.28, 6.2, ts * 0.72, rgb(242, 236, 224), TexId.SOLID, 0.25);
-    mb.addBox(cx, 10.6, cz, trimW, 1.2, ts + 0.45, rgb(146, 98, 56), TexId.WOOD_GRAIN, 0.35);
+    if (!hasWallZ) {
+      mb.addBox(cx, 3, cz, ts * 0.72, 6.2, ts + 0.28, rgb(242, 236, 224), TexId.SOLID, 0.25);
+    }
+    if (!hasWallX) {
+      mb.addBox(cx, 3, cz, ts + 0.28, 6.2, ts * 0.72, rgb(242, 236, 224), TexId.SOLID, 0.25);
+    }
+    mb.addBox(cx, 10.6, cz, trimW, 1.2, trimDRail, rgb(146, 98, 56), TexId.WOOD_GRAIN, 0.35);
     const midStart = 11.8;
     const midTop = wallHeight - 1.8;
     const midHeight = Math.max(4, midTop - midStart);
@@ -4553,7 +4570,7 @@
     const upperTierH = midHeight - lowerTierH;
     mb.addBox(cx, midStart, cz, ts, lowerTierH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
     mb.addBox(cx, midStart + lowerTierH, cz, ts, upperTierH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
-    mb.addBeveledBox(cx, midTop, cz, trimW + 0.1, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+    mb.addBeveledBox(cx, midTop, cz, crownW, 1.8, trimDRail, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
   }
   function addWindowWallTile3D(mb, cx, cz, ts, wallHeight, kind) {
     const sillY = 7.4;
@@ -4699,7 +4716,9 @@
             const leftDoor = openableSet.has(tileKey(c - 1, r)) || overrides?.has(tileKey(c - 1, r));
             const rightDoor = openableSet.has(tileKey(c + 1, r)) || overrides?.has(tileKey(c + 1, r));
             const trimPullback = leftDoor || rightDoor ? 0.5 : 0;
-            addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback);
+            const hasWallX = map.tiles[r]?.[c - 1] === 21 /* InteriorWall */ || map.tiles[r]?.[c + 1] === 21 /* InteriorWall */;
+            const hasWallZ = map.tiles[r - 1]?.[c] === 21 /* InteriorWall */ || map.tiles[r + 1]?.[c] === 21 /* InteriorWall */;
+            addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback, hasWallX, hasWallZ);
           }
         } else {
           const skipFloor = options?.skipFloorRect;
@@ -4920,8 +4939,8 @@
     mb.addBeveledBox(19.5 * ts, 0, 10 * ts, 13.5, 7.8, 23, 0.6, rgb(242, 246, 252), TexId.SOLID, 0.65);
     mb.addTorus(19.6 * ts, 8, 10 * ts, 3.8, 0.9, 12, 8, "y", rgb(252, 254, 255), TexId.SOLID, 0.4);
     mb.addCylinder(19.2 * ts, 8, 10 * ts, 0.5, 0.5, 2.6, 8, rgb(210, 220, 232), TexId.SOLID, 0.3);
-    mb.addBeveledBox(19.04 * ts, 11.2, 10 * ts, 1.4, 11.2, 17, 0.3, rgb(112, 72, 40), TexId.WOOD_GRAIN, 0.4);
-    mb.addBox(19.08 * ts, 12.2, 10 * ts, 1.4, 9.2, 14.5, rgb(206, 232, 248), TexId.WINDOW_GLOW, 0.25);
+    mb.addBeveledBox(19.06 * ts, 11.2, 10 * ts, 1.4, 11.2, 17, 0.3, rgb(112, 72, 40), TexId.WOOD_GRAIN, 0.4);
+    mb.addBox(19.1 * ts, 12.2, 10 * ts, 1.4, 9.2, 14.5, rgb(206, 232, 248), TexId.WINDOW_GLOW, 0.25);
     mb.addBox(19.12 * ts, 23.4, 10 * ts, 2, 1.4, 12, rgb(255, 236, 152), TexId.SOLID, 0.3);
     mb.addBeveledBox(21.75 * ts, 4.5, 9.5 * ts, 5.2, 6.8, 9.5, 0.7, rgb(246, 250, 255), TexId.SOLID, 0.65);
     mb.addCylinder(21.3 * ts, 0, 9.5 * ts, 3.6, 4.8, 5.2, 12, rgb(246, 250, 255), TexId.SOLID, 0.65);
@@ -10513,6 +10532,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     let isMobile = false;
     let showIntroDialogue = false;
     let initialLevelId = "level-outside";
+    let levelParamOverride = false;
     let debugMode = false;
     let cheatMode = false;
     let giveUpSorry = false;
@@ -10528,6 +10548,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       }
       if (opts.initialLevelId) {
         initialLevelId = opts.initialLevelId;
+      }
+      if (opts.levelParamOverride !== void 0) {
+        levelParamOverride = opts.levelParamOverride;
       }
       if (opts.debug !== void 0) {
         debugMode = opts.debug;
@@ -10559,6 +10582,13 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     };
     const activeLevel = levels[initialLevelId];
     activeLevel.enter(player);
+    if (levelParamOverride) {
+      player.unlockedUzi = true;
+      player.uziAmmo = MAX_UZI_AMMO;
+      player.uziDepleted = false;
+      player.uziDropTimer = 0;
+      player.equippedItem = "uzi";
+    }
     let activeDialogue = null;
     let worldFadedToBlack = false;
     if (giveUpSorry) {
@@ -11096,6 +11126,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     if (player.uziAmmo <= 0) {
       player.uziDepleted = true;
       player.uziDropTimer = UZI_DROP_DURATION_SECONDS;
+      player.uziCheatRefillTimer = state.cheatMode ? 3 : 0;
       player.equippedItem = "empty";
       state.droppedUzis.push({
         levelId: state.currentLevelId,
@@ -11142,6 +11173,20 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     const prevUziCooldown = state.player.uziFireCooldown;
     const prevFlameCooldown = state.player.flamethrowerFireCooldown;
     updatePlayerHealthAndTimers(state.player, dtSeconds);
+    if (state.cheatMode && state.player.uziDepleted && state.player.uziCheatRefillTimer > 0) {
+      state.player.uziCheatRefillTimer = Math.max(
+        0,
+        state.player.uziCheatRefillTimer - dtSeconds
+      );
+      if (state.player.uziCheatRefillTimer === 0) {
+        state.player.unlockedUzi = true;
+        state.player.uziDepleted = false;
+        state.player.uziAmmo = MAX_UZI_AMMO;
+        state.player.equippedItem = "uzi";
+        state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+        debugLog("Cheat refill: new Uzi obtained with 30 rounds");
+      }
+    }
     const uziCooldownRemainder = prevUziCooldown > 0 ? Math.max(0, dtSeconds - prevUziCooldown) : 0;
     const flameCooldownRemainder = prevFlameCooldown > 0 ? Math.max(0, dtSeconds - prevFlameCooldown) : 0;
     const actionPressed = consumeActionPress(input);
@@ -11681,6 +11726,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       isMobile: isMobileDevice,
       showIntroDialogue: !hasLevelOverride,
       initialLevelId,
+      levelParamOverride: hasLevelOverride,
       debug: isDebug,
       cheat: isCheat,
       giveUpSorry: isGiveUpSorry,

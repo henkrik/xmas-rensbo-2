@@ -16,6 +16,7 @@ import {
   FLAMETHROWER_MAX_DISTANCE,
   FLAMETHROWER_PROJECTILE_SPEED,
   Footprint,
+  MAX_UZI_AMMO,
   Player,
   Rect,
   rectsIntersect,
@@ -27,6 +28,7 @@ import {
   updatePlayerHealthAndTimers,
   updatePlayerJump,
   UZI_DROP_DURATION_SECONDS,
+  UZI_EQUIP_DURATION_SECONDS,
   UZI_FIRE_INTERVAL_SECONDS,
   UZI_PROJECTILE_SPEED,
 } from '../entities/player';
@@ -279,6 +281,7 @@ export interface CreateGameStateOptions {
   isMobile?: boolean;
   showIntroDialogue?: boolean;
   initialLevelId?: LevelId;
+  levelParamOverride?: boolean;
   debug?: boolean;
   cheat?: boolean;
   giveUpSorry?: boolean;
@@ -343,6 +346,7 @@ export function createGameState(
   let isMobile = false;
   let showIntroDialogue = false;
   let initialLevelId: LevelId = 'level-outside';
+  let levelParamOverride = false;
   let debugMode = false;
   let cheatMode = false;
   let giveUpSorry = false;
@@ -359,6 +363,9 @@ export function createGameState(
     }
     if (opts.initialLevelId) {
       initialLevelId = opts.initialLevelId;
+    }
+    if (opts.levelParamOverride !== undefined) {
+      levelParamOverride = opts.levelParamOverride;
     }
     if (opts.debug !== undefined) {
       debugMode = opts.debug;
@@ -394,6 +401,14 @@ export function createGameState(
 
   const activeLevel = levels[initialLevelId];
   activeLevel.enter(player);
+
+  if (levelParamOverride) {
+    player.unlockedUzi = true;
+    player.uziAmmo = MAX_UZI_AMMO;
+    player.uziDepleted = false;
+    player.uziDropTimer = 0;
+    player.equippedItem = 'uzi';
+  }
 
   let activeDialogue: DialogueState | null = null;
   let worldFadedToBlack = false;
@@ -1055,6 +1070,7 @@ function fireUziProjectile(state: GameState): void {
   if (player.uziAmmo <= 0) {
     player.uziDepleted = true;
     player.uziDropTimer = UZI_DROP_DURATION_SECONDS;
+    player.uziCheatRefillTimer = state.cheatMode ? 3.0 : 0;
     player.equippedItem = 'empty';
     state.droppedUzis.push({
       levelId: state.currentLevelId,
@@ -1117,6 +1133,24 @@ export function updateGameState(
   const prevUziCooldown = state.player.uziFireCooldown;
   const prevFlameCooldown = state.player.flamethrowerFireCooldown;
   updatePlayerHealthAndTimers(state.player, dtSeconds);
+  if (
+    state.cheatMode &&
+    state.player.uziDepleted &&
+    state.player.uziCheatRefillTimer > 0
+  ) {
+    state.player.uziCheatRefillTimer = Math.max(
+      0,
+      state.player.uziCheatRefillTimer - dtSeconds
+    );
+    if (state.player.uziCheatRefillTimer === 0) {
+      state.player.unlockedUzi = true;
+      state.player.uziDepleted = false;
+      state.player.uziAmmo = MAX_UZI_AMMO;
+      state.player.equippedItem = 'uzi';
+      state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+      debugLog('Cheat refill: new Uzi obtained with 30 rounds');
+    }
+  }
   const uziCooldownRemainder =
     prevUziCooldown > 0 ? Math.max(0, dtSeconds - prevUziCooldown) : 0;
   const flameCooldownRemainder =

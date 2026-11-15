@@ -1278,22 +1278,33 @@ function addStandardWallTile3D(
   cz: number,
   ts: number,
   wallHeight: number,
-  trimAdjacentWidth = 0
+  trimAdjacentWidth = 0,
+  hasWallX = false,
+  hasWallZ = false
 ): void {
   const wainscotH = 10.6;
-  const trimW = Math.max(4, ts + 0.3 - trimAdjacentWidth);
+  const trimW = hasWallX
+    ? Math.max(4, ts - trimAdjacentWidth)
+    : Math.max(4, ts + 0.3 - trimAdjacentWidth);
+  const trimDBase = hasWallZ ? ts : ts + 0.35;
+  const trimDRail = hasWallZ ? ts : ts + 0.45;
+  const crownW = hasWallX ? trimW : trimW + 0.1;
 
   // 1. Dark walnut baseboard plinth (y = 0..1.8)
-  mb.addBox(cx, 0, cz, trimW, 1.8, ts + 0.35, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
+  mb.addBox(cx, 0, cz, trimW, 1.8, trimDBase, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
 
   // 2. Cream raised-panel wainscoting tier (y = 1.8..10.6)
   mb.addBox(cx, 1.8, cz, ts, wainscotH - 1.8, ts, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.45);
-  // Subtle recessed panel reliefs on North & South faces
-  mb.addBox(cx, 3.0, cz, ts * 0.72, 6.2, ts + 0.28, rgb(242, 236, 224), TexId.SOLID, 0.25);
-  mb.addBox(cx, 3.0, cz, ts + 0.28, 6.2, ts * 0.72, rgb(242, 236, 224), TexId.SOLID, 0.25);
+  // Subtle recessed panel reliefs on open North/South & East/West faces (omit if adjacent wall tiles share the seam)
+  if (!hasWallZ) {
+    mb.addBox(cx, 3.0, cz, ts * 0.72, 6.2, ts + 0.28, rgb(242, 236, 224), TexId.SOLID, 0.25);
+  }
+  if (!hasWallX) {
+    mb.addBox(cx, 3.0, cz, ts + 0.28, 6.2, ts * 0.72, rgb(242, 236, 224), TexId.SOLID, 0.25);
+  }
 
   // 3. Projecting oak dado chair-rail molding (y = 10.6..11.8)
-  mb.addBox(cx, 10.6, cz, trimW, 1.2, ts + 0.45, rgb(146, 98, 56), TexId.WOOD_GRAIN, 0.35);
+  mb.addBox(cx, 10.6, cz, trimW, 1.2, trimDRail, rgb(146, 98, 56), TexId.WOOD_GRAIN, 0.35);
 
   // 4. Two stacked 1:1 unstretched Nordic wallpaper tiers (y = 11.8..21.0 & 21.0..30.2)
   const midStart = 11.8;
@@ -1305,7 +1316,7 @@ function addStandardWallTile3D(
   mb.addBox(cx, midStart + lowerTierH, cz, ts, upperTierH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
 
   // 5. Routed walnut ceiling crown molding (y = 30.2..wallHeight)
-  mb.addBeveledBox(cx, midTop, cz, trimW + 0.1, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+  mb.addBeveledBox(cx, midTop, cz, crownW, 1.8, trimDRail, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
 }
 
 function addWindowWallTile3D(
@@ -1536,7 +1547,13 @@ function addIndoorTilesAndWalls(
           const leftDoor = openableSet.has(tileKey(c - 1, r)) || overrides?.has(tileKey(c - 1, r));
           const rightDoor = openableSet.has(tileKey(c + 1, r)) || overrides?.has(tileKey(c + 1, r));
           const trimPullback = leftDoor || rightDoor ? 0.5 : 0;
-          addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback);
+          const hasWallX =
+            map.tiles[r]?.[c - 1] === TileType.InteriorWall ||
+            map.tiles[r]?.[c + 1] === TileType.InteriorWall;
+          const hasWallZ =
+            map.tiles[r - 1]?.[c] === TileType.InteriorWall ||
+            map.tiles[r + 1]?.[c] === TileType.InteriorWall;
+          addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback, hasWallX, hasWallZ);
         }
       } else {
         const skipFloor = options?.skipFloorRect;
@@ -1840,8 +1857,8 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
   mb.addTorus(19.6 * ts, 8.0, 10 * ts, 3.8, 0.9, 12, 8, 'y', rgb(252, 254, 255), TexId.SOLID, 0.4);
   mb.addCylinder(19.2 * ts, 8.0, 10 * ts, 0.5, 0.5, 2.6, 8, rgb(210, 220, 232), TexId.SOLID, 0.3);
   // Wall mirror & sconce bar mounted cleanly on the 2-tile-high West bathroom wall
-  mb.addBeveledBox(19.04 * ts, 11.2, 10 * ts, 1.4, 11.2, 17, 0.3, rgb(112, 72, 40), TexId.WOOD_GRAIN, 0.4);
-  mb.addBox(19.08 * ts, 12.2, 10 * ts, 1.4, 9.2, 14.5, rgb(206, 232, 248), TexId.WINDOW_GLOW, 0.25);
+  mb.addBeveledBox(19.06 * ts, 11.2, 10 * ts, 1.4, 11.2, 17, 0.3, rgb(112, 72, 40), TexId.WOOD_GRAIN, 0.4);
+  mb.addBox(19.10 * ts, 12.2, 10 * ts, 1.4, 9.2, 14.5, rgb(206, 232, 248), TexId.WINDOW_GLOW, 0.25);
   mb.addBox(19.12 * ts, 23.4, 10 * ts, 2.0, 1.4, 12, rgb(255, 236, 152), TexId.SOLID, 0.3);
   // Sculpted Porcelain Toilet (col 21, row 9)
   mb.addBeveledBox(21.75 * ts, 4.5, 9.5 * ts, 5.2, 6.8, 9.5, 0.7, rgb(246, 250, 255), TexId.SOLID, 0.65);

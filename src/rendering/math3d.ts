@@ -394,6 +394,7 @@ export interface Camera3D {
   lastLevelId: LevelId | null;
   wasOnRoof: boolean;
   shoulderOffset?: number;
+  equippedDistanceScale?: number;
 }
 
 export const DEFAULT_CAMERA_PITCH = 0.42; // ~24 degrees looking slightly down behind Santa's back
@@ -424,6 +425,7 @@ export function createCamera3D(initialYaw: number = -Math.PI / 2): Camera3D {
     lastLevelId: null,
     wasOnRoof: false,
     shoulderOffset: 0,
+    equippedDistanceScale: 1,
   };
 }
 
@@ -709,18 +711,23 @@ export function updateCamera3D(
   const backZ = -Math.sin(cam.yaw) * cosPitch;
   const backY = sinPitch;
 
-  // Over-the-right-shoulder camera offset whenever Santa has any equipment active
+  // Over-the-right-shoulder camera offset & closer/slightly-upward framing whenever Santa has any equipment active
   const wantsShoulderOffset =
     player.equippedItem !== 'empty' &&
     !rosannaCutscene?.active &&
     !toiletCutscene?.active &&
     !(state.currentLevelId === 'level-outside' && state.motorcycle.status === 'driving') &&
     !state.climbing;
-  const desiredShoulder = wantsShoulderOffset ? 7.5 : 0;
+  const desiredShoulder = wantsShoulderOffset ? 10.3125 : 0;
   const shoulderBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 10) : 1;
   cam.shoulderOffset =
     (cam.shoulderOffset ?? 0) +
     (desiredShoulder - (cam.shoulderOffset ?? 0)) * shoulderBlend;
+  const targetDistanceScale = wantsShoulderOffset ? 0.55 : 1.0;
+  cam.equippedDistanceScale =
+    (cam.equippedDistanceScale ?? 1) +
+    (targetDistanceScale - (cam.equippedDistanceScale ?? 1)) * shoulderBlend;
+  const scaledMaxDistance = maxCameraDistance * cam.equippedDistanceScale;
   const maxSafeShoulder =
     state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01
       ? cam.shoulderOffset
@@ -738,18 +745,23 @@ export function updateCamera3D(
     cam.target.x += rightX * maxSafeShoulder;
     cam.target.z += rightZ * maxSafeShoulder;
   }
+  const equippedVerticalRatio = Math.max(
+    0,
+    Math.min(1, (cam.shoulderOffset ?? 0) / 10.3125)
+  );
+  cam.target.y += 1.3 * equippedVerticalRatio;
 
-  // Compute unobstructed camera distance in [0, maxCameraDistance] using a temporary LineOfSight.
+  // Compute unobstructed camera distance in [0, scaledMaxDistance] using a temporary LineOfSight.
   // Skip when on the roof or climbing the ladder since roof/house tiles beneath Santa are solid in the 2D map.
   const baseEffectiveDistance =
     state.isOnRoof || state.climbing
-      ? maxCameraDistance
+      ? scaledMaxDistance
       : computeUnobstructedCameraDistance(
           cam.target.x,
           cam.target.z,
           cam.yaw,
           cam.pitch,
-          maxCameraDistance,
+          scaledMaxDistance,
           state.map
         );
   const effectiveDistance = baseEffectiveDistance * (1 - 0.42 * zoomEase);

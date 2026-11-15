@@ -3950,14 +3950,19 @@ Tanja -> Alex
     const camera = createCamera3D();
     updateCamera3D(camera, state, input, 1.0, 256 / 224);
     expect(camera.shoulderOffset).toBe(0);
+    const emptyDistance = camera.distance;
+    const emptyTargetY = camera.target.y;
 
     state.player.equippedItem = 'unarmed';
     updateCamera3D(camera, state, input, 1.0, 256 / 224);
-    expect(camera.shoulderOffset ?? 0).toBeGreaterThan(5);
+    expect(camera.shoulderOffset ?? 0).toBeCloseTo(10.3125, 2);
+    expect(camera.distance).toBeCloseTo(emptyDistance * 0.55, 1);
+    expect(camera.target.y).toBeCloseTo(emptyTargetY + 1.3, 2);
 
     state.player.equippedItem = 'empty';
     updateCamera3D(camera, state, input, 1.0, 256 / 224);
     expect(camera.shoulderOffset).toBeCloseTo(0, 1);
+    expect(camera.distance).toBeCloseTo(emptyDistance, 1);
 
     // 2. Buffed Flamethrower: 2x speed (5 * TILE_SIZE), 2x distance (6 * TILE_SIZE), 5x fire rate (0.05s)
     expect(FLAMETHROWER_PROJECTILE_SPEED).toBe(5 * TILE_SIZE);
@@ -3991,5 +3996,46 @@ Tanja -> Alex
     expect(BASEMENT_STAIRS_WOOD_OBSTACLES).toContain(BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS);
     expect(obstacles.some((o) => o.y === BASEMENT_STAIRS_WOOD_NORTH_BOUNDS.y && o.x === BASEMENT_STAIRS_WOOD_NORTH_BOUNDS.x)).toBe(true);
     expect(obstacles.some((o) => o.y === BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS.y && o.x === BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS.x)).toBe(true);
+  });
+
+  it('spawns player with Uzi when ?level param is used and refills Uzi 3s after depletion in ?cheat mode', () => {
+    const levelState = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-basement',
+      levelParamOverride: true,
+    });
+    expect(levelState.player.unlockedUzi).toBe(true);
+    expect(levelState.player.equippedItem).toBe('uzi');
+    expect(levelState.player.uziAmmo).toBe(MAX_UZI_AMMO);
+
+    const cheatState = createGameState({
+      showIntroDialogue: false,
+      cheat: true,
+    });
+    cheatState.player.unlockedUzi = true;
+    cheatState.player.equippedItem = 'uzi';
+    cheatState.player.uziAmmo = 1;
+    cheatState.player.x = 15 * TILE_SIZE;
+    cheatState.player.y = 26 * TILE_SIZE;
+
+    const input = createEmptyInput();
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(cheatState, input, 0.05);
+    applyKeyEvent(input, 'Space', false);
+    expect(cheatState.player.uziAmmo).toBe(0);
+    expect(cheatState.player.uziDepleted).toBe(true);
+    expect(cheatState.player.equippedItem).toBe('empty');
+
+    // Before 3s elapses, still depleted
+    updateGameState(cheatState, input, 2.5);
+    expect(cheatState.player.uziDepleted).toBe(true);
+    expect(cheatState.player.uziAmmo).toBe(0);
+
+    // After 3s total, a new Uzi with 30 rounds is obtained and equipped
+    updateGameState(cheatState, input, 0.6);
+    expect(cheatState.player.uziDepleted).toBe(false);
+    expect(cheatState.player.unlockedUzi).toBe(true);
+    expect(cheatState.player.uziAmmo).toBe(MAX_UZI_AMMO);
+    expect(cheatState.player.equippedItem).toBe('uzi');
   });
 });

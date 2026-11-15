@@ -386,6 +386,7 @@ async function startGame(): Promise<void> {
     isMobile: isMobileDevice,
     showIntroDialogue: !hasLevelOverride,
     initialLevelId,
+    levelParamOverride: hasLevelOverride,
     debug: isDebug,
     cheat: isCheat,
     giveUpSorry: isGiveUpSorry,

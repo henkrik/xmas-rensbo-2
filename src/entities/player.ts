@@ -76,6 +76,7 @@ export interface Player {
   uziAmmo: number;
   uziDepleted: boolean;
   uziDropTimer: number;
+  uziCheatRefillTimer: number;
   unlockedFlamethrower: boolean;
   flamethrowerFireCooldown: number;
   weaponVibrationTimer: number;
@@ -111,6 +112,7 @@ export function createPlayer(x: number, y: number): Player {
     uziAmmo: MAX_UZI_AMMO,
     uziDepleted: false,
     uziDropTimer: 0,
+    uziCheatRefillTimer: 0,
     unlockedFlamethrower: false,
     flamethrowerFireCooldown: 0,
     weaponVibrationTimer: 0,

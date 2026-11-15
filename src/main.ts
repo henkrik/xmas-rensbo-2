@@ -338,6 +338,24 @@ async function startGame(): Promise<void> {
     });
   }
 
+  // On mobile (or when virtual joystick is active), tapping anywhere on screen advances dialogue trees
+  window.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!(isMobileDevice || joystick?.isVisible())) return;
+      if (!state.activeDialogue) return;
+      if (
+        mobileActionBtn &&
+        (e.target === mobileActionBtn || mobileActionBtn.contains(e.target as Node))
+      ) {
+        return;
+      }
+      e.preventDefault();
+      input.actionJustPressed = true;
+    },
+    { passive: false }
+  );
+
   // Enable 3D camera-relative WASD movement and arrow-key camera turning (without mouse camera movement).
   input.cameraYaw = -Math.PI / 2;
   input.cameraPitch = 0.38;

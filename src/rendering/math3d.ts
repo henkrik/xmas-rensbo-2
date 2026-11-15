@@ -543,7 +543,7 @@ export function updateCamera3D(
   }
   cam.wasOnRoof = state.isOnRoof;
 
-  // Apply arrow-key camera rotation in 3D mode (keyboard-only fallback without mouse)
+  // Apply arrow-key and virtual-joystick camera rotation in 3D mode
   if (typeof input.cameraYaw === 'number' && dtSeconds > 0) {
     const yawSpeed = 2.2;
     const pitchSpeed = 1.5;
@@ -552,6 +552,11 @@ export function updateCamera3D(
     }
     if (input.camRight) {
       input.cameraYaw = wrapAngle(input.cameraYaw + yawSpeed * dtSeconds);
+    }
+    if (input.moveVector && Math.abs(input.moveVector.x) > 0.001) {
+      input.cameraYaw = wrapAngle(
+        input.cameraYaw + input.moveVector.x * yawSpeed * dtSeconds
+      );
     }
     const basePitch =
       typeof input.cameraPitch === 'number'

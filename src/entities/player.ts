@@ -188,8 +188,18 @@ export function updatePlayer(
   let dy = 0;
 
   if (input.moveVector) {
-    dx = input.moveVector.x;
-    dy = input.moveVector.y;
+    if (typeof input.cameraYaw === 'number') {
+      // In 3D mode, joystick up/down moves Santa forwards/backwards along cameraYaw
+      // while left/right turns the camera angle in updateCamera3D.
+      const forward = -input.moveVector.y;
+      if (Math.abs(forward) > 0.001) {
+        dx = forward * Math.cos(input.cameraYaw);
+        dy = forward * Math.sin(input.cameraYaw);
+      }
+    } else {
+      dx = input.moveVector.x;
+      dy = input.moveVector.y;
+    }
   } else if (typeof input.cameraYaw === 'number') {
     const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
     const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);

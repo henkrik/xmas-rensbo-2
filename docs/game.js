@@ -779,8 +779,16 @@
     let dx = 0;
     let dy = 0;
     if (input.moveVector) {
-      dx = input.moveVector.x;
-      dy = input.moveVector.y;
+      if (typeof input.cameraYaw === "number") {
+        const forward = -input.moveVector.y;
+        if (Math.abs(forward) > 1e-3) {
+          dx = forward * Math.cos(input.cameraYaw);
+          dy = forward * Math.sin(input.cameraYaw);
+        }
+      } else {
+        dx = input.moveVector.x;
+        dy = input.moveVector.y;
+      }
     } else if (typeof input.cameraYaw === "number") {
       const forward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
       const strafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
@@ -1374,6 +1382,11 @@
       }
       if (input.camRight) {
         input.cameraYaw = wrapAngle(input.cameraYaw + yawSpeed * dtSeconds);
+      }
+      if (input.moveVector && Math.abs(input.moveVector.x) > 1e-3) {
+        input.cameraYaw = wrapAngle(
+          input.cameraYaw + input.moveVector.x * yawSpeed * dtSeconds
+        );
       }
       const basePitch = typeof input.cameraPitch === "number" ? input.cameraPitch : DEFAULT_CAMERA_PITCH;
       if (input.camUp) {
@@ -9536,6 +9549,19 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         input.action = false;
       });
     }
+    window.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (!(isMobileDevice || joystick?.isVisible())) return;
+        if (!state.activeDialogue) return;
+        if (mobileActionBtn && (e.target === mobileActionBtn || mobileActionBtn.contains(e.target))) {
+          return;
+        }
+        e.preventDefault();
+        input.actionJustPressed = true;
+      },
+      { passive: false }
+    );
     input.cameraYaw = -Math.PI / 2;
     input.cameraPitch = 0.38;
     let lastTimestamp = null;

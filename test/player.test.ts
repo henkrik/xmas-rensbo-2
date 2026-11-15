@@ -3036,4 +3036,50 @@ Tanja -> Alex
     expect(drawCalls.length).toBe(5); // 2 opaque + 2 outline + 1 translucent
     expect(cullModes).toContain(0x0404); // gl.FRONT culled in Pass 2
   });
+
+  it('turns 3D camera left/right from virtual joystick X and moves Santa forward/backward from Y without affecting camera pitch', () => {
+    const state = createGameState({ isMobile: true, showIntroDialogue: false });
+    const input = createEmptyInput();
+    input.cameraYaw = -Math.PI / 2; // Facing North (-Y)
+    input.cameraPitch = 0.38;
+    const cam = createCamera3D();
+
+    // 1. Joystick pushed strictly right (moveVector.x = 1, moveVector.y = 0): turns camera right, Santa stays still
+    const startX = state.player.x;
+    const startY = state.player.y;
+    input.moveVector = { x: 1, y: 0 };
+    updateGameState(state, input, 0.25);
+    updateCamera3D(cam, state, input, 0.25);
+    expect(state.player.x).toBeCloseTo(startX, 5);
+    expect(state.player.y).toBeCloseTo(startY, 5);
+    expect(input.cameraYaw).toBeGreaterThan(-Math.PI / 2);
+    expect(input.cameraPitch).toBeCloseTo(0.38, 5);
+
+    // 2. Joystick pushed strictly left (moveVector.x = -1, moveVector.y = 0): turns camera left
+    const yawAfterRight = input.cameraYaw!;
+    input.moveVector = { x: -1, y: 0 };
+    updateGameState(state, input, 0.25);
+    updateCamera3D(cam, state, input, 0.25);
+    expect(input.cameraYaw).toBeLessThan(yawAfterRight);
+    expect(input.cameraPitch).toBeCloseTo(0.38, 5);
+
+    // 3. Joystick pushed strictly up (moveVector.x = 0, moveVector.y = -1): moves Santa forward along cameraYaw, camera unchanged
+    const yawBeforeUp = input.cameraYaw!;
+    const yBeforeUp = state.player.y;
+    input.moveVector = { x: 0, y: -1 };
+    updateGameState(state, input, 0.2);
+    updateCamera3D(cam, state, input, 0.2);
+    expect(state.player.y).toBeLessThan(yBeforeUp);
+    expect(input.cameraYaw).toBeCloseTo(yawBeforeUp, 5);
+    expect(input.cameraPitch).toBeCloseTo(0.38, 5);
+
+    // 4. Joystick pushed strictly down (moveVector.x = 0, moveVector.y = 1): moves Santa backward along cameraYaw, camera unchanged
+    const yBeforeDown = state.player.y;
+    input.moveVector = { x: 0, y: 1 };
+    updateGameState(state, input, 0.2);
+    updateCamera3D(cam, state, input, 0.2);
+    expect(state.player.y).toBeGreaterThan(yBeforeDown);
+    expect(input.cameraYaw).toBeCloseTo(yawBeforeUp, 5);
+    expect(input.cameraPitch).toBeCloseTo(0.38, 5);
+  });
 });

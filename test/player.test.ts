@@ -86,9 +86,13 @@ import {
   BASEMENT_MINE_BOUNDS,
   BASEMENT_MINE_FUSE_SECONDS,
   BASEMENT_SPA_ROOM_BOUNDS,
+  BASEMENT_SPA_TUB_BOUNDS,
   BASEMENT_STAIRS_SPAWN,
   BASEMENT_STAIRS_TRIGGER_BOUNDS,
   BASEMENT_STAIRS_WOOD_BOUNDS,
+  BASEMENT_STAIRS_WOOD_NORTH_BOUNDS,
+  BASEMENT_STAIRS_WOOD_OBSTACLES,
+  BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS,
   LevelBasement,
   STAIRS_WOOD_BURN_DURATION,
   USED_STAIRS_STATE_KEY,
@@ -1116,14 +1120,17 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.player.x).toBeLessThanOrEqual(
       BASEMENT_STAIRS_TRIGGER_BOUNDS.x - state.player.width + 0.01
     );
-    expect(state.nearbyInteractable?.id).toBe('basement-stairs-up');
-    expect(state.nearbyInteractable?.promptText).toBe('Walk upstairs');
+    expect(state.nearbyInteractable).toBeNull();
+    // Walking close automatically triggers 0.5s fade-to-black -> level-upstairs -> 0.5s fade-from-black
+    expect(state.screenFade?.phase).toBe('out');
+    expect(state.screenFade?.duration).toBe(0.5);
+    expect(state.currentLevelId).toBe('level-basement');
 
-    // Press Z to walk upstairs -> records `usedStairs` in `player.states` and loads `level-upstairs`
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    updateGameState(state, input, 0.5);
     expect(state.currentLevelId).toBe('level-upstairs');
+    expect(state.screenFade?.phase).toBe('in');
+    updateGameState(state, input, 0.5);
+    expect(state.screenFade).toBeNull();
     expect(state.player.states.get(USED_STAIRS_STATE_KEY)).toBe(true);
     expect(state.player.x).toBe(UPSTAIRS_STAIRS_SPAWN.x);
     expect(state.player.y).toBe(UPSTAIRS_STAIRS_SPAWN.y);
@@ -3509,7 +3516,7 @@ Tanja -> Alex
       4
     );
 
-    // 4. Firing Uzi in open ground emits 5 projectiles per second (every 0.2s) moving at 16 tiles/s (256 px/s)
+    // 4. Firing Uzi in open ground emits 10 projectiles per second (every 0.1s) moving at 16 tiles/s (256 px/s)
     state.isOnRoof = false;
     state.player.x = 15 * TILE_SIZE;
     state.player.y = 26 * TILE_SIZE;
@@ -3519,7 +3526,7 @@ Tanja -> Alex
     applyKeyEvent(input, 'Space', true);
     let spawned = 0;
     let prevCount = 0;
-    // Simulate 0.85s in 0.05s steps holding Space -> 5 shots fired at t = 0.0, 0.2, 0.4, 0.6, 0.8s
+    // Simulate 0.85s in 0.05s steps holding Space -> 9 shots fired at t = 0.0, 0.1, ..., 0.8s
     for (let step = 0; step < 17; step++) {
       updateGameState(state, input, 0.05);
       if (state.projectiles.length > prevCount) {
@@ -3528,9 +3535,9 @@ Tanja -> Alex
       prevCount = state.projectiles.length;
     }
     applyKeyEvent(input, 'Space', false);
-    expect(spawned).toBe(5);
-    expect(state.projectiles.length).toBe(5);
-    expect(state.player.uziAmmo).toBe(MAX_UZI_AMMO - 5);
+    expect(spawned).toBe(9);
+    expect(state.projectiles.length).toBe(9);
+    expect(state.player.uziAmmo).toBe(MAX_UZI_AMMO - 9);
 
     // Verify projectile velocity = 16 tiles/sec (256 px/s) and 3D bullet rendering
     const firstProj = state.projectiles[0];
@@ -3930,6 +3937,59 @@ Tanja -> Alex
       updateGameState(state, input, 0.02);
     }
     applyKeyEvent(input, 'KeyD', false);
-    expect(state.nearbyInteractable?.id).toBe('basement-stairs-up');
+    expect(state.screenFade?.phase).toBe('out');
+    updateGameState(state, input, 0.5);
+    expect(state.currentLevelId).toBe('level-upstairs');
+    expect(state.screenFade?.phase).toBe('in');
+  });
+
+  it('applies right-shoulder camera offset when equipped, buffed flamethrower stats, enlarged bathroom-tiled Spa Room with tub, and full-surround stairs wood', () => {
+    // 1. Over-the-right-shoulder camera offset only when something is equipped
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+    const camera = createCamera3D();
+    updateCamera3D(camera, state, input, 1.0, 256 / 224);
+    expect(camera.shoulderOffset).toBe(0);
+
+    state.player.equippedItem = 'unarmed';
+    updateCamera3D(camera, state, input, 1.0, 256 / 224);
+    expect(camera.shoulderOffset ?? 0).toBeGreaterThan(5);
+
+    state.player.equippedItem = 'empty';
+    updateCamera3D(camera, state, input, 1.0, 256 / 224);
+    expect(camera.shoulderOffset).toBeCloseTo(0, 1);
+
+    // 2. Buffed Flamethrower: 2x speed (5 * TILE_SIZE), 2x distance (6 * TILE_SIZE), 5x fire rate (0.05s)
+    expect(FLAMETHROWER_PROJECTILE_SPEED).toBe(5 * TILE_SIZE);
+    expect(FLAMETHROWER_MAX_DISTANCE).toBe(6 * TILE_SIZE);
+    state.player.unlockedFlamethrower = true;
+    state.player.equippedItem = 'flamethrower';
+    state.player.x = 15 * TILE_SIZE;
+    state.player.y = 26 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    applyKeyEvent(input, 'Space', true);
+    for (let i = 0; i < 4; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    applyKeyEvent(input, 'Space', false);
+    expect(state.projectiles.length).toBeGreaterThanOrEqual(3);
+
+    // 3. Expanded Spa Room (4x7 = 28 tiles, BathroomTileFloor) with single tub obstacle
+    const basementState = createGameState({ showIntroDialogue: false, initialLevelId: 'level-basement' });
+    const basementLevel = basementState.levels['level-basement'];
+    expect(BASEMENT_SPA_ROOM_BOUNDS.width).toBe(4 * TILE_SIZE);
+    expect(BASEMENT_SPA_ROOM_BOUNDS.height).toBe(7 * TILE_SIZE);
+    expect(basementLevel.map.tiles[6][15]).toBe(TileType.BathroomTileFloor);
+    expect(basementLevel.map.tiles[11][17]).toBe(TileType.BathroomTileFloor);
+    const obstacles = basementLevel.getSolidObstacles();
+    expect(obstacles.some((o) => o.x === BASEMENT_SPA_TUB_BOUNDS.x && o.y === BASEMENT_SPA_TUB_BOUNDS.y)).toBe(true);
+
+    // 4. Stairs wood stacks surround West, North, and South sides until burned
+    expect(BASEMENT_STAIRS_WOOD_OBSTACLES.length).toBe(3);
+    expect(BASEMENT_STAIRS_WOOD_OBSTACLES).toContain(BASEMENT_STAIRS_WOOD_BOUNDS);
+    expect(BASEMENT_STAIRS_WOOD_OBSTACLES).toContain(BASEMENT_STAIRS_WOOD_NORTH_BOUNDS);
+    expect(BASEMENT_STAIRS_WOOD_OBSTACLES).toContain(BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS);
+    expect(obstacles.some((o) => o.y === BASEMENT_STAIRS_WOOD_NORTH_BOUNDS.y && o.x === BASEMENT_STAIRS_WOOD_NORTH_BOUNDS.x)).toBe(true);
+    expect(obstacles.some((o) => o.y === BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS.y && o.x === BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS.x)).toBe(true);
   });
 });

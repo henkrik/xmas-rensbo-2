@@ -42,12 +42,17 @@ import {
   DialogueVariant,
   findNearbyInteractable,
   Interactable,
+  INTERACTION_MAX_GAP_PX,
+  rectEdgeDistance,
 } from './interaction';
 import {
-  BASEMENT_STAIRS_WOOD_BOUNDS,
+  BASEMENT_STAIRS_TRIGGER_BOUNDS,
+  BASEMENT_STAIRS_WOOD_OBSTACLES,
   LevelBasement,
   STAIRS_WOOD_BURN_DURATION,
+  USED_STAIRS_STATE_KEY,
 } from './levels/levelBasement';
+import { UPSTAIRS_INTRO_STATE_KEY } from './levels/levelUpstairs';
 import {
   ClimbingState,
   createMotorcycle,
@@ -149,6 +154,14 @@ export interface LevelRegistry {
   'level-people': LevelPeople;
 }
 
+export interface ScreenFadeState {
+  phase: 'out' | 'in';
+  timer: number;
+  duration: number;
+  onMidpoint?: () => void;
+  onComplete?: () => void;
+}
+
 export interface GameState {
   currentLevelId: LevelId;
   levels: LevelRegistry;
@@ -179,6 +192,7 @@ export interface GameState {
   debugMode: boolean;
   cheatMode: boolean;
   worldFadedToBlack: boolean;
+  screenFade: ScreenFadeState | null;
   secretSantaDB: SecretSantaDB | null;
 }
 
@@ -435,6 +449,7 @@ export function createGameState(
     debugMode,
     cheatMode,
     worldFadedToBlack,
+    screenFade: null,
     secretSantaDB,
   };
 
@@ -892,12 +907,14 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 }
         : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
 
-      // Check stairs wood stack burn in basement when hit by a fireball
+      // Check stairs wood stacks burn in basement when hit by a fireball
       if (isFireball && state.currentLevelId === 'level-basement') {
         const basement = state.levels['level-basement'];
         if (
           !basement.stairsWoodBurned &&
-          rectsIntersect(projRect, BASEMENT_STAIRS_WOOD_BOUNDS)
+          BASEMENT_STAIRS_WOOD_OBSTACLES.some((obs) =>
+            rectsIntersect(projRect, obs)
+          )
         ) {
           if (basement.stairsWoodBurnTimer <= 0) {
             basement.stairsWoodBurnTimer = STAIRS_WOOD_BURN_DURATION;
@@ -1113,6 +1130,35 @@ export function updateGameState(
     input.pointerClick = null;
   }
 
+  // Advance seamless 0.5s fade-to-black / fade-from-black level transitions
+  if (state.screenFade) {
+    state.screenFade.timer += dtSeconds;
+    if (state.screenFade.phase === 'out') {
+      if (state.screenFade.timer >= state.screenFade.duration) {
+        const onMidpoint = state.screenFade.onMidpoint;
+        state.screenFade.onMidpoint = undefined;
+        state.screenFade.phase = 'in';
+        state.screenFade.timer = 0;
+        if (onMidpoint) {
+          onMidpoint();
+        }
+        if (typeof input.cameraYaw === 'number') {
+          input.cameraYaw =
+            state.player.yaw ?? directionToYaw(state.player.facing);
+        }
+      }
+      state.player.isMoving = false;
+      state.nearbyInteractable = null;
+      return;
+    } else if (state.screenFade.timer >= state.screenFade.duration) {
+      const onComplete = state.screenFade.onComplete;
+      state.screenFade = null;
+      if (onComplete) {
+        onComplete();
+      }
+    }
+  }
+
   // If a dialogue box is currently open, pressing Space advances or closes it
   if (state.activeDialogue) {
     state.player.isMoving = false;
@@ -1224,6 +1270,35 @@ export function updateGameState(
     basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
     if (state.activeDialogue) {
       refreshInteractables(state);
+      return;
+    }
+
+    // Automatically walk upstairs with a 0.5s fade to black & fade from black once close enough
+    if (
+      basement.stairsWoodBurned &&
+      !state.screenFade &&
+      rectEdgeDistance(state.player, BASEMENT_STAIRS_TRIGGER_BOUNDS) <=
+        INTERACTION_MAX_GAP_PX
+    ) {
+      state.player.isMoving = false;
+      state.nearbyInteractable = null;
+      state.screenFade = {
+        phase: 'out',
+        timer: 0,
+        duration: 0.5,
+        onMidpoint: () => {
+          state.player.states.set(USED_STAIRS_STATE_KEY, true);
+          transitionCtx.loadLevel('level-upstairs');
+        },
+        onComplete: () => {
+          if (!state.player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
+            state.player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
+            transitionCtx.openDialogue([
+              'Hmm... so I believe the Christmas tree is to the left, but I must not be seen!',
+            ]);
+          }
+        },
+      };
       return;
     }
   } else if (state.currentLevelId === 'level-upstairs') {

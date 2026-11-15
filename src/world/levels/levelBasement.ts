@@ -48,10 +48,10 @@ export const BASEMENT_TILES: TileType[][] = [
   [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 1
   [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 2
   [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 3
-  [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 4
-  [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 5
-  [V, V, V, V, V, V, W, W, W, W, W, W, W, W, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 6: Library Bookshelf top
-  [V, V, V, V, V, V, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, V, V, V, V, V, V, V, V, V], // 7: Library Bookshelf base | Spa north wall | Bathroom north wall
+  [V, V, V, V, V, V, V, V, V, V, V, V, V, W, W, W, W, W, W, V, V, V, V, V, V, V, V, V, V, V, V, V], // 4: Expanded Spa Room north wall (cols 13..18)
+  [V, V, V, V, V, V, V, V, V, V, V, V, V, W, B, B, B, B, W, V, V, V, V, V, V, V, V, V, V, V, V, V], // 5: Spa Room north bathtub end (cols 14..17)
+  [V, V, V, V, V, V, W, W, W, W, W, W, W, W, B, B, B, B, W, V, V, V, V, V, V, V, V, V, V, V, V, V], // 6: Library Bookshelf top | Spa Room
+  [V, V, V, V, V, V, W, W, W, W, W, W, W, W, B, B, B, B, W, W, W, W, W, V, V, V, V, V, V, V, V, V], // 7: Library Bookshelf base | Spa Room | Bathroom north wall
   [V, V, V, V, V, V, W, F, F, F, F, F, O, W, B, B, B, B, W, B, B, B, W, V, V, V, V, V, V, V, V, V], // 8: Wood stack (12) | Spa Room (14..17) | Bathroom floor (19..21)
   [V, V, V, V, V, V, W, O, F, F, F, F, O, W, B, B, B, B, W, O, B, O, W, V, V, V, V, V, V, V, V, V], // 9: Library couch (7) | Wood stack (12) | Spa Room | Sink (19) | Toilet (21)
   [V, V, V, V, V, V, W, O, F, F, F, F, F, W, B, B, B, B, W, O, B, B, W, V, V, V, V, V, V, V, V, V], // 10: Library couch (7) | Spa Room | Sink (19)
@@ -154,20 +154,28 @@ export const BASEMENT_BATHROOM_HIDDEN_MASK: Rect = {
   height: 5 * TILE_SIZE,
 };
 
-/** Spa Room interior bounds (cols 14..17, rows 8..11) behind the Spa Doors. */
+/** Expanded Spa Room interior bounds (cols 14..17, rows 5..11 = 28 tiles, +75% larger) behind the Spa Doors. */
 export const BASEMENT_SPA_ROOM_BOUNDS: Rect = {
   x: 14 * TILE_SIZE,
-  y: 8 * TILE_SIZE,
+  y: 5 * TILE_SIZE,
   width: 4 * TILE_SIZE,
-  height: 4 * TILE_SIZE,
+  height: 7 * TILE_SIZE,
+};
+
+/** Single bathtub filled with water at the north end of the Spa Room. */
+export const BASEMENT_SPA_TUB_BOUNDS: Rect = {
+  x: 14 * TILE_SIZE + 6,
+  y: 5 * TILE_SIZE + 2,
+  width: 4 * TILE_SIZE - 12,
+  height: 22,
 };
 
 /** Black fog-of-war mask hiding the Spa Room until the mine breaks open the Spa Doors. */
 export const BASEMENT_SPA_HIDDEN_MASK: Rect = {
   x: 14 * TILE_SIZE,
-  y: 7 * TILE_SIZE,
+  y: 4 * TILE_SIZE,
   width: 4 * TILE_SIZE,
-  height: 5 * TILE_SIZE,
+  height: 8 * TILE_SIZE,
 };
 
 /** Landmine 1 tile south of the Spa Doors (cols 15..16, row 13). */
@@ -188,13 +196,34 @@ export const BASEMENT_FLAMETHROWER_BOUNDS: Rect = {
   height: 10,
 };
 
-/** Burnable stack of wood blocking the foot of the basement stairs (col 18, rows 15..18). */
+/** Burnable stack of wood blocking the west side of the basement stairs (col 18, rows 15..18). */
 export const BASEMENT_STAIRS_WOOD_BOUNDS: Rect = {
   x: 18 * TILE_SIZE,
   y: 15 * TILE_SIZE,
   width: TILE_SIZE,
   height: 4 * TILE_SIZE,
 };
+
+/** Burnable wood stacks blocking the north and south sides around the basement stairs. */
+export const BASEMENT_STAIRS_WOOD_NORTH_BOUNDS: Rect = {
+  x: 18 * TILE_SIZE,
+  y: 14 * TILE_SIZE,
+  width: 4 * TILE_SIZE,
+  height: TILE_SIZE,
+};
+
+export const BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS: Rect = {
+  x: 18 * TILE_SIZE,
+  y: 19 * TILE_SIZE,
+  width: 4 * TILE_SIZE,
+  height: TILE_SIZE,
+};
+
+export const BASEMENT_STAIRS_WOOD_OBSTACLES: readonly Rect[] = [
+  BASEMENT_STAIRS_WOOD_BOUNDS,
+  BASEMENT_STAIRS_WOOD_NORTH_BOUNDS,
+  BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS,
+];
 
 export const STAIRS_WOOD_BURN_DURATION = 1.0;
 
@@ -312,6 +341,7 @@ export class LevelBasement implements GameLevel {
     const obs: Rect[] = [
       this.windowNpc,
       this.olexaNpc,
+      BASEMENT_SPA_TUB_BOUNDS,
       BASEMENT_STAIRS_TRIGGER_BOUNDS,
       ...this.doors.map((d) => d.bounds),
     ];
@@ -319,7 +349,7 @@ export class LevelBasement implements GameLevel {
       obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
     }
     if (!this.stairsWoodBurned) {
-      obs.push(BASEMENT_STAIRS_WOOD_BOUNDS);
+      obs.push(...BASEMENT_STAIRS_WOOD_OBSTACLES);
     }
     return obs;
   }
@@ -331,12 +361,6 @@ export class LevelBasement implements GameLevel {
         bounds: { ...BASEMENT_FRONT_DOOR_BOUNDS },
         promptText: 'Open door',
         dialogueLines: ["It's locked."],
-      },
-      {
-        id: 'basement-stairs-up',
-        bounds: { ...BASEMENT_STAIRS_TRIGGER_BOUNDS },
-        promptText: 'Walk upstairs',
-        dialogueLines: [],
       },
     ];
 

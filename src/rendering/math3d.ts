@@ -393,6 +393,7 @@ export interface Camera3D {
   viewProjMatrix: Mat4;
   lastLevelId: LevelId | null;
   wasOnRoof: boolean;
+  shoulderOffset?: number;
 }
 
 export const DEFAULT_CAMERA_PITCH = 0.42; // ~24 degrees looking slightly down behind Santa's back
@@ -422,6 +423,7 @@ export function createCamera3D(initialYaw: number = -Math.PI / 2): Camera3D {
     viewProjMatrix,
     lastLevelId: null,
     wasOnRoof: false,
+    shoulderOffset: 0,
   };
 }
 
@@ -706,6 +708,36 @@ export function updateCamera3D(
   const backX = -Math.cos(cam.yaw) * cosPitch;
   const backZ = -Math.sin(cam.yaw) * cosPitch;
   const backY = sinPitch;
+
+  // Over-the-right-shoulder camera offset whenever Santa has any equipment active
+  const wantsShoulderOffset =
+    player.equippedItem !== 'empty' &&
+    !rosannaCutscene?.active &&
+    !toiletCutscene?.active &&
+    !(state.currentLevelId === 'level-outside' && state.motorcycle.status === 'driving') &&
+    !state.climbing;
+  const desiredShoulder = wantsShoulderOffset ? 7.5 : 0;
+  const shoulderBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 10) : 1;
+  cam.shoulderOffset =
+    (cam.shoulderOffset ?? 0) +
+    (desiredShoulder - (cam.shoulderOffset ?? 0)) * shoulderBlend;
+  const maxSafeShoulder =
+    state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01
+      ? cam.shoulderOffset
+      : computeUnobstructedCameraDistance(
+          cam.target.x,
+          cam.target.z,
+          cam.yaw - Math.PI / 2,
+          0,
+          cam.shoulderOffset,
+          state.map
+        );
+  if (maxSafeShoulder > 0.01) {
+    const rightX = -Math.sin(cam.yaw);
+    const rightZ = Math.cos(cam.yaw);
+    cam.target.x += rightX * maxSafeShoulder;
+    cam.target.z += rightZ * maxSafeShoulder;
+  }
 
   // Compute unobstructed camera distance in [0, maxCameraDistance] using a temporary LineOfSight.
   // Skip when on the roof or climbing the ladder since roof/house tiles beneath Santa are solid in the 2D map.

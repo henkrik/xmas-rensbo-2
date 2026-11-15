@@ -759,12 +759,12 @@
   var PUNCH_DURATION_SECONDS = 0.28;
   var UZI_EQUIP_DURATION_SECONDS = 0.5;
   var UZI_DROP_DURATION_SECONDS = 0.45;
-  var UZI_FIRE_INTERVAL_SECONDS = 0.2;
+  var UZI_FIRE_INTERVAL_SECONDS = 0.1;
   var UZI_PROJECTILE_SPEED = 16 * TILE_SIZE;
   var MAX_UZI_AMMO = 30;
-  var FLAMETHROWER_FIRE_INTERVAL_SECONDS = 0.25;
-  var FLAMETHROWER_PROJECTILE_SPEED = 2.5 * TILE_SIZE;
-  var FLAMETHROWER_MAX_DISTANCE = 3 * TILE_SIZE;
+  var FLAMETHROWER_FIRE_INTERVAL_SECONDS = 0.05;
+  var FLAMETHROWER_PROJECTILE_SPEED = 5 * TILE_SIZE;
+  var FLAMETHROWER_MAX_DISTANCE = 6 * TILE_SIZE;
   function createPlayer(x, y) {
     return {
       x,
@@ -1540,7 +1540,8 @@
       projMatrix,
       viewProjMatrix,
       lastLevelId: null,
-      wasOnRoof: false
+      wasOnRoof: false,
+      shoulderOffset: 0
     };
   }
   function computeUnobstructedCameraDistance(originX, originZ, cameraYaw, cameraPitch, maxDistance, map) {
@@ -1734,6 +1735,24 @@
     const backX = -Math.cos(cam.yaw) * cosPitch;
     const backZ = -Math.sin(cam.yaw) * cosPitch;
     const backY = sinPitch;
+    const wantsShoulderOffset = player.equippedItem !== "empty" && !rosannaCutscene?.active && !toiletCutscene?.active && !(state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") && !state.climbing;
+    const desiredShoulder = wantsShoulderOffset ? 7.5 : 0;
+    const shoulderBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 10) : 1;
+    cam.shoulderOffset = (cam.shoulderOffset ?? 0) + (desiredShoulder - (cam.shoulderOffset ?? 0)) * shoulderBlend;
+    const maxSafeShoulder = state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01 ? cam.shoulderOffset : computeUnobstructedCameraDistance(
+      cam.target.x,
+      cam.target.z,
+      cam.yaw - Math.PI / 2,
+      0,
+      cam.shoulderOffset,
+      state.map
+    );
+    if (maxSafeShoulder > 0.01) {
+      const rightX = -Math.sin(cam.yaw);
+      const rightZ = Math.cos(cam.yaw);
+      cam.target.x += rightX * maxSafeShoulder;
+      cam.target.z += rightZ * maxSafeShoulder;
+    }
     const baseEffectiveDistance = state.isOnRoof || state.climbing ? maxCameraDistance : computeUnobstructedCameraDistance(
       cam.target.x,
       cam.target.z,
@@ -2699,14 +2718,14 @@
     // 2
     [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
     // 3
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 4
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 5
-    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 6: Library Bookshelf top
-    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 7: Library Bookshelf base | Spa north wall | Bathroom north wall
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 4: Expanded Spa Room north wall (cols 13..18)
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, W2, B2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 5: Spa Room north bathtub end (cols 14..17)
+    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, B2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 6: Library Bookshelf top | Spa Room
+    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, B2, B2, B2, B2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 7: Library Bookshelf base | Spa Room | Bathroom north wall
     [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, O2, W2, B2, B2, B2, B2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
     // 8: Wood stack (12) | Spa Room (14..17) | Bathroom floor (19..21)
     [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, O2, W2, B2, B2, B2, B2, W2, O2, B2, O2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
@@ -2811,15 +2830,21 @@
   };
   var BASEMENT_SPA_ROOM_BOUNDS = {
     x: 14 * TILE_SIZE,
-    y: 8 * TILE_SIZE,
+    y: 5 * TILE_SIZE,
     width: 4 * TILE_SIZE,
-    height: 4 * TILE_SIZE
+    height: 7 * TILE_SIZE
+  };
+  var BASEMENT_SPA_TUB_BOUNDS = {
+    x: 14 * TILE_SIZE + 6,
+    y: 5 * TILE_SIZE + 2,
+    width: 4 * TILE_SIZE - 12,
+    height: 22
   };
   var BASEMENT_SPA_HIDDEN_MASK = {
     x: 14 * TILE_SIZE,
-    y: 7 * TILE_SIZE,
+    y: 4 * TILE_SIZE,
     width: 4 * TILE_SIZE,
-    height: 5 * TILE_SIZE
+    height: 8 * TILE_SIZE
   };
   var BASEMENT_MINE_BOUNDS = {
     x: 15 * TILE_SIZE + 11,
@@ -2840,6 +2865,23 @@
     width: TILE_SIZE,
     height: 4 * TILE_SIZE
   };
+  var BASEMENT_STAIRS_WOOD_NORTH_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 14 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 19 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_STAIRS_WOOD_OBSTACLES = [
+    BASEMENT_STAIRS_WOOD_BOUNDS,
+    BASEMENT_STAIRS_WOOD_NORTH_BOUNDS,
+    BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS
+  ];
   var STAIRS_WOOD_BURN_DURATION = 1;
   var BASEMENT_STAIRS_TRIGGER_BOUNDS = {
     x: 20 * TILE_SIZE,
@@ -2935,6 +2977,7 @@
       const obs = [
         this.windowNpc,
         this.olexaNpc,
+        BASEMENT_SPA_TUB_BOUNDS,
         BASEMENT_STAIRS_TRIGGER_BOUNDS,
         ...this.doors.map((d) => d.bounds)
       ];
@@ -2942,7 +2985,7 @@
         obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
       }
       if (!this.stairsWoodBurned) {
-        obs.push(BASEMENT_STAIRS_WOOD_BOUNDS);
+        obs.push(...BASEMENT_STAIRS_WOOD_OBSTACLES);
       }
       return obs;
     }
@@ -2953,12 +2996,6 @@
           bounds: { ...BASEMENT_FRONT_DOOR_BOUNDS },
           promptText: "Open door",
           dialogueLines: ["It's locked."]
-        },
-        {
-          id: "basement-stairs-up",
-          bounds: { ...BASEMENT_STAIRS_TRIGGER_BOUNDS },
-          promptText: "Walk upstairs",
-          dialogueLines: []
         }
       ];
       if (this.spaDoorClosed) {
@@ -4745,19 +4782,19 @@
         [9.5, 9.5],
         [9.5, 16.5],
         [16, 16],
-        [16, 9.8],
-        // Spa Room chandelier
+        [16, 8.5],
+        // Expanded Spa Room chandelier
         [20.5, 9.5]
       ]
     });
     {
       const sx = 16 * ts;
-      const sz = 8.45 * ts;
-      mb.addBeveledBox(sx, 0, sz, 3.2 * ts, 5.2, 13.5, 0.7, rgb(146, 90, 48), TexId.WOOD_GRAIN, 0.7);
-      mb.addTorus(sx, 5.1, sz, 16, 0.85, 14, 6, "y", rgb(118, 70, 36), TexId.WOOD_GRAIN, 0.45);
-      mb.addBox(sx, 4.7, sz, 2.7 * ts, 0.5, 9.5, rgb(84, 198, 224), TexId.WINDOW_GLOW, 0.25);
-      mb.addBeveledBox(17.45 * ts, 0, 10.7 * ts, 8.5, 3.4, 18, 0.4, rgb(154, 98, 52), TexId.WOOD_GRAIN, 0.55);
-      mb.addBeveledBox(17.45 * ts, 3.4, 10.7 * ts, 5.5, 1.4, 7.5, 0.4, rgb(248, 250, 255), TexId.FABRIC, 0.4);
+      const sz = 5.65 * ts;
+      mb.addBeveledBox(sx, 0, sz, 3.1 * ts, 5.4, 15, 0.75, rgb(244, 248, 252), TexId.SOLID, 0.7);
+      mb.addBeveledBox(sx, 5, sz, 3.25 * ts, 0.8, 16.4, 0.35, rgb(252, 254, 255), TexId.SOLID, 0.45);
+      mb.addBox(sx, 4.45, sz, 2.75 * ts, 0.6, 12.2, rgb(56, 174, 232), TexId.WINDOW_GLOW, 0.25);
+      mb.addCylinder(sx, 5.4, sz - 7.1, 0.55, 0.55, 2.2, 8, rgb(210, 218, 228), TexId.SOLID, 0.3);
+      mb.addBox(sx, 7.2, sz - 6.2, 0.75, 0.65, 2.1, rgb(210, 218, 228), TexId.SOLID, 0.25);
     }
     {
       const bx = 10 * ts;
@@ -5414,9 +5451,9 @@
     const isDroppingUzi = (style.uziDropTimer ?? 0) > 0 && !isHoldingUzi && !isHoldingFlamethrower;
     const vibeActive = (isHoldingUzi || isHoldingFlamethrower) && (style.weaponVibrationTimer ?? 0) > 0;
     const vibeTime = style.elapsedTime ?? walkPhase;
-    const vibeFwd = vibeActive ? Math.sin(vibeTime * 95) * 0.55 : 0;
-    const vibeSide = vibeActive ? Math.cos(vibeTime * 115) * 0.42 : 0;
-    const vibeUp = vibeActive ? Math.sin(vibeTime * 135) * 0.42 : 0;
+    const vibeFwd = vibeActive ? Math.sin(vibeTime * 78) * 0.24 : 0;
+    const vibeSide = vibeActive ? Math.cos(vibeTime * 92) * 0.18 : 0;
+    const vibeUp = vibeActive ? Math.sin(vibeTime * 106) * 0.18 : 0;
     for (const side of [1, -1]) {
       const shoulderX = cx + rx * 3.7 * side;
       const shoulderY = y0 + 9.4;
@@ -5532,7 +5569,7 @@
         continue;
       }
       if (isUnarmedPunch) {
-        const flailPhase = punchProgress * Math.PI * 6;
+        const flailPhase = punchProgress * Math.PI * 4.5;
         const sideSign = side === activePunchSide ? 1 : -1;
         const envelope = Math.sin(punchProgress * Math.PI);
         const flailSin = Math.sin(flailPhase) * sideSign;
@@ -6367,77 +6404,87 @@
         );
       }
       if (!basement.stairsWoodBurned) {
-        const wx = BASEMENT_STAIRS_WOOD_BOUNDS.x + BASEMENT_STAIRS_WOOD_BOUNDS.width * 0.5;
-        const wy0 = BASEMENT_STAIRS_WOOD_BOUNDS.y;
         const burnRatio = basement.stairsWoodBurnTimer > 0 ? Math.max(0.18, basement.stairsWoodBurnTimer / STAIRS_WOOD_BURN_DURATION) : 1;
         const logColor = basement.stairsWoodBurnTimer > 0 ? rgb(76, 44, 28) : rgb(138, 86, 46);
         const barkColor = basement.stairsWoodBurnTimer > 0 ? rgb(52, 28, 18) : rgb(98, 58, 30);
-        for (let rowIdx = 0; rowIdx < 5; rowIdx++) {
-          const lz = wy0 + 7 + rowIdx * 12.5;
-          opaque.addBeveledBox(
-            wx - 2.6,
-            0,
-            lz,
-            4.4 * burnRatio,
-            3.8 * burnRatio,
-            10.8,
-            0.45,
-            logColor,
-            TexId.WOOD_GRAIN,
-            0.55
-          );
-          opaque.addBeveledBox(
-            wx + 2.6,
-            0,
-            lz,
-            4.4 * burnRatio,
-            3.8 * burnRatio,
-            10.8,
-            0.45,
-            barkColor,
-            TexId.WOOD_GRAIN,
-            0.55
-          );
-          opaque.addBeveledBox(
-            wx,
-            3.6 * burnRatio,
-            lz,
-            11.2,
-            3.8 * burnRatio,
-            4.4 * burnRatio,
-            0.45,
-            logColor,
-            TexId.WOOD_GRAIN,
-            0.55
-          );
-          if (rowIdx % 2 === 0) {
+        for (const stackRect of BASEMENT_STAIRS_WOOD_OBSTACLES) {
+          const isVertical = stackRect.height >= stackRect.width;
+          const count = 5;
+          for (let idx = 0; idx < count; idx++) {
+            const lx = isVertical ? stackRect.x + stackRect.width * 0.5 : stackRect.x + 7 + idx * 12.5;
+            const lz = isVertical ? stackRect.y + 7 + idx * 12.5 : stackRect.y + stackRect.height * 0.5;
+            const offX = isVertical ? 2.6 : 0;
+            const offZ = isVertical ? 0 : 2.6;
+            const longX = isVertical ? 4.4 * burnRatio : 10.8;
+            const longZ = isVertical ? 10.8 : 4.4 * burnRatio;
+            const crossX = isVertical ? 11.2 : 4.4 * burnRatio;
+            const crossZ = isVertical ? 4.4 * burnRatio : 11.2;
             opaque.addBeveledBox(
-              wx,
-              7.2 * burnRatio,
-              lz,
-              8.4,
-              3.4 * burnRatio,
-              4.2 * burnRatio,
+              lx - offX,
+              0,
+              lz - offZ,
+              longX,
+              3.8 * burnRatio,
+              longZ,
+              0.45,
+              logColor,
+              TexId.WOOD_GRAIN,
+              0.55
+            );
+            opaque.addBeveledBox(
+              lx + offX,
+              0,
+              lz + offZ,
+              longX,
+              3.8 * burnRatio,
+              longZ,
               0.45,
               barkColor,
               TexId.WOOD_GRAIN,
-              0.5
+              0.55
             );
+            opaque.addBeveledBox(
+              lx,
+              3.6 * burnRatio,
+              lz,
+              crossX,
+              3.8 * burnRatio,
+              crossZ,
+              0.45,
+              logColor,
+              TexId.WOOD_GRAIN,
+              0.55
+            );
+            if (idx % 2 === 0) {
+              opaque.addBeveledBox(
+                lx,
+                7.2 * burnRatio,
+                lz,
+                isVertical ? 8.4 : 4.2 * burnRatio,
+                3.4 * burnRatio,
+                isVertical ? 4.2 * burnRatio : 8.4,
+                0.45,
+                barkColor,
+                TexId.WOOD_GRAIN,
+                0.5
+              );
+            }
           }
-        }
-        if (basement.stairsWoodBurnTimer > 0) {
-          for (let fi = 0; fi < 3; fi++) {
-            const fz = wy0 + 12 + fi * 20;
-            addBurningFireEffect3D(
-              translucent,
-              pointLights,
-              wx,
-              1.2,
-              fz,
-              t + fi * 0.7,
-              1.1,
-              fi === 1 && pointLights.length < 2
-            );
+          if (basement.stairsWoodBurnTimer > 0) {
+            for (let fi = 0; fi < 3; fi++) {
+              const fx = isVertical ? stackRect.x + stackRect.width * 0.5 : stackRect.x + 12 + fi * 20;
+              const fz = isVertical ? stackRect.y + 12 + fi * 20 : stackRect.y + stackRect.height * 0.5;
+              addBurningFireEffect3D(
+                translucent,
+                pointLights,
+                fx,
+                1.2,
+                fz,
+                t + fi * 0.7,
+                1.1,
+                fi === 1 && pointLights.length < 2
+              );
+            }
           }
         }
       }
@@ -7082,21 +7129,6 @@
     }
     ctx.restore();
   }
-  function drawEmptyHandsIcon(ctx, cx, cy, scale = 1) {
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.scale(scale, scale);
-    ctx.fillStyle = "#181420";
-    ctx.fillRect(-9, -1, 5, 6);
-    ctx.fillRect(4, -1, 5, 6);
-    ctx.fillStyle = "#e2e8f0";
-    ctx.fillRect(-8, 0, 3, 4);
-    ctx.fillRect(5, 0, 3, 4);
-    ctx.fillStyle = "#d62828";
-    ctx.fillRect(-8, 4, 3, 3);
-    ctx.fillRect(5, 4, 3, 3);
-    ctx.restore();
-  }
   function drawUnarmedArmsIcon(ctx, cx, cy, punching, scale = 1) {
     ctx.save();
     ctx.translate(cx, cy);
@@ -7225,7 +7257,6 @@
         "#0c101a"
       );
     } else {
-      drawEmptyHandsIcon(ctx, iconCenterX, iconCenterY + 1, 1);
       const label = "EMPTY";
       const tw = measurePixelText(label);
       drawPixelText(
@@ -7262,9 +7293,7 @@
       }
       const icx = sx + Math.floor(slotSize / 2);
       const icy = slotsY + 11;
-      if (slot.id === "empty") {
-        drawEmptyHandsIcon(ctx, icx, icy, 0.7);
-      } else if (slot.id === "unarmed") {
+      if (slot.id === "unarmed") {
         drawUnarmedArmsIcon(ctx, icx, icy, false, 0.7);
       } else if (slot.id === "uzi") {
         drawUziIcon(ctx, icx, icy, 0.7);
@@ -7273,6 +7302,21 @@
       }
       drawPixelText(ctx, slot.key, sx + 3, slotsY + 2, "#ffd166", "#0c101a");
     });
+    ctx.restore();
+  }
+  function drawScreenFadeOverlay(ctx, state) {
+    if (!state.screenFade) {
+      return;
+    }
+    const { phase, timer, duration } = state.screenFade;
+    const progress = Math.max(0, Math.min(1, timer / Math.max(1e-3, duration)));
+    const alpha = phase === "out" ? progress : 1 - progress;
+    if (alpha <= 0) {
+      return;
+    }
+    ctx.save();
+    ctx.fillStyle = `rgba(0, 0, 0, ${alpha.toFixed(4)})`;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
     ctx.restore();
   }
   function drawAchievementBanner(ctx, text, zKeySprite, showHint) {
@@ -7985,6 +8029,7 @@
         drawEquippedItemHud(ctx, player);
       }
       drawDialogueOverlay(ctx, state, assets);
+      drawScreenFadeOverlay(ctx, state);
       return;
     }
     if (state.currentLevelId !== "level-outside") {
@@ -8175,12 +8220,9 @@
       }
       if (!basement.stairsWoodBurned) {
         ctx.fillStyle = basement.stairsWoodBurnTimer > 0 ? "#ea580c" : "#6b4226";
-        ctx.fillRect(
-          BASEMENT_STAIRS_WOOD_BOUNDS.x,
-          BASEMENT_STAIRS_WOOD_BOUNDS.y,
-          BASEMENT_STAIRS_WOOD_BOUNDS.width,
-          BASEMENT_STAIRS_WOOD_BOUNDS.height
-        );
+        for (const obs of BASEMENT_STAIRS_WOOD_OBSTACLES) {
+          ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+        }
       }
     } else if (state.currentLevelId === "level-upstairs") {
       const upstairs = state.levels["level-upstairs"];
@@ -8442,6 +8484,7 @@
       drawEquippedItemHud(ctx, player);
     }
     drawDialogueOverlay(ctx, state, assets);
+    drawScreenFadeOverlay(ctx, state);
   }
 
   // src/rendering/webglRenderer.ts
@@ -10564,6 +10607,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       debugMode,
       cheatMode,
       worldFadedToBlack,
+      screenFade: null,
       secretSantaDB
     };
     debugLog(`Loaded level: ${initialLevelId}`);
@@ -10938,7 +10982,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         const projRect = isFireball ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 } : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
         if (isFireball && state.currentLevelId === "level-basement") {
           const basement = state.levels["level-basement"];
-          if (!basement.stairsWoodBurned && rectsIntersect(projRect, BASEMENT_STAIRS_WOOD_BOUNDS)) {
+          if (!basement.stairsWoodBurned && BASEMENT_STAIRS_WOOD_OBSTACLES.some(
+            (obs) => rectsIntersect(projRect, obs)
+          )) {
             if (basement.stairsWoodBurnTimer <= 0) {
               basement.stairsWoodBurnTimer = STAIRS_WOOD_BURN_DURATION;
             }
@@ -11104,6 +11150,32 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     if (input.pointerClick) {
       input.pointerClick = null;
     }
+    if (state.screenFade) {
+      state.screenFade.timer += dtSeconds;
+      if (state.screenFade.phase === "out") {
+        if (state.screenFade.timer >= state.screenFade.duration) {
+          const onMidpoint = state.screenFade.onMidpoint;
+          state.screenFade.onMidpoint = void 0;
+          state.screenFade.phase = "in";
+          state.screenFade.timer = 0;
+          if (onMidpoint) {
+            onMidpoint();
+          }
+          if (typeof input.cameraYaw === "number") {
+            input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
+          }
+        }
+        state.player.isMoving = false;
+        state.nearbyInteractable = null;
+        return;
+      } else if (state.screenFade.timer >= state.screenFade.duration) {
+        const onComplete = state.screenFade.onComplete;
+        state.screenFade = null;
+        if (onComplete) {
+          onComplete();
+        }
+      }
+    }
     if (state.activeDialogue) {
       state.player.isMoving = false;
       if (actionPressed) {
@@ -11192,6 +11264,28 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
       if (state.activeDialogue) {
         refreshInteractables(state);
+        return;
+      }
+      if (basement.stairsWoodBurned && !state.screenFade && rectEdgeDistance(state.player, BASEMENT_STAIRS_TRIGGER_BOUNDS) <= INTERACTION_MAX_GAP_PX) {
+        state.player.isMoving = false;
+        state.nearbyInteractable = null;
+        state.screenFade = {
+          phase: "out",
+          timer: 0,
+          duration: 0.5,
+          onMidpoint: () => {
+            state.player.states.set(USED_STAIRS_STATE_KEY, true);
+            transitionCtx.loadLevel("level-upstairs");
+          },
+          onComplete: () => {
+            if (!state.player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
+              state.player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
+              transitionCtx.openDialogue([
+                "Hmm... so I believe the Christmas tree is to the left, but I must not be seen!"
+              ]);
+            }
+          }
+        };
         return;
       }
     } else if (state.currentLevelId === "level-upstairs") {

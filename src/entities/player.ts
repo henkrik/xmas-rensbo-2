@@ -22,12 +22,12 @@ export const MAX_PLAYER_HEALTH = 100;
 export const PUNCH_DURATION_SECONDS = 0.28;
 export const UZI_EQUIP_DURATION_SECONDS = 0.5;
 export const UZI_DROP_DURATION_SECONDS = 0.45;
-export const UZI_FIRE_INTERVAL_SECONDS = 0.2;
+export const UZI_FIRE_INTERVAL_SECONDS = 0.1;
 export const UZI_PROJECTILE_SPEED = 16 * TILE_SIZE;
 export const MAX_UZI_AMMO = 30;
-export const FLAMETHROWER_FIRE_INTERVAL_SECONDS = 0.25;
-export const FLAMETHROWER_PROJECTILE_SPEED = 2.5 * TILE_SIZE;
-export const FLAMETHROWER_MAX_DISTANCE = 3 * TILE_SIZE;
+export const FLAMETHROWER_FIRE_INTERVAL_SECONDS = 0.05;
+export const FLAMETHROWER_PROJECTILE_SPEED = 5 * TILE_SIZE;
+export const FLAMETHROWER_MAX_DISTANCE = 6 * TILE_SIZE;
 
 export type EquipmentId = 'empty' | 'unarmed' | 'uzi' | 'flamethrower';
 

@@ -14,7 +14,7 @@ import {
   BASEMENT_HALL_NORTH_DOOR_BOUNDS,
   BASEMENT_MINE_BOUNDS,
   BASEMENT_SPA_HIDDEN_MASK,
-  BASEMENT_STAIRS_WOOD_BOUNDS,
+  BASEMENT_STAIRS_WOOD_OBSTACLES,
 } from '../world/levels/levelBasement';
 import {
   DIANA_DISTRACTED_KEY,
@@ -426,30 +426,6 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
   ctx.restore();
 }
 
-function drawEmptyHandsIcon(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  scale = 1
-): void {
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.scale(scale, scale);
-
-  // Relaxed mittens open / idle
-  ctx.fillStyle = '#181420';
-  ctx.fillRect(-9, -1, 5, 6);
-  ctx.fillRect(4, -1, 5, 6);
-  ctx.fillStyle = '#e2e8f0';
-  ctx.fillRect(-8, 0, 3, 4);
-  ctx.fillRect(5, 0, 3, 4);
-  ctx.fillStyle = '#d62828';
-  ctx.fillRect(-8, 4, 3, 3);
-  ctx.fillRect(5, 4, 3, 3);
-
-  ctx.restore();
-}
-
 function drawUnarmedArmsIcon(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -621,7 +597,7 @@ export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Playe
       '#0c101a'
     );
   } else {
-    drawEmptyHandsIcon(ctx, iconCenterX, iconCenterY + 1, 1);
+    // 'empty' slot renders nothing in the icon area (only the 'EMPTY' label)
     const label = 'EMPTY';
     const tw = measurePixelText(label);
     drawPixelText(
@@ -662,9 +638,7 @@ export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Playe
     }
     const icx = sx + Math.floor(slotSize / 2);
     const icy = slotsY + 11;
-    if (slot.id === 'empty') {
-      drawEmptyHandsIcon(ctx, icx, icy, 0.7);
-    } else if (slot.id === 'unarmed') {
+    if (slot.id === 'unarmed') {
       drawUnarmedArmsIcon(ctx, icx, icy, false, 0.7);
     } else if (slot.id === 'uzi') {
       drawUziIcon(ctx, icx, icy, 0.7);
@@ -674,6 +648,25 @@ export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Playe
     drawPixelText(ctx, slot.key, sx + 3, slotsY + 2, '#ffd166', '#0c101a');
   });
 
+  ctx.restore();
+}
+
+function drawScreenFadeOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: GameState
+): void {
+  if (!state.screenFade) {
+    return;
+  }
+  const { phase, timer, duration } = state.screenFade;
+  const progress = Math.max(0, Math.min(1, timer / Math.max(0.001, duration)));
+  const alpha = phase === 'out' ? progress : 1 - progress;
+  if (alpha <= 0) {
+    return;
+  }
+  ctx.save();
+  ctx.fillStyle = `rgba(0, 0, 0, ${alpha.toFixed(4)})`;
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.restore();
 }
 
@@ -1688,6 +1681,7 @@ export function renderGame(
       drawEquippedItemHud(ctx, player);
     }
     drawDialogueOverlay(ctx, state, assets);
+    drawScreenFadeOverlay(ctx, state);
     return;
   }
 
@@ -1928,12 +1922,9 @@ export function renderGame(
     }
     if (!basement.stairsWoodBurned) {
       ctx.fillStyle = basement.stairsWoodBurnTimer > 0 ? '#ea580c' : '#6b4226';
-      ctx.fillRect(
-        BASEMENT_STAIRS_WOOD_BOUNDS.x,
-        BASEMENT_STAIRS_WOOD_BOUNDS.y,
-        BASEMENT_STAIRS_WOOD_BOUNDS.width,
-        BASEMENT_STAIRS_WOOD_BOUNDS.height
-      );
+      for (const obs of BASEMENT_STAIRS_WOOD_OBSTACLES) {
+        ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+      }
     }
   } else if (state.currentLevelId === 'level-upstairs') {
     const upstairs = state.levels['level-upstairs'];
@@ -2246,4 +2237,5 @@ export function renderGame(
     drawEquippedItemHud(ctx, player);
   }
   drawDialogueOverlay(ctx, state, assets);
+  drawScreenFadeOverlay(ctx, state);
 }

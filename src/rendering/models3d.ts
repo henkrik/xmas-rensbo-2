@@ -31,7 +31,7 @@ import {
   BASEMENT_MINE_BOUNDS,
   BASEMENT_MINE_FUSE_SECONDS,
   BASEMENT_SPA_HIDDEN_MASK,
-  BASEMENT_STAIRS_WOOD_BOUNDS,
+  BASEMENT_STAIRS_WOOD_OBSTACLES,
   STAIRS_WOOD_BURN_DURATION,
 } from '../world/levels/levelBasement';
 import {
@@ -1651,21 +1651,23 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
       [9.5, 9.5],
       [9.5, 16.5],
       [16.0, 16.0],
-      [16.0, 9.8], // Spa Room chandelier
+      [16.0, 8.5], // Expanded Spa Room chandelier
       [20.5, 9.5],
     ],
   });
 
-  // Spa Room Warm Cedar Jacuzzi & Steam Basin (cols 14..17, row 8.3 => north end of Spa Room)
+  // Expanded Spa Room: empty bathroom-tiled room except one water-filled bathtub at the north end
   {
     const sx = 16.0 * ts;
-    const sz = 8.45 * ts;
-    mb.addBeveledBox(sx, 0, sz, 3.2 * ts, 5.2, 13.5, 0.7, rgb(146, 90, 48), TexId.WOOD_GRAIN, 0.7);
-    mb.addTorus(sx, 5.1, sz, 16.0, 0.85, 14, 6, 'y', rgb(118, 70, 36), TexId.WOOD_GRAIN, 0.45);
-    mb.addBox(sx, 4.7, sz, 2.7 * ts, 0.5, 9.5, rgb(84, 198, 224), TexId.WINDOW_GLOW, 0.25);
-    // Warm folded spa towels on east cedar bench (col 17.5, row 10.6)
-    mb.addBeveledBox(17.45 * ts, 0, 10.7 * ts, 8.5, 3.4, 18, 0.4, rgb(154, 98, 52), TexId.WOOD_GRAIN, 0.55);
-    mb.addBeveledBox(17.45 * ts, 3.4, 10.7 * ts, 5.5, 1.4, 7.5, 0.4, rgb(248, 250, 255), TexId.FABRIC, 0.4);
+    const sz = 5.65 * ts;
+    // Porcelain outer tub shell & rolled rim
+    mb.addBeveledBox(sx, 0, sz, 3.1 * ts, 5.4, 15.0, 0.75, rgb(244, 248, 252), TexId.SOLID, 0.7);
+    mb.addBeveledBox(sx, 5.0, sz, 3.25 * ts, 0.8, 16.4, 0.35, rgb(252, 254, 255), TexId.SOLID, 0.45);
+    // Water filling the bathtub
+    mb.addBox(sx, 4.45, sz, 2.75 * ts, 0.6, 12.2, rgb(56, 174, 232), TexId.WINDOW_GLOW, 0.25);
+    // Chrome faucet & handles centered against the north wall rim
+    mb.addCylinder(sx, 5.4, sz - 7.1, 0.55, 0.55, 2.2, 8, rgb(210, 218, 228), TexId.SOLID, 0.3);
+    mb.addBox(sx, 7.2, sz - 6.2, 0.75, 0.65, 2.1, rgb(210, 218, 228), TexId.SOLID, 0.25);
   }
 
   // 1. Two-Tier Floor-to-Ceiling Library Bookshelf on north wall (cols 7..12, row 7 => z: 120)
@@ -2544,9 +2546,9 @@ export function addHumanoid3D(
   const vibeActive =
     (isHoldingUzi || isHoldingFlamethrower) && (style.weaponVibrationTimer ?? 0) > 0;
   const vibeTime = style.elapsedTime ?? walkPhase;
-  const vibeFwd = vibeActive ? Math.sin(vibeTime * 95) * 0.55 : 0;
-  const vibeSide = vibeActive ? Math.cos(vibeTime * 115) * 0.42 : 0;
-  const vibeUp = vibeActive ? Math.sin(vibeTime * 135) * 0.42 : 0;
+  const vibeFwd = vibeActive ? Math.sin(vibeTime * 78) * 0.24 : 0;
+  const vibeSide = vibeActive ? Math.cos(vibeTime * 92) * 0.18 : 0;
+  const vibeUp = vibeActive ? Math.sin(vibeTime * 106) * 0.18 : 0;
 
   for (const side of [1, -1] as const) {
     // Shoulder cap
@@ -2682,8 +2684,8 @@ export function addHumanoid3D(
     }
 
     if (isUnarmedPunch) {
-      // Unarmed punching animation: quickly flail both arms forward and side-to-side
-      const flailPhase = punchProgress * Math.PI * 6;
+      // Unarmed punching animation: flail both arms forward and side-to-side (25% slower cadence)
+      const flailPhase = punchProgress * Math.PI * 4.5;
       const sideSign = side === activePunchSide ? 1 : -1;
       const envelope = Math.sin(punchProgress * Math.PI);
       const flailSin = Math.sin(flailPhase) * sideSign;
@@ -3713,10 +3715,8 @@ export function buildDynamicSceneMeshes(
       );
     }
 
-    // Burnable Stack of Wood blocking the stairs up
+    // Burnable Stacks of Wood all the way around the stairs (North, West, South)
     if (!basement.stairsWoodBurned) {
-      const wx = BASEMENT_STAIRS_WOOD_BOUNDS.x + BASEMENT_STAIRS_WOOD_BOUNDS.width * 0.5;
-      const wy0 = BASEMENT_STAIRS_WOOD_BOUNDS.y;
       const burnRatio =
         basement.stairsWoodBurnTimer > 0
           ? Math.max(0.18, basement.stairsWoodBurnTimer / STAIRS_WOOD_BURN_DURATION)
@@ -3726,75 +3726,94 @@ export function buildDynamicSceneMeshes(
       const barkColor =
         basement.stairsWoodBurnTimer > 0 ? rgb(52, 28, 18) : rgb(98, 58, 30);
 
-      for (let rowIdx = 0; rowIdx < 5; rowIdx++) {
-        const lz = wy0 + 7 + rowIdx * 12.5;
-        // Bottom log tier
-        opaque.addBeveledBox(
-          wx - 2.6,
-          0,
-          lz,
-          4.4 * burnRatio,
-          3.8 * burnRatio,
-          10.8,
-          0.45,
-          logColor,
-          TexId.WOOD_GRAIN,
-          0.55
-        );
-        opaque.addBeveledBox(
-          wx + 2.6,
-          0,
-          lz,
-          4.4 * burnRatio,
-          3.8 * burnRatio,
-          10.8,
-          0.45,
-          barkColor,
-          TexId.WOOD_GRAIN,
-          0.55
-        );
-        // Middle & top stacked logs blocking stairwell
-        opaque.addBeveledBox(
-          wx,
-          3.6 * burnRatio,
-          lz,
-          11.2,
-          3.8 * burnRatio,
-          4.4 * burnRatio,
-          0.45,
-          logColor,
-          TexId.WOOD_GRAIN,
-          0.55
-        );
-        if (rowIdx % 2 === 0) {
+      for (const stackRect of BASEMENT_STAIRS_WOOD_OBSTACLES) {
+        const isVertical = stackRect.height >= stackRect.width;
+        const count = 5;
+        for (let idx = 0; idx < count; idx++) {
+          const lx = isVertical
+            ? stackRect.x + stackRect.width * 0.5
+            : stackRect.x + 7 + idx * 12.5;
+          const lz = isVertical
+            ? stackRect.y + 7 + idx * 12.5
+            : stackRect.y + stackRect.height * 0.5;
+          const offX = isVertical ? 2.6 : 0;
+          const offZ = isVertical ? 0 : 2.6;
+          const longX = isVertical ? 4.4 * burnRatio : 10.8;
+          const longZ = isVertical ? 10.8 : 4.4 * burnRatio;
+          const crossX = isVertical ? 11.2 : 4.4 * burnRatio;
+          const crossZ = isVertical ? 4.4 * burnRatio : 11.2;
+
           opaque.addBeveledBox(
-            wx,
-            7.2 * burnRatio,
-            lz,
-            8.4,
-            3.4 * burnRatio,
-            4.2 * burnRatio,
+            lx - offX,
+            0,
+            lz - offZ,
+            longX,
+            3.8 * burnRatio,
+            longZ,
+            0.45,
+            logColor,
+            TexId.WOOD_GRAIN,
+            0.55
+          );
+          opaque.addBeveledBox(
+            lx + offX,
+            0,
+            lz + offZ,
+            longX,
+            3.8 * burnRatio,
+            longZ,
             0.45,
             barkColor,
             TexId.WOOD_GRAIN,
-            0.5
+            0.55
           );
+          opaque.addBeveledBox(
+            lx,
+            3.6 * burnRatio,
+            lz,
+            crossX,
+            3.8 * burnRatio,
+            crossZ,
+            0.45,
+            logColor,
+            TexId.WOOD_GRAIN,
+            0.55
+          );
+          if (idx % 2 === 0) {
+            opaque.addBeveledBox(
+              lx,
+              7.2 * burnRatio,
+              lz,
+              isVertical ? 8.4 : 4.2 * burnRatio,
+              3.4 * burnRatio,
+              isVertical ? 4.2 * burnRatio : 8.4,
+              0.45,
+              barkColor,
+              TexId.WOOD_GRAIN,
+              0.5
+            );
+          }
         }
-      }
 
-      if (basement.stairsWoodBurnTimer > 0) {
-        for (let fi = 0; fi < 3; fi++) {
-          const fz = wy0 + 12 + fi * 20;
-          addBurningFireEffect3D(
-            translucent,
-            pointLights,
-            wx,
-            1.2,
-            fz,
-            t + fi * 0.7,
-            1.1,
-            fi === 1 && pointLights.length < 2
-          );
+        if (basement.stairsWoodBurnTimer > 0) {
+          for (let fi = 0; fi < 3; fi++) {
+            const fx = isVertical
+              ? stackRect.x + stackRect.width * 0.5
+              : stackRect.x + 12 + fi * 20;
+            const fz = isVertical
+              ? stackRect.y + 12 + fi * 20
+              : stackRect.y + stackRect.height * 0.5;
+            addBurningFireEffect3D(
+              translucent,
+              pointLights,
+              fx,
+              1.2,
+              fz,
+              t + fi * 0.7,
+              1.1,
+              fi === 1 && pointLights.length < 2
+            );
+          }
         }
       }
     }

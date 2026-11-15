@@ -1,6 +1,6 @@
 # xmas-rensbo
 
-**[Play here](https://henkrik.github.io/xmas-rensbo/)**
+**[Play here](https://henkrik.github.io/xmas-rensbo-2/)**
 
 A short 2D top-down Christmas adventure game with the look and feel of SNES-era *The Legend of Zelda: A Link to the Past*.
 

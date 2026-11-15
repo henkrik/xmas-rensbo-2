@@ -107,6 +107,18 @@ export function buildInteractables(
   });
 
   list.push({
+    id: 'house-double-door',
+    bounds: {
+      x: 9 * TILE_SIZE + 8,
+      y: HOUSE_DOOR_ROW * TILE_SIZE,
+      width: TILE_SIZE * 2,
+      height: TILE_SIZE,
+    },
+    promptText: 'Open door',
+    dialogueLines: ["It's locked."],
+  });
+
+  list.push({
     id: 'house-door',
     bounds: {
       x: HOUSE_DOOR_COL * TILE_SIZE,

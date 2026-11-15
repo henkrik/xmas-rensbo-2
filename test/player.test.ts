@@ -3251,4 +3251,22 @@ Tanja -> Alex
     expect(state.player.y).toBeCloseTo(posYAfterStrafe, 5);
     expect(input.cameraYaw).toBeGreaterThan(-Math.PI / 2);
   });
+
+  it('has a locked double door at the center porch of the outside house', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+
+    // Stand directly in front of the center porch (cols 9..11, row 10)
+    state.player.x = 10 * TILE_SIZE + 2;
+    state.player.y = 10 * TILE_SIZE + 1;
+    updateGameState(state, input, 0.01);
+
+    expect(state.nearbyInteractable?.id).toBe('house-double-door');
+    expect(state.nearbyInteractable?.promptText).toBe('Open door');
+
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.activeDialogue?.lines).toEqual(["It's locked."]);
+  });
 });

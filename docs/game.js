@@ -3661,7 +3661,12 @@
       mb.addBox(152, baseY + 8.5, z1 + 10.5, 12, 1.2, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.4);
       mb.addBox(184, baseY + 8.5, z1 + 10.5, 12, 1.2, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.4);
       mb.addGableRoof(168, baseY + 24, z1 + 5.5, 54, 7.5, 15, false, rgb(62, 74, 94), rgb(246, 222, 166), TexId.ROOF_SLATE, 0.7, false);
-      mb.addBox(168, baseY + 8.5, z1 + 0.6, 36, 13, 1.4, rgb(255, 232, 145), TexId.WINDOW_GLOW, 0.45);
+      mb.addBox(168, baseY + 4.2, z1 + 0.4, 28, 19.2, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.5);
+      mb.addBeveledBox(168 - 6.4, baseY + 4.2, z1 + 0.8, 12, 17.8, 1.6, 0.45, rgb(124, 64, 34), TexId.WOOD_GRAIN, 0.6);
+      mb.addBeveledBox(168 + 6.4, baseY + 4.2, z1 + 0.8, 12, 17.8, 1.6, 0.45, rgb(124, 64, 34), TexId.WOOD_GRAIN, 0.6);
+      mb.addBox(168, baseY + 4.2, z1 + 1, 0.7, 17.8, 1.7, rgb(52, 28, 16), TexId.SOLID, 0.2);
+      mb.addSphere(168 - 1.9, baseY + 12.2, z1 + 1.9, 0.7, 1.1, 0.6, 4, 6, rgb(242, 200, 74), TexId.SOLID, 0.3);
+      mb.addSphere(168 + 1.9, baseY + 12.2, z1 + 1.9, 0.7, 1.1, 0.6, 4, 6, rgb(242, 200, 74), TexId.SOLID, 0.3);
       const doorX = 13.5 * ts;
       mb.addBox(doorX, baseY + 2, z1 + 0.4, 15, 19.5, 1.4, rgb(248, 248, 252), TexId.SOLID, 0.5);
       mb.addBeveledBox(doorX, baseY + 2, z1 + 0.8, 12.5, 18, 1.6, 0.5, rgb(124, 64, 34), TexId.WOOD_GRAIN, 0.6);
@@ -8155,6 +8160,17 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         promptText: "Talk to",
         dialogueLines: ["Watch out!"]
       };
+    });
+    list.push({
+      id: "house-double-door",
+      bounds: {
+        x: 9 * TILE_SIZE + 8,
+        y: HOUSE_DOOR_ROW * TILE_SIZE,
+        width: TILE_SIZE * 2,
+        height: TILE_SIZE
+      },
+      promptText: "Open door",
+      dialogueLines: ["It's locked."]
     });
     list.push({
       id: "house-door",

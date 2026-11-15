@@ -585,7 +585,25 @@ export function updateCamera3D(
     }
   }
 
-  // Sync yaw/pitch on InputState if active
+  const isCutsceneOrSpecialLock =
+    (state.currentLevelId === 'level-outside' &&
+      (state.motorcycle.status === 'driving' || state.climbing !== null)) ||
+    (state.currentLevelId === 'level-upstairs' &&
+      state.levels['level-upstairs'].rosannaCutscene?.active === true) ||
+    (state.currentLevelId === 'level-basement' &&
+      state.levels['level-basement'].toiletCutscene?.active === true);
+  if (
+    typeof input.cameraYaw === 'number' &&
+    player.equippedItem !== 'empty' &&
+    !isCutsceneOrSpecialLock
+  ) {
+    player.yaw = wrapAngle(input.cameraYaw);
+    player.facing = yawToDirection(player.yaw);
+    if (dtSeconds > 0) {
+      const turnBlend = Math.min(1, dtSeconds * 16);
+      player.renderYaw = lerpAngle(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
+    }
+  }
   if (typeof input.cameraYaw === 'number') {
     cam.yaw = wrapAngle(input.cameraYaw);
   } else if (player.isMoving && dtSeconds > 0) {

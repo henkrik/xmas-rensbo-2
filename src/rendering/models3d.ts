@@ -18,12 +18,22 @@
 import { Cat } from '../entities/cat';
 import { Dog } from '../entities/dog';
 import {
+  EquipmentId,
   PUNCH_DURATION_SECONDS,
+  UZI_DROP_DURATION_SECONDS,
   UZI_EQUIP_DURATION_SECONDS,
 } from '../entities/player';
 import { ConeOfSight } from '../entities/sight';
 import { SnowballThrower } from '../entities/snowball';
 import { GameState, MotorcycleState } from '../world/gameState';
+import {
+  BASEMENT_FLAMETHROWER_BOUNDS,
+  BASEMENT_MINE_BOUNDS,
+  BASEMENT_MINE_FUSE_SECONDS,
+  BASEMENT_SPA_HIDDEN_MASK,
+  BASEMENT_STAIRS_WOOD_BOUNDS,
+  STAIRS_WOOD_BURN_DURATION,
+} from '../world/levels/levelBasement';
 import {
   DIANA_DISTRACTED_KEY,
   DIANA_PRESENT_TAKEN_KEY,
@@ -1609,7 +1619,7 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
   const ts = map.tileSize; // 16
 
   const wallOverrides = new Map<string, WallOverrideKind>([
-    // Locked North Door (cols 15..16, row 12)
+    // Spa double doorway flanking jamb pullback hints (cols 15..16, row 12)
     [tileKey(15, 12), 'door-left'],
     [tileKey(16, 12), 'door-right'],
     // Locked Front Door (cols 15..16, row 20)
@@ -1630,6 +1640,10 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
     openableDoorCoords: [[20, 12]], // Bathroom door
   });
 
+  // Recessed double-door casing & upper wall header above the Spa Doors (cols 15..16, row 12)
+  addDoorWallLintelTile3D(mb, 15, 12, ts, INDOOR_WALL_HEIGHT, 'door-left');
+  addDoorWallLintelTile3D(mb, 16, 12, ts, INDOOR_WALL_HEIGHT, 'door-right');
+
   // Aesthetic Coffered Ceiling + Rafters + Chandeliers (leave stairwell at cols 18..21, rows 15..18 open)
   addIndoorCeiling3D(mb, map, {
     skipRect: { minCol: 18, maxCol: 21, minRow: 15, maxRow: 18 },
@@ -1637,9 +1651,22 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
       [9.5, 9.5],
       [9.5, 16.5],
       [16.0, 16.0],
+      [16.0, 9.8], // Spa Room chandelier
       [20.5, 9.5],
     ],
   });
+
+  // Spa Room Warm Cedar Jacuzzi & Steam Basin (cols 14..17, row 8.3 => north end of Spa Room)
+  {
+    const sx = 16.0 * ts;
+    const sz = 8.45 * ts;
+    mb.addBeveledBox(sx, 0, sz, 3.2 * ts, 5.2, 13.5, 0.7, rgb(146, 90, 48), TexId.WOOD_GRAIN, 0.7);
+    mb.addTorus(sx, 5.1, sz, 16.0, 0.85, 14, 6, 'y', rgb(118, 70, 36), TexId.WOOD_GRAIN, 0.45);
+    mb.addBox(sx, 4.7, sz, 2.7 * ts, 0.5, 9.5, rgb(84, 198, 224), TexId.WINDOW_GLOW, 0.25);
+    // Warm folded spa towels on east cedar bench (col 17.5, row 10.6)
+    mb.addBeveledBox(17.45 * ts, 0, 10.7 * ts, 8.5, 3.4, 18, 0.4, rgb(154, 98, 52), TexId.WOOD_GRAIN, 0.55);
+    mb.addBeveledBox(17.45 * ts, 3.4, 10.7 * ts, 5.5, 1.4, 7.5, 0.4, rgb(248, 250, 255), TexId.FABRIC, 0.4);
+  }
 
   // 1. Two-Tier Floor-to-Ceiling Library Bookshelf on north wall (cols 7..12, row 7 => z: 120)
   {
@@ -1793,8 +1820,8 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
     mb.addCylinder(tx, 19.75, tz, 2.02, 2.02, 0.5, 12, rgb(168, 42, 44), TexId.SOLID, 0.25);
   }
 
-  // 8. Locked Double Doors recessed cleanly inside wall openings (cols 15..16, row 12 & row 20)
-  addLockedDoubleDoor3D(mb, 16 * ts, 12.5 * ts, ts);
+  // 8. Locked Front Double Door recessed cleanly inside wall opening (cols 15..16, row 20)
+  // (The north Spa Double Door at row 12 is built dynamically so it breaks open on mine explosion.)
   addLockedDoubleDoor3D(mb, 16 * ts, 20.5 * ts, ts);
 
   // 9. High-Fi Basement Staircase rising up to the ceiling stairwell opening (cols 18..21, rows 15..18)
@@ -2160,6 +2187,246 @@ export function getStaticLevelMesh(levelId: LevelId, map: TileMap): MeshData {
 // High-Fi 3D Articulated Character Models (Santa, 11 NPCs, Dog, Cat, Props)
 // ============================================================================
 
+function addUziGeometry3D(
+  mb: MeshBuilder,
+  hx: number,
+  hy: number,
+  hz: number,
+  dirX: number,
+  dirY: number,
+  dirZ: number,
+  upGX: number,
+  upGY: number,
+  upGZ: number,
+  yaw: number,
+  gunPitch: number,
+  scale = 1
+): void {
+  const gunDark = rgb(32, 36, 46);
+  const gunSteel = rgb(64, 72, 88);
+  const gunBarrel = rgb(20, 24, 32);
+
+  // Receiver body
+  mb.addOrientedBox(
+    hx + dirX * 1.1 * scale + upGX * 1.35 * scale,
+    hy + dirY * 1.1 * scale + upGY * 1.35 * scale,
+    hz + dirZ * 1.1 * scale + upGZ * 1.35 * scale,
+    4.6 * scale,
+    1.6 * scale,
+    1.15 * scale,
+    yaw,
+    gunPitch,
+    gunDark,
+    TexId.SOLID,
+    0.45 * scale
+  );
+  // Top bolt/sight shroud
+  mb.addOrientedBox(
+    hx + dirX * 1.0 * scale + upGX * 2.25 * scale,
+    hy + dirY * 1.0 * scale + upGY * 2.25 * scale,
+    hz + dirZ * 1.0 * scale + upGZ * 2.25 * scale,
+    3.2 * scale,
+    0.55 * scale,
+    0.9 * scale,
+    yaw,
+    gunPitch,
+    gunSteel,
+    TexId.SOLID,
+    0.3 * scale
+  );
+  // Forward barrel
+  mb.addOrientedBox(
+    hx + dirX * 4.3 * scale + upGX * 1.5 * scale,
+    hy + dirY * 4.3 * scale + upGY * 1.5 * scale,
+    hz + dirZ * 4.3 * scale + upGZ * 1.5 * scale,
+    2.6 * scale,
+    0.65 * scale,
+    0.65 * scale,
+    yaw,
+    gunPitch,
+    gunBarrel,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  // Grip & vertical magazine
+  mb.addOrientedBox(
+    hx + dirX * 0.2 * scale - upGX * 0.55 * scale,
+    hy + dirY * 0.2 * scale - upGY * 0.55 * scale,
+    hz + dirZ * 0.2 * scale - upGZ * 0.55 * scale,
+    1.1 * scale,
+    2.6 * scale,
+    0.85 * scale,
+    yaw,
+    gunPitch,
+    gunDark,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  mb.addOrientedBox(
+    hx + dirX * 0.2 * scale - upGX * 2.1 * scale,
+    hy + dirY * 0.2 * scale - upGY * 2.1 * scale,
+    hz + dirZ * 0.2 * scale - upGZ * 2.1 * scale,
+    0.85 * scale,
+    1.5 * scale,
+    0.7 * scale,
+    yaw,
+    gunPitch,
+    gunSteel,
+    TexId.SOLID,
+    0.3 * scale
+  );
+}
+
+function addFlamethrowerGeometry3D(
+  mb: MeshBuilder,
+  hx: number,
+  hy: number,
+  hz: number,
+  dirX: number,
+  dirY: number,
+  dirZ: number,
+  upGX: number,
+  upGY: number,
+  upGZ: number,
+  rx: number,
+  rz: number,
+  yaw: number,
+  gunPitch: number,
+  scale = 1
+): void {
+  const barrelDark = rgb(44, 48, 56);
+  const tankRed = rgb(212, 46, 36);
+  const brass = rgb(228, 178, 62);
+  const nozzleDark = rgb(28, 30, 36);
+
+  // Heavy main projector tube
+  mb.addOrientedBox(
+    hx + dirX * 2.5 * scale + upGX * 1.2 * scale,
+    hy + dirY * 2.5 * scale + upGY * 1.2 * scale,
+    hz + dirZ * 2.5 * scale + upGZ * 1.2 * scale,
+    7.8 * scale,
+    1.7 * scale,
+    1.5 * scale,
+    yaw,
+    gunPitch,
+    barrelDark,
+    TexId.SOLID,
+    0.45 * scale
+  );
+  // Pressurized crimson fuel tank mounted underneath & slightly right
+  mb.addOrientedBox(
+    hx + dirX * 1.4 * scale - upGX * 0.8 * scale + rx * 0.9 * scale,
+    hy + dirY * 1.4 * scale - upGY * 0.8 * scale,
+    hz + dirZ * 1.4 * scale - upGZ * 0.8 * scale + rz * 0.9 * scale,
+    4.6 * scale,
+    2.1 * scale,
+    1.9 * scale,
+    yaw,
+    gunPitch,
+    tankRed,
+    TexId.SOLID,
+    0.45 * scale
+  );
+  // Rear handle & brass regulator collar
+  mb.addOrientedBox(
+    hx - dirX * 0.2 * scale - upGX * 0.5 * scale,
+    hy - dirY * 0.2 * scale - upGY * 0.5 * scale,
+    hz - dirZ * 0.2 * scale - upGZ * 0.5 * scale,
+    1.3 * scale,
+    2.6 * scale,
+    1.0 * scale,
+    yaw,
+    gunPitch,
+    nozzleDark,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  mb.addOrientedBox(
+    hx + dirX * 5.6 * scale + upGX * 1.2 * scale,
+    hy + dirY * 5.6 * scale + upGY * 1.2 * scale,
+    hz + dirZ * 5.6 * scale + upGZ * 1.2 * scale,
+    1.2 * scale,
+    2.0 * scale,
+    1.8 * scale,
+    yaw,
+    gunPitch,
+    brass,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  // Wide igniter bell + pilot spark at muzzle tip
+  mb.addOrientedBox(
+    hx + dirX * 7.2 * scale + upGX * 1.2 * scale,
+    hy + dirY * 7.2 * scale + upGY * 1.2 * scale,
+    hz + dirZ * 7.2 * scale + upGZ * 1.2 * scale,
+    2.2 * scale,
+    1.25 * scale,
+    1.25 * scale,
+    yaw,
+    gunPitch,
+    nozzleDark,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  mb.addSphere(
+    hx + dirX * 8.6 * scale + upGX * 1.45 * scale,
+    hy + dirY * 8.6 * scale + upGY * 1.45 * scale,
+    hz + dirZ * 8.6 * scale + upGZ * 1.45 * scale,
+    0.7 * scale,
+    0.7 * scale,
+    0.7 * scale,
+    6,
+    6,
+    rgb(255, 168, 48),
+    TexId.SOLID,
+    0
+  );
+}
+
+function addBurningFireEffect3D(
+  translucentMb: MeshBuilder,
+  pointLights: PointLight3D[],
+  cx: number,
+  baseY: number,
+  cz: number,
+  t: number,
+  scale = 1,
+  addLight = true
+): void {
+  for (let i = 0; i < 6; i++) {
+    const ang = t * 5.2 + i * ((Math.PI * 2) / 6);
+    const orbitR = (1.6 + (i % 2) * 1.3) * scale;
+    const fx = cx + Math.cos(ang) * orbitR;
+    const fz = cz + Math.sin(ang) * orbitR;
+    const flicker = Math.sin(t * 15 + i * 1.9) * 1.8 * scale;
+    const flameH = Math.max(2.5, (5.8 + flicker) * scale);
+    const flameBaseY = baseY + (0.8 + (i % 3) * 2.2) * scale;
+    translucentMb.addCone(
+      fx,
+      flameBaseY,
+      fz,
+      1.9 * scale,
+      flameH,
+      8,
+      i % 2 === 0 ? rgb(255, 128, 28, 0.92) : rgb(255, 224, 68, 0.92),
+      TexId.SOLID,
+      0
+    );
+  }
+  if (addLight) {
+    pointLights.push({
+      x: cx,
+      y: baseY + 8 * scale,
+      z: cz,
+      r: 1.0,
+      g: 0.56,
+      b: 0.16,
+      radius: 75 * scale,
+      intensity: 0.9 + Math.sin(t * 16) * 0.18,
+    });
+  }
+}
+
 export interface CharacterColors3D {
   coat: Color4;
   trim: Color4;
@@ -2172,10 +2439,13 @@ export interface CharacterColors3D {
   holdingBook?: boolean;
   sitting?: boolean;
   hasPresentInLap?: boolean;
-  equippedItem?: 'unarmed' | 'uzi';
+  equippedItem?: EquipmentId;
   punchTimer?: number;
   punchHand?: 'left' | 'right';
   uziEquipTimer?: number;
+  uziDropTimer?: number;
+  weaponVibrationTimer?: number;
+  elapsedTime?: number;
 }
 
 export function addHumanoid3D(
@@ -2256,18 +2526,27 @@ export function addHumanoid3D(
     mb.addTorus(cx, y0 + 10.2, cz, 2.85, 0.75, 12, 8, 'y', style.trim, TexId.FABRIC, 0.45);
   }
 
-  // 3. Articulated Shoulders, Arms & Rounded Mittens/Hands (plus Unarmed Punch & Uzi Weapon)
+  // 3. Articulated Shoulders, Arms & Rounded Mittens/Hands (Empty, Flailing Punch, Uzi, Drop, Flamethrower)
   const armSpread = 4.35;
   const mittenColor: Color4 = isSanta ? rgb(224, 232, 245) : style.skin;
+  const equippedItem: EquipmentId = style.equippedItem ?? 'empty';
   const isUnarmedPunch =
-    (style.equippedItem ?? 'unarmed') === 'unarmed' &&
+    equippedItem === 'unarmed' &&
     (style.punchTimer ?? 0) > 0;
   const punchProgress = isUnarmedPunch
     ? 1 - Math.max(0, Math.min(1, (style.punchTimer ?? 0) / PUNCH_DURATION_SECONDS))
     : 0;
-  const punchCurve = Math.sin(punchProgress * Math.PI);
   const activePunchSide = style.punchHand === 'left' ? -1 : 1;
-  const isHoldingUzi = style.equippedItem === 'uzi';
+  const isHoldingUzi = equippedItem === 'uzi';
+  const isHoldingFlamethrower = equippedItem === 'flamethrower';
+  const isDroppingUzi =
+    (style.uziDropTimer ?? 0) > 0 && !isHoldingUzi && !isHoldingFlamethrower;
+  const vibeActive =
+    (isHoldingUzi || isHoldingFlamethrower) && (style.weaponVibrationTimer ?? 0) > 0;
+  const vibeTime = style.elapsedTime ?? walkPhase;
+  const vibeFwd = vibeActive ? Math.sin(vibeTime * 95) * 0.55 : 0;
+  const vibeSide = vibeActive ? Math.cos(vibeTime * 115) * 0.42 : 0;
+  const vibeUp = vibeActive ? Math.sin(vibeTime * 135) * 0.42 : 0;
 
   for (const side of [1, -1] as const) {
     // Shoulder cap
@@ -2276,9 +2555,57 @@ export function addHumanoid3D(
     const shoulderZ = cz + rz * 3.7 * side;
     mb.addSphere(shoulderX, shoulderY, shoulderZ, 1.4, 1.4, 1.4, 6, 8, style.coat, TexId.FABRIC, 0.5);
 
-    if (isHoldingUzi && side === 1) {
-      // Right arm holding the Uzi: smoothly rotates from sky (PI) to forward aim (PI/2) over 0.5s
-      const equipTimer = Math.max(0, style.uziEquipTimer ?? 0);
+    if (isDroppingUzi && side === 1) {
+      // Out-of-ammo animation: extend right arm out to the right and drop the Uzi
+      const dropProgress =
+        1 - Math.max(0, Math.min(1, (style.uziDropTimer ?? 0) / UZI_DROP_DURATION_SECONDS));
+      const extFactor =
+        dropProgress < 0.4
+          ? dropProgress / 0.4
+          : dropProgress < 0.72
+            ? 1
+            : Math.max(0, 1 - (dropProgress - 0.72) / 0.28);
+      const dropTheta = extFactor * (Math.PI * 0.52);
+      const sd = Math.sin(dropTheta);
+      const cd = Math.cos(dropTheta);
+      const dirX = rx * sd;
+      const dirY = -cd;
+      const dirZ = rz * sd;
+      const ax0 = cx + rx * armSpread;
+      const az0 = cz + rz * armSpread;
+
+      mb.addOrientedBox(
+        ax0 + dirX * 2.2,
+        shoulderY + dirY * 2.2,
+        az0 + dirZ * 2.2,
+        2.0,
+        4.4,
+        2.0,
+        yaw + Math.PI * 0.5,
+        dropTheta,
+        style.coat,
+        TexId.FABRIC,
+        0.65
+      );
+      mb.addSphere(
+        ax0 + dirX * 4.4,
+        shoulderY + dirY * 4.4,
+        az0 + dirZ * 4.4,
+        1.15,
+        1.15,
+        1.15,
+        6,
+        8,
+        mittenColor,
+        TexId.SOLID,
+        0.5
+      );
+      continue;
+    }
+
+    if ((isHoldingUzi || isHoldingFlamethrower) && side === 1) {
+      // Right arm holding Uzi or Flamethrower: rotates forward and vibrates when firing
+      const equipTimer = isHoldingUzi ? Math.max(0, style.uziEquipTimer ?? 0) : 0;
       const tEquip =
         equipTimer > 0
           ? 1 - Math.min(1, equipTimer / UZI_EQUIP_DURATION_SECONDS)
@@ -2289,12 +2616,13 @@ export function addHumanoid3D(
       const dirX = st * fx;
       const dirY = -ct;
       const dirZ = st * fz;
-      const ax0 = cx + rx * armSpread * side;
-      const az0 = cz + rz * armSpread * side;
+      const ax0 = cx + rx * (armSpread * side + vibeSide) + fx * vibeFwd;
+      const az0 = cz + rz * (armSpread * side + vibeSide) + fz * vibeFwd;
+      const syVibe = shoulderY + vibeUp;
 
       mb.addOrientedBox(
         ax0 + dirX * 2.2,
-        shoulderY + dirY * 2.2,
+        syVibe + dirY * 2.2,
         az0 + dirZ * 2.2,
         2.0,
         4.4,
@@ -2307,98 +2635,65 @@ export function addHumanoid3D(
       );
 
       const hx = ax0 + dirX * 4.4;
-      const hy = shoulderY + dirY * 4.4;
+      const hy = syVibe + dirY * 4.4;
       const hz = az0 + dirZ * 4.4;
       mb.addSphere(hx, hy, hz, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
 
-      // Uzi submachine gun aligned with the aiming hand/arm direction
       const gunPitch = theta - Math.PI * 0.5;
       const upGX = ct * fx;
       const upGY = st;
       const upGZ = ct * fz;
-      const gunDark = rgb(32, 36, 46);
-      const gunSteel = rgb(64, 72, 88);
-      const gunBarrel = rgb(20, 24, 32);
-
-      // Receiver body
-      mb.addOrientedBox(
-        hx + dirX * 1.1 + upGX * 1.35,
-        hy + dirY * 1.1 + upGY * 1.35,
-        hz + dirZ * 1.1 + upGZ * 1.35,
-        4.6,
-        1.6,
-        1.15,
-        yaw,
-        gunPitch,
-        gunDark,
-        TexId.SOLID,
-        0.45
-      );
-      // Top bolt/sight shroud
-      mb.addOrientedBox(
-        hx + dirX * 1.0 + upGX * 2.25,
-        hy + dirY * 1.0 + upGY * 2.25,
-        hz + dirZ * 1.0 + upGZ * 2.25,
-        3.2,
-        0.55,
-        0.9,
-        yaw,
-        gunPitch,
-        gunSteel,
-        TexId.SOLID,
-        0.3
-      );
-      // Forward barrel
-      mb.addOrientedBox(
-        hx + dirX * 4.3 + upGX * 1.5,
-        hy + dirY * 4.3 + upGY * 1.5,
-        hz + dirZ * 4.3 + upGZ * 1.5,
-        2.6,
-        0.65,
-        0.65,
-        yaw,
-        gunPitch,
-        gunBarrel,
-        TexId.SOLID,
-        0.35
-      );
-      // Grip & vertical magazine
-      mb.addOrientedBox(
-        hx + dirX * 0.2 - upGX * 0.55,
-        hy + dirY * 0.2 - upGY * 0.55,
-        hz + dirZ * 0.2 - upGZ * 0.55,
-        1.1,
-        2.6,
-        0.85,
-        yaw,
-        gunPitch,
-        gunDark,
-        TexId.SOLID,
-        0.35
-      );
-      mb.addOrientedBox(
-        hx + dirX * 0.2 - upGX * 2.1,
-        hy + dirY * 0.2 - upGY * 2.1,
-        hz + dirZ * 0.2 - upGZ * 2.1,
-        0.85,
-        1.5,
-        0.7,
-        yaw,
-        gunPitch,
-        gunSteel,
-        TexId.SOLID,
-        0.3
-      );
+      if (isHoldingFlamethrower) {
+        addFlamethrowerGeometry3D(
+          mb,
+          hx,
+          hy,
+          hz,
+          dirX,
+          dirY,
+          dirZ,
+          upGX,
+          upGY,
+          upGZ,
+          rx,
+          rz,
+          yaw,
+          gunPitch,
+          1
+        );
+      } else {
+        addUziGeometry3D(
+          mb,
+          hx,
+          hy,
+          hz,
+          dirX,
+          dirY,
+          dirZ,
+          upGX,
+          upGY,
+          upGZ,
+          yaw,
+          gunPitch,
+          1
+        );
+      }
       continue;
     }
 
-    if (isUnarmedPunch && side === activePunchSide) {
-      const punchTheta = punchCurve * (Math.PI * 0.54);
-      const reachExtra = punchCurve * 2.4;
+    if (isUnarmedPunch) {
+      // Unarmed punching animation: quickly flail both arms forward and side-to-side
+      const flailPhase = punchProgress * Math.PI * 6;
+      const sideSign = side === activePunchSide ? 1 : -1;
+      const envelope = Math.sin(punchProgress * Math.PI);
+      const flailSin = Math.sin(flailPhase) * sideSign;
+      const punchTheta = envelope * (Math.PI * 0.56 + flailSin * 0.44);
+      const reachExtra = envelope * (1.5 + Math.max(0, flailSin) * 2.3);
+      const lateralSway = Math.cos(flailPhase) * sideSign * envelope * 0.9;
       const sp = Math.sin(punchTheta);
       const cp = Math.cos(punchTheta);
-      const ax0 = cx + rx * armSpread * side + fx * reachExtra;
-      const az0 = cz + rz * armSpread * side + fz * reachExtra;
+      const ax0 = cx + rx * (armSpread * side + lateralSway) + fx * reachExtra;
+      const az0 = cz + rz * (armSpread * side + lateralSway) + fz * reachExtra;
 
       mb.addOrientedBox(
         ax0 + fx * sp * 2.2,
@@ -2903,6 +3198,20 @@ export function buildDynamicSceneMeshes(
   const pointLights: PointLight3D[] = [];
   const t = state.elapsedTime;
   const levelId = state.currentLevelId;
+  const maybeBurnNpc = (key: string, nx: number, ny: number, nz: number): void => {
+    if (state.burningNpcs.has(key)) {
+      addBurningFireEffect3D(
+        translucent,
+        pointLights,
+        nx,
+        ny,
+        nz,
+        t,
+        1,
+        pointLights.length < 2
+      );
+    }
+  };
 
   // 1. Santa (Player)
   const playerVisible =
@@ -2928,6 +3237,15 @@ export function buildDynamicSceneMeshes(
   if (playerVisible) {
     const electrocutedFlash =
       state.electrocutionTimer > 0 && Math.floor(t * 20) % 2 === 0;
+    const sharedWeaponFields = {
+      equippedItem: state.player.equippedItem,
+      punchTimer: state.player.punchTimer,
+      punchHand: state.player.punchHand,
+      uziEquipTimer: state.player.uziEquipTimer,
+      uziDropTimer: state.player.uziDropTimer,
+      weaponVibrationTimer: state.player.weaponVibrationTimer,
+      elapsedTime: t,
+    };
     const santaStyle: CharacterColors3D = electrocutedFlash
       ? {
           coat: rgb(245, 250, 120),
@@ -2937,10 +3255,7 @@ export function buildDynamicSceneMeshes(
           hair: rgb(255, 255, 255),
           hat: rgb(245, 250, 120),
           hasBeard: true,
-          equippedItem: state.player.equippedItem,
-          punchTimer: state.player.punchTimer,
-          punchHand: state.player.punchHand,
-          uziEquipTimer: state.player.uziEquipTimer,
+          ...sharedWeaponFields,
         }
       : {
           coat: rgb(216, 34, 42),
@@ -2950,10 +3265,7 @@ export function buildDynamicSceneMeshes(
           hair: rgb(250, 252, 255),
           hat: rgb(220, 36, 42),
           hasBeard: true,
-          equippedItem: state.player.equippedItem,
-          punchTimer: state.player.punchTimer,
-          punchHand: state.player.punchHand,
-          uziEquipTimer: state.player.uziEquipTimer,
+          ...sharedWeaponFields,
         };
 
     const rosannaCutsceneActive =
@@ -3045,6 +3357,7 @@ export function buildDynamicSceneMeshes(
         false,
         translucent
       );
+      maybeBurnNpc('outside:Alex', ax, ay, az);
     }
 
     // Snowball throwers (Sylvester & Annelotte)
@@ -3073,6 +3386,7 @@ export function buildDynamicSceneMeshes(
               hat: rgb(128, 64, 112),
             };
       addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style, false, false, translucent);
+      maybeBurnNpc(idx === 0 ? 'outside:Sylvester' : 'outside:Annelotte', tx, ty, tz);
     });
 
     // Flying Snowballs + ground shadow
@@ -3180,11 +3494,13 @@ export function buildDynamicSceneMeshes(
     });
 
     // Arjan (windowNpc)
+    const arjanX = basement.windowNpc.x + basement.windowNpc.width * 0.5;
+    const arjanZ = basement.windowNpc.y + basement.windowNpc.height * 0.5;
     addHumanoid3D(
       opaque,
-      basement.windowNpc.x + basement.windowNpc.width * 0.5,
+      arjanX,
       0,
-      basement.windowNpc.y + basement.windowNpc.height * 0.5,
+      arjanZ,
       basement.coneOfSight ? basement.coneOfSight.direction : directionToYaw(basement.windowNpc.facing),
       t,
       false,
@@ -3199,13 +3515,16 @@ export function buildDynamicSceneMeshes(
       false,
       translucent
     );
+    maybeBurnNpc('basement:Arjan', arjanX, 0, arjanZ);
 
     // Olexa (olexaNpc)
+    const olexaX = basement.olexaNpc.x + basement.olexaNpc.width * 0.5;
+    const olexaZ = basement.olexaNpc.y + basement.olexaNpc.height * 0.5;
     addHumanoid3D(
       opaque,
-      basement.olexaNpc.x + basement.olexaNpc.width * 0.5,
+      olexaX,
       0,
-      basement.olexaNpc.y + basement.olexaNpc.height * 0.5,
+      olexaZ,
       basement.olexaConeOfSight ? basement.olexaConeOfSight.direction : directionToYaw(basement.olexaNpc.facing),
       t,
       false,
@@ -3220,6 +3539,7 @@ export function buildDynamicSceneMeshes(
       false,
       translucent
     );
+    maybeBurnNpc('basement:Olexa', olexaX, 0, olexaZ);
 
     // Hanneloes sitting on the toilet in the bathroom (when door is opened)
     const isBathroomClosed = basement.doors.some((d) => d.id === 'basement-bathroom-door');
@@ -3246,6 +3566,7 @@ export function buildDynamicSceneMeshes(
         false,
         translucent
       );
+      maybeBurnNpc('basement:Hanneloes', tx, 2.0, tz);
       if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) {
         addExclamationBadge3D(opaque, tx, 2.0, tz);
       }
@@ -3259,6 +3580,223 @@ export function buildDynamicSceneMeshes(
     }
     for (const door of basement.openedDoors) {
       addOpenedDoor3D(opaque, door);
+    }
+
+    // Dynamic Spa Room Double Door & Hidden Room Fog (cols 14..17, rows 8..11)
+    if (basement.spaDoorClosed) {
+      addLockedDoubleDoor3D(opaque, 16 * TILE_SIZE, 12.5 * TILE_SIZE, TILE_SIZE);
+      opaque.addBox(
+        BASEMENT_SPA_HIDDEN_MASK.x + BASEMENT_SPA_HIDDEN_MASK.width * 0.5,
+        0.2,
+        BASEMENT_SPA_HIDDEN_MASK.y + BASEMENT_SPA_HIDDEN_MASK.height * 0.5,
+        BASEMENT_SPA_HIDDEN_MASK.width,
+        INDOOR_WALL_HEIGHT + 0.4,
+        BASEMENT_SPA_HIDDEN_MASK.height,
+        rgb(12, 14, 22),
+        TexId.SOLID,
+        0
+      );
+    }
+
+    // Armed / Blinking Landmine 1 tile south of Spa Doors
+    const mineX = BASEMENT_MINE_BOUNDS.x + BASEMENT_MINE_BOUNDS.width * 0.5;
+    const mineZ = BASEMENT_MINE_BOUNDS.y + BASEMENT_MINE_BOUNDS.height * 0.5;
+    if (basement.mineState !== 'exploded') {
+      translucent.addShadowDisc(mineX, 0, mineZ, 5.0, 5.0, 0.25);
+      opaque.addCylinder(mineX, 0, mineZ, 4.4, 4.7, 1.35, 12, rgb(66, 76, 56), TexId.SOLID, 0.55);
+      opaque.addCylinder(mineX, 1.35, mineZ, 2.7, 2.7, 0.5, 10, rgb(96, 104, 86), TexId.SOLID, 0.35);
+
+      const isBlinking = basement.mineState === 'blinking';
+      const fuseProgress = isBlinking
+        ? 1 - Math.max(0, Math.min(1, basement.mineTimer / BASEMENT_MINE_FUSE_SECONDS))
+        : 0;
+      const ledOn = isBlinking
+        ? Math.sin(t * (12 + fuseProgress * 26)) > 0
+        : Math.sin(t * 3.5) > 0.4;
+      opaque.addSphere(
+        mineX,
+        2.15,
+        mineZ,
+        0.85,
+        0.75,
+        0.85,
+        8,
+        8,
+        ledOn ? rgb(255, 36, 36) : rgb(84, 18, 18),
+        TexId.SOLID,
+        0.2
+      );
+      if (isBlinking && ledOn && pointLights.length < 2) {
+        pointLights.push({
+          x: mineX,
+          y: 4,
+          z: mineZ,
+          r: 1.0,
+          g: 0.18,
+          b: 0.14,
+          radius: 65,
+          intensity: 0.95,
+        });
+      }
+    }
+
+    // Explosion fireball burst when the landmine detonates and blows open the Spa Doors
+    if (basement.mineExplosionTimer > 0) {
+      const expAlpha = Math.max(0, Math.min(1, basement.mineExplosionTimer / 0.65));
+      const radius = 5 + (1 - expAlpha) * 18;
+      translucent.addSphere(
+        mineX,
+        radius * 0.45,
+        mineZ - 6,
+        radius,
+        radius * 0.85,
+        radius,
+        10,
+        12,
+        rgb(255, 138, 32, expAlpha * 0.85),
+        TexId.SOLID,
+        0
+      );
+      translucent.addSphere(
+        16 * TILE_SIZE,
+        10,
+        12.5 * TILE_SIZE,
+        radius * 0.72,
+        radius * 0.72,
+        radius * 0.72,
+        8,
+        10,
+        rgb(255, 224, 92, expAlpha * 0.9),
+        TexId.SOLID,
+        0
+      );
+    }
+
+    // Flamethrower pickup in the revealed Spa Room
+    if (!basement.spaDoorClosed && !basement.flamethrowerPickedUp) {
+      const fx = BASEMENT_FLAMETHROWER_BOUNDS.x + BASEMENT_FLAMETHROWER_BOUNDS.width * 0.5;
+      const fz = BASEMENT_FLAMETHROWER_BOUNDS.y + BASEMENT_FLAMETHROWER_BOUNDS.height * 0.5;
+      const bobY = 3.2 + Math.sin(t * 3.4) * 0.85;
+      const spinYaw = t * 1.5;
+      const cSpin = Math.cos(spinYaw);
+      const sSpin = Math.sin(spinYaw);
+      translucent.addShadowDisc(fx, 0, fz, 5.5, 5.5, 0.28);
+      translucent.addTorus(
+        fx,
+        0.35,
+        fz,
+        4.8,
+        0.45,
+        14,
+        6,
+        'y',
+        rgb(255, 198, 56, 0.72),
+        TexId.SOLID,
+        0
+      );
+      addFlamethrowerGeometry3D(
+        opaque,
+        fx - cSpin * 3.0,
+        bobY,
+        fz - sSpin * 3.0,
+        cSpin,
+        0,
+        sSpin,
+        0,
+        1,
+        0,
+        -sSpin,
+        cSpin,
+        spinYaw,
+        0,
+        1.05
+      );
+    }
+
+    // Burnable Stack of Wood blocking the stairs up
+    if (!basement.stairsWoodBurned) {
+      const wx = BASEMENT_STAIRS_WOOD_BOUNDS.x + BASEMENT_STAIRS_WOOD_BOUNDS.width * 0.5;
+      const wy0 = BASEMENT_STAIRS_WOOD_BOUNDS.y;
+      const burnRatio =
+        basement.stairsWoodBurnTimer > 0
+          ? Math.max(0.18, basement.stairsWoodBurnTimer / STAIRS_WOOD_BURN_DURATION)
+          : 1;
+      const logColor =
+        basement.stairsWoodBurnTimer > 0 ? rgb(76, 44, 28) : rgb(138, 86, 46);
+      const barkColor =
+        basement.stairsWoodBurnTimer > 0 ? rgb(52, 28, 18) : rgb(98, 58, 30);
+
+      for (let rowIdx = 0; rowIdx < 5; rowIdx++) {
+        const lz = wy0 + 7 + rowIdx * 12.5;
+        // Bottom log tier
+        opaque.addBeveledBox(
+          wx - 2.6,
+          0,
+          lz,
+          4.4 * burnRatio,
+          3.8 * burnRatio,
+          10.8,
+          0.45,
+          logColor,
+          TexId.WOOD_GRAIN,
+          0.55
+        );
+        opaque.addBeveledBox(
+          wx + 2.6,
+          0,
+          lz,
+          4.4 * burnRatio,
+          3.8 * burnRatio,
+          10.8,
+          0.45,
+          barkColor,
+          TexId.WOOD_GRAIN,
+          0.55
+        );
+        // Middle & top stacked logs blocking stairwell
+        opaque.addBeveledBox(
+          wx,
+          3.6 * burnRatio,
+          lz,
+          11.2,
+          3.8 * burnRatio,
+          4.4 * burnRatio,
+          0.45,
+          logColor,
+          TexId.WOOD_GRAIN,
+          0.55
+        );
+        if (rowIdx % 2 === 0) {
+          opaque.addBeveledBox(
+            wx,
+            7.2 * burnRatio,
+            lz,
+            8.4,
+            3.4 * burnRatio,
+            4.2 * burnRatio,
+            0.45,
+            barkColor,
+            TexId.WOOD_GRAIN,
+            0.5
+          );
+        }
+      }
+
+      if (basement.stairsWoodBurnTimer > 0) {
+        for (let fi = 0; fi < 3; fi++) {
+          const fz = wy0 + 12 + fi * 20;
+          addBurningFireEffect3D(
+            translucent,
+            pointLights,
+            wx,
+            1.2,
+            fz,
+            t + fi * 0.7,
+            1.1,
+            fi === 1 && pointLights.length < 2
+          );
+        }
+      }
     }
   } else if (levelId === 'level-upstairs') {
     const upstairs = state.levels['level-upstairs'];
@@ -3359,14 +3897,17 @@ export function buildDynamicSceneMeshes(
       false,
       translucent
     );
+    maybeBurnNpc('upstairs:Albin', UPSTAIRS_ALBIN_X + 6, 0, upstairs.albinY + 6);
 
     // Diana & Simon in Living Room
     const isDianaDistracted = Boolean(state.player.states.get(DIANA_DISTRACTED_KEY));
+    const dianaX = upstairs.dianaNpc.x + upstairs.dianaNpc.width * 0.5;
+    const dianaZ = upstairs.dianaNpc.y + upstairs.dianaNpc.height * 0.5;
     addHumanoid3D(
       opaque,
-      upstairs.dianaNpc.x + upstairs.dianaNpc.width * 0.5,
+      dianaX,
       0,
-      upstairs.dianaNpc.y + upstairs.dianaNpc.height * 0.5,
+      dianaZ,
       upstairs.dianaCone ? upstairs.dianaCone.direction : Math.PI / 2,
       t,
       false,
@@ -3383,13 +3924,16 @@ export function buildDynamicSceneMeshes(
       false,
       translucent
     );
+    maybeBurnNpc('upstairs:Diana', dianaX, 0, dianaZ);
 
     const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY));
+    const simonX = upstairs.simonNpc.x + upstairs.simonNpc.width * 0.5;
+    const simonZ = upstairs.simonNpc.y + upstairs.simonNpc.height * 0.5;
     addHumanoid3D(
       opaque,
-      upstairs.simonNpc.x + upstairs.simonNpc.width * 0.5,
+      simonX,
       0,
-      upstairs.simonNpc.y + upstairs.simonNpc.height * 0.5,
+      simonZ,
       upstairs.simonCone ? upstairs.simonCone.direction : Math.PI,
       t,
       false,
@@ -3406,14 +3950,17 @@ export function buildDynamicSceneMeshes(
       false,
       translucent
     );
+    maybeBurnNpc('upstairs:Simon', simonX, 0, simonZ);
 
     // Henrik & Tanja in Table Room
     if (isTableRoomDoorOpen) {
+      const henrikX = upstairs.henrikNpc.x + upstairs.henrikNpc.width * 0.5;
+      const henrikZ = upstairs.henrikNpc.y + upstairs.henrikNpc.height * 0.5;
       addHumanoid3D(
         opaque,
-        upstairs.henrikNpc.x + upstairs.henrikNpc.width * 0.5,
+        henrikX,
         0,
-        upstairs.henrikNpc.y + upstairs.henrikNpc.height * 0.5,
+        henrikZ,
         upstairs.henrikCone ? upstairs.henrikCone.direction : Math.PI / 2,
         t,
         false,
@@ -3428,11 +3975,15 @@ export function buildDynamicSceneMeshes(
         false,
         translucent
       );
+      maybeBurnNpc('upstairs:Henrik', henrikX, 0, henrikZ);
+
+      const tanjaX = upstairs.tanjaNpc.x + upstairs.tanjaNpc.width * 0.5;
+      const tanjaZ = upstairs.tanjaNpc.y + upstairs.tanjaNpc.height * 0.5;
       addHumanoid3D(
         opaque,
-        upstairs.tanjaNpc.x + upstairs.tanjaNpc.width * 0.5,
+        tanjaX,
         0,
-        upstairs.tanjaNpc.y + upstairs.tanjaNpc.height * 0.5,
+        tanjaZ,
         upstairs.tanjaCone ? upstairs.tanjaCone.direction : -Math.PI / 2,
         t,
         false,
@@ -3447,15 +3998,18 @@ export function buildDynamicSceneMeshes(
         false,
         translucent
       );
+      maybeBurnNpc('upstairs:Tanja', tanjaX, 0, tanjaZ);
     }
 
     // Anne-Marie in Bedroom
     if (isBedroomDoorOpen) {
+      const amX = upstairs.anneMarieNpc.x + upstairs.anneMarieNpc.width * 0.5;
+      const amZ = upstairs.anneMarieNpc.y + upstairs.anneMarieNpc.height * 0.5;
       addHumanoid3D(
         opaque,
-        upstairs.anneMarieNpc.x + upstairs.anneMarieNpc.width * 0.5,
+        amX,
         0,
-        upstairs.anneMarieNpc.y + upstairs.anneMarieNpc.height * 0.5,
+        amZ,
         upstairs.anneMarieCone ? upstairs.anneMarieCone.direction : -Math.PI / 2,
         t,
         false,
@@ -3471,6 +4025,7 @@ export function buildDynamicSceneMeshes(
         false,
         translucent
       );
+      maybeBurnNpc('upstairs:Anne-Marie', amX, 0, amZ);
     }
 
     addConeOfSight3D(translucent, upstairs.albinCone);
@@ -3516,24 +4071,140 @@ export function buildDynamicSceneMeshes(
         false,
         translucent
       );
+      maybeBurnNpc(`people:${npc.name}`, nx, 0, nz);
     }
   }
 
-  // 3. Uzi Projectiles across all levels
-  for (const proj of state.projectiles) {
-    opaque.addOrientedBox(
-      proj.x,
-      proj.z,
-      proj.y,
-      3.2,
-      0.8,
-      0.8,
-      proj.yaw,
+  // 3. Dropped Uzis, Wall Bullet Holes, Blood Splatter/Pools & Projectiles
+  for (const drop of state.droppedUzis) {
+    if (drop.levelId !== levelId) continue;
+    const cDrop = Math.cos(drop.yaw);
+    const sDrop = Math.sin(drop.yaw);
+    translucent.addShadowDisc(drop.x, drop.z, drop.y, 3.2, 3.2, 0.28);
+    addUziGeometry3D(
+      opaque,
+      drop.x - cDrop * 1.4,
+      drop.z + 2.2,
+      drop.y - sDrop * 1.4,
+      cDrop,
       0,
-      rgb(255, 224, 96),
-      TexId.SOLID,
-      0.35
+      sDrop,
+      0,
+      1,
+      0,
+      drop.yaw,
+      0,
+      0.95
     );
+  }
+
+  for (const hole of state.bulletHoles) {
+    if (hole.levelId !== levelId) continue;
+    opaque.addBox(
+      hole.x,
+      hole.z - 0.8,
+      hole.y,
+      1.6,
+      1.6,
+      1.6,
+      rgb(12, 12, 16),
+      TexId.SOLID,
+      0
+    );
+  }
+
+  for (const pool of state.bloodPools) {
+    if (pool.levelId !== levelId) continue;
+    const fade = Math.max(0, Math.min(1, (pool.maxAge - pool.age) * 0.6));
+    translucent.addCylinder(
+      pool.x,
+      pool.z + 0.08,
+      pool.y,
+      3.8,
+      3.8,
+      0.18,
+      12,
+      rgb(148, 12, 18, 0.88 * fade),
+      TexId.SOLID,
+      0
+    );
+  }
+
+  for (const bp of state.bloodParticles) {
+    if (bp.levelId !== levelId) continue;
+    opaque.addSphere(
+      bp.x,
+      bp.z,
+      bp.y,
+      0.95,
+      0.95,
+      0.95,
+      6,
+      6,
+      rgb(176, 14, 22),
+      TexId.SOLID,
+      0.15
+    );
+  }
+
+  for (const proj of state.projectiles) {
+    if (proj.kind === 'fireball') {
+      const pulse = 1 + Math.sin(t * 28 + proj.x * 0.2) * 0.16;
+      translucent.addSphere(
+        proj.x,
+        proj.z,
+        proj.y,
+        3.1 * pulse,
+        3.1 * pulse,
+        3.1 * pulse,
+        8,
+        10,
+        rgb(255, 118, 22, 0.88),
+        TexId.SOLID,
+        0
+      );
+      opaque.addSphere(
+        proj.x,
+        proj.z,
+        proj.y,
+        1.65 * pulse,
+        1.65 * pulse,
+        1.65 * pulse,
+        6,
+        8,
+        rgb(255, 234, 84),
+        TexId.SOLID,
+        0
+      );
+      if (pointLights.length < 2) {
+        pointLights.push({
+          x: proj.x,
+          y: proj.z + 2,
+          z: proj.y,
+          r: 1.0,
+          g: 0.52,
+          b: 0.14,
+          radius: 65,
+          intensity: 0.9,
+        });
+      }
+    } else {
+      const speedXY = Math.hypot(proj.vx, proj.vy);
+      const pitch = speedXY > 1e-4 ? Math.atan2(proj.vz ?? 0, speedXY) : 0;
+      opaque.addOrientedBox(
+        proj.x,
+        proj.z,
+        proj.y,
+        3.2,
+        0.8,
+        0.8,
+        proj.yaw,
+        pitch,
+        rgb(255, 224, 96),
+        TexId.SOLID,
+        0.35
+      );
+    }
   }
 
   // 4. Debug 3D Collision Bounding Boxes (?debug mode)

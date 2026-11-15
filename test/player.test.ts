@@ -24,13 +24,17 @@ import {
 } from '../src/entities/dog';
 import {
   createPlayer,
+  FLAMETHROWER_MAX_DISTANCE,
+  FLAMETHROWER_PROJECTILE_SPEED,
   FOOTPRINT_DURATION_SECONDS,
   MAX_PLAYER_HEALTH,
+  MAX_UZI_AMMO,
   PLAYER_JUMP_HEIGHT,
   PUNCH_DURATION_SECONDS,
   setPlayerHealth,
   triggerPlayerJump,
   updatePlayer,
+  UZI_DROP_DURATION_SECONDS,
   UZI_EQUIP_DURATION_SECONDS,
   UZI_PROJECTILE_SPEED,
 } from '../src/entities/player';
@@ -38,7 +42,7 @@ import { ConeOfSight, LineOfSight } from '../src/entities/sight';
 import { HIT_BLINK_DURATION_SECONDS } from '../src/entities/snowball';
 import { findNearbyInteractable } from '../src/world/interaction';
 import { drawPixelText, measurePixelText } from '../src/rendering/pixelFont';
-import { wrapTextLines } from '../src/rendering/renderer';
+import { drawEquippedItemHud, wrapTextLines } from '../src/rendering/renderer';
 import {
   computeUnobstructedCameraDistance,
   createCamera3D,
@@ -63,6 +67,8 @@ import {
   getProceduralTextureAtlas,
 } from '../src/rendering/textures3d';
 import {
+  BLOOD_POOL_DURATION_SECONDS,
+  BULLET_HOLE_DURATION_SECONDS,
   createGameState,
   damagePlayer,
   loadLevel,
@@ -74,11 +80,17 @@ import {
 import {
   BASEMENT_BATHROOM_DOOR_BOUNDS,
   BASEMENT_FIREPLACE_SPAWN,
+  BASEMENT_FLAMETHROWER_BOUNDS,
   BASEMENT_FRONT_DOOR_BOUNDS,
   BASEMENT_HALL_NORTH_DOOR_BOUNDS,
+  BASEMENT_MINE_BOUNDS,
+  BASEMENT_MINE_FUSE_SECONDS,
+  BASEMENT_SPA_ROOM_BOUNDS,
   BASEMENT_STAIRS_SPAWN,
   BASEMENT_STAIRS_TRIGGER_BOUNDS,
+  BASEMENT_STAIRS_WOOD_BOUNDS,
   LevelBasement,
+  STAIRS_WOOD_BURN_DURATION,
   USED_STAIRS_STATE_KEY,
 } from '../src/world/levels/levelBasement';
 import {
@@ -137,7 +149,10 @@ import {
   TILE_SIZE,
   TileType,
 } from '../src/world/tilemap';
-import { OUTSIDE_ALEX_NPC } from '../src/world/levels/levelOutside';
+import {
+  OUTSIDE_ALEX_NPC,
+  RUDOLPH_INSPECTED_KEY,
+} from '../src/world/levels/levelOutside';
 
 describe('Player walking & 2x Rensbo map layout', () => {
   it('uses a 32x28 map (2x width and height) with a large 13x7 main house and parked black motorcycle', () => {
@@ -464,6 +479,21 @@ describe('Player walking & 2x Rensbo map layout', () => {
     input.right = false;
     expect(state.nearbyInteractable?.promptText).toBe('Climb down chimney');
 
+    // Before inspecting Rudolph, trying to climb down the chimney only smells blood
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.currentLevelId).toBe('level-outside');
+    expect(state.activeDialogue?.lines).toEqual([
+      'You smell the stench of blood...',
+    ]);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.activeDialogue).toBeNull();
+
+    // After inspecting Rudolph, the chimney enters the basement
+    state.player.states.set(RUDOLPH_INSPECTED_KEY, true);
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
@@ -1075,7 +1105,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     input.up = false;
     expect(state.player.y).toBeLessThan(BASEMENT_BATHROOM_DOOR_BOUNDS.y);
 
-    // 4. Walk halfway up the stairs -> collide with invisible box & interact with "Walk upstairs"
+    // 4. Stairs are initially blocked by the burnable wood stack until burned away
+    expect(state.levels['level-basement'].stairsWoodBurned).toBe(false);
+    state.levels['level-basement'].stairsWoodBurned = true;
     state.player.x = BASEMENT_STAIRS_TRIGGER_BOUNDS.x - state.player.width - 1;
     state.player.y = BASEMENT_STAIRS_TRIGGER_BOUNDS.y + 8;
     input.right = true;
@@ -3359,19 +3391,24 @@ Tanja -> Alex
     expect(cheatState.activeDialogue).toBeNull();
   });
 
-  it('supports unarmed punch on F, Rudolph corpse murder-mystery achievement chain, Uzi unlock/0.5s equip anim, 1-9 slots, and 5/s @ 4 tiles/s projectiles', () => {
+  it('supports slot 1-4 equipment (empty/unarmed/uzi/flamethrower), Rudolph murder-mystery chain, and 5/s @ 16 tiles/s Uzi projectiles', () => {
     const state = createGameState({ showIntroDialogue: false });
     const input = createEmptyInput();
 
-    // 1. Starts unarmed; slot 2 (Uzi) cannot be equipped before unlocking it
-    expect(state.player.equippedItem).toBe('unarmed');
+    // 1. Starts with 'empty' (slot 1); slot 2 switches to 'unarmed'; slot 3 (Uzi) cannot be equipped before unlocking
+    expect(state.player.equippedItem).toBe('empty');
     expect(state.player.unlockedUzi).toBe(false);
+    applyKeyEvent(input, 'Digit3', true);
+    applyKeyEvent(input, 'Digit3', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('empty');
+
+    // Switch to slot 2 (unarmed) and press F -> triggers punch animation
     applyKeyEvent(input, 'Digit2', true);
     applyKeyEvent(input, 'Digit2', false);
     updateGameState(state, input, 0.01);
     expect(state.player.equippedItem).toBe('unarmed');
 
-    // F triggers punching animation when unarmed
     applyKeyEvent(input, 'KeyF', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'KeyF', false);
@@ -3435,7 +3472,7 @@ Tanja -> Alex
       'ACHIEVEMENT UNLOCKED: Action genre unlocked. Viewer discretion is advised.',
     ]);
 
-    // Closing the second achievement unlocks & equips Uzi with 0.5s sky-to-forward animation
+    // Closing the second achievement unlocks & equips Uzi (slot 3) with 0.5s sky-to-forward animation
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
@@ -3452,14 +3489,19 @@ Tanja -> Alex
     const midEquipMesh = buildDynamicSceneMeshes(state, 50);
     expect(midEquipMesh.opaque.vertexCount).toBeGreaterThan(0);
 
-    // Switch back to slot 1 (unarmed), then slot 2 (uzi) via digit keys
+    // Switch back to slot 1 (empty), slot 2 (unarmed), then slot 3 (uzi) via digit keys
     applyKeyEvent(input, 'Digit1', true);
     applyKeyEvent(input, 'Digit1', false);
     updateGameState(state, input, 0.01);
-    expect(state.player.equippedItem).toBe('unarmed');
+    expect(state.player.equippedItem).toBe('empty');
 
     applyKeyEvent(input, 'Digit2', true);
     applyKeyEvent(input, 'Digit2', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('unarmed');
+
+    applyKeyEvent(input, 'Digit3', true);
+    applyKeyEvent(input, 'Digit3', false);
     updateGameState(state, input, 0.01);
     expect(state.player.equippedItem).toBe('uzi');
     expect(state.player.uziEquipTimer).toBeCloseTo(
@@ -3467,18 +3509,18 @@ Tanja -> Alex
       4
     );
 
-    // 4. Firing Uzi in open ground emits 5 projectiles per second (every 0.2s) moving at 4 tiles/s (64 px/s)
+    // 4. Firing Uzi in open ground emits 5 projectiles per second (every 0.2s) moving at 16 tiles/s (256 px/s)
     state.isOnRoof = false;
     state.player.x = 15 * TILE_SIZE;
-    state.player.y = 25 * TILE_SIZE;
+    state.player.y = 26 * TILE_SIZE;
     state.player.yaw = -Math.PI / 2; // aiming straight north (open driveway)
     state.player.uziEquipTimer = 0;
 
     applyKeyEvent(input, 'Space', true);
     let spawned = 0;
     let prevCount = 0;
-    // Simulate 1.0 second in 0.05s steps holding Space -> 5 shots fired
-    for (let step = 0; step < 20; step++) {
+    // Simulate 0.85s in 0.05s steps holding Space -> 5 shots fired at t = 0.0, 0.2, 0.4, 0.6, 0.8s
+    for (let step = 0; step < 17; step++) {
       updateGameState(state, input, 0.05);
       if (state.projectiles.length > prevCount) {
         spawned += state.projectiles.length - prevCount;
@@ -3488,8 +3530,9 @@ Tanja -> Alex
     applyKeyEvent(input, 'Space', false);
     expect(spawned).toBe(5);
     expect(state.projectiles.length).toBe(5);
+    expect(state.player.uziAmmo).toBe(MAX_UZI_AMMO - 5);
 
-    // Verify projectile velocity = 4 tiles/sec (64 px/s) and 3D bullet rendering
+    // Verify projectile velocity = 16 tiles/sec (256 px/s) and 3D bullet rendering
     const firstProj = state.projectiles[0];
     expect(Math.hypot(firstProj.vx, firstProj.vy)).toBeCloseTo(
       UZI_PROJECTILE_SPEED,
@@ -3498,7 +3541,7 @@ Tanja -> Alex
     const bulletScene = buildDynamicSceneMeshes(state, 50);
     expect(bulletScene.opaque.vertexCount).toBeGreaterThan(0);
 
-    // Moving projectiles collide with obstacles / walls and disappear
+    // Moving projectiles collide with obstacles / walls, disappear, and spawn a black bullet hole
     const wallTestState = createGameState({ showIntroDialogue: false });
     wallTestState.player.unlockedUzi = true;
     wallTestState.player.equippedItem = 'uzi';
@@ -3512,8 +3555,381 @@ Tanja -> Alex
     applyKeyEvent(shootInput, 'KeyF', false);
     expect(wallTestState.projectiles.length).toBe(1);
 
-    // Advance 0.25s (~16px travel north) -> collides with house wall at row 9 and disappears
-    updateGameState(wallTestState, shootInput, 0.25);
+    // Advance 0.1s (~25.6px travel north) -> collides with house wall at row 9 and spawns a bullet hole
+    updateGameState(wallTestState, shootInput, 0.1);
     expect(wallTestState.projectiles.length).toBe(0);
+    expect(wallTestState.bulletHoles.length).toBe(1);
+  });
+
+  it('pre-places ladder in ?cheat mode and preserves a placed ladder across outdoor hazard respawns', () => {
+    const cheatState = createGameState({ cheat: true, showIntroDialogue: false });
+    expect(cheatState.ladderPlaced).toBe(true);
+    expect(cheatState.hasLadder).toBe(false);
+    expect(cheatState.levels['level-outside'].ladderPlaced).toBe(true);
+    expect(
+      cheatState.interactables.some((i) => i.id === 'house-west-climb-ladder')
+    ).toBe(true);
+
+    const normalState = createGameState({ showIntroDialogue: false });
+    expect(normalState.ladderPlaced).toBe(false);
+    normalState.ladderPlaced = true;
+    normalState.levels['level-outside'].ladderPlaced = true;
+    resetAfterSnowballHit(normalState);
+    expect(normalState.ladderPlaced).toBe(true);
+    expect(normalState.levels['level-outside'].ladderPlaced).toBe(true);
+    expect(
+      normalState.interactables.some((i) => i.id === 'house-west-climb-ladder')
+    ).toBe(true);
+  });
+
+  it('uses A/D to turn in empty mode, strafe & lock facing to cameraYaw in other equipment modes, and jump vs punch on Space', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+    const camera = createCamera3D(-Math.PI / 2);
+    input.cameraYaw = -Math.PI / 2;
+    updateCamera3D(camera, state, input, 0);
+
+    // 1. Slot 1 ('empty'): Space jumps when not near interactable, and A/D walk+face left/right
+    state.player.x = 15 * TILE_SIZE;
+    state.player.y = 25 * TILE_SIZE;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.016);
+    applyKeyEvent(input, 'Space', false);
+    expect((state.player.jumpOffset ?? 0) > 0 || (state.player.jumpVelocity ?? 0) > 0).toBe(true);
+    expect(state.player.punchTimer).toBe(0);
+
+    applyKeyEvent(input, 'KeyA', true);
+    updateGameState(state, input, 0.1);
+    updateCamera3D(camera, state, input, 0.1);
+    applyKeyEvent(input, 'KeyA', false);
+    expect(state.player.facing).toBe('left');
+    expect(Math.abs(state.player.yaw ?? 0)).toBeCloseTo(Math.PI, 4);
+
+    // 2. Slot 2 ('unarmed'): Space triggers flailing punch instead of jump, A/D strafe while keeping cameraYaw facing
+    applyKeyEvent(input, 'Digit2', true);
+    applyKeyEvent(input, 'Digit2', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('unarmed');
+
+    state.player.jumpOffset = 0;
+    state.player.jumpVelocity = 0;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.016);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.player.punchTimer).toBeGreaterThan(0);
+    expect(state.player.jumpOffset ?? 0).toBe(0);
+
+    // Rotate camera with Right Arrow and verify Santa turns to match camera.yaw while strafing left with A
+    input.cameraYaw = camera.yaw;
+    applyKeyEvent(input, 'ArrowRight', true);
+    const prevX = state.player.x;
+    applyKeyEvent(input, 'KeyA', true);
+    updateGameState(state, input, 0.1);
+    updateCamera3D(camera, state, input, 0.1);
+    applyKeyEvent(input, 'ArrowRight', false);
+    applyKeyEvent(input, 'KeyA', false);
+    expect(state.player.yaw).toBeCloseTo(camera.yaw, 5);
+    expect(state.player.renderYaw).toBeCloseTo(camera.yaw, 5);
+    expect(state.player.x).toBeLessThan(prevX);
+  });
+
+  it('spawns off-center vibrating Uzi shots with spread, cleans out-of-bounds bullets, expires wall bullet holes in 10s, and spawns NPC blood pools lasting 20s', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+    state.player.unlockedUzi = true;
+    state.player.equippedItem = 'uzi';
+    state.player.x = 15 * TILE_SIZE;
+    state.player.y = 25 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2; // facing north: right vector is +x (1, 0)
+
+    const pcx = state.player.x + state.player.width * 0.5;
+    const pcy = state.player.y + state.player.height * 0.5;
+    const yawSpreadLimit = (10 * Math.PI) / 180;
+    const pitchSpreadLimit = (5 * Math.PI) / 180;
+
+    // Fire 6 shots and check off-center origin, vibration, yaw spread (±10 deg), and pitch spread (±5 deg)
+    applyKeyEvent(input, 'Space', true);
+    for (let i = 0; i < 6; i++) {
+      updateGameState(state, input, 0.2);
+    }
+    applyKeyEvent(input, 'Space', false);
+    expect(state.player.weaponVibrationTimer).toBeGreaterThan(0);
+    expect(state.projectiles.length).toBeGreaterThan(0);
+
+    const lastShot = state.projectiles[state.projectiles.length - 1];
+    // At t=0 right after spawn, offset is ~ (+3.8, -7.5) from player center (spread changes yaw within ±10 deg)
+    expect(lastShot.x).toBeGreaterThan(pcx);
+    expect(lastShot.y).toBeLessThan(pcy);
+    for (const proj of state.projectiles) {
+      let yawDelta = proj.yaw - -Math.PI / 2;
+      while (yawDelta > Math.PI) yawDelta -= Math.PI * 2;
+      while (yawDelta < -Math.PI) yawDelta += Math.PI * 2;
+      expect(Math.abs(yawDelta)).toBeLessThanOrEqual(yawSpreadLimit + 1e-6);
+      const maxVz = UZI_PROJECTILE_SPEED * Math.tan(pitchSpreadLimit) + 1e-4;
+      expect(Math.abs(proj.vz ?? 0)).toBeLessThanOrEqual(maxVz);
+    }
+
+    // Bullet leaving map bounds is deleted
+    state.projectiles.push({
+      kind: 'bullet',
+      x: 4,
+      y: 25 * TILE_SIZE,
+      z: 9,
+      vx: -UZI_PROJECTILE_SPEED,
+      vy: 0,
+      vz: 0,
+      yaw: Math.PI,
+    });
+    updateGameState(state, input, 0.1);
+    expect(state.projectiles.some((p) => p.x < 0)).toBe(false);
+
+    // Wall bullet hole expires after 10 seconds
+    state.projectiles = [];
+    state.bulletHoles = [
+      {
+        levelId: 'level-outside',
+        x: 100,
+        y: 140,
+        z: 9,
+        age: 0,
+        maxAge: BULLET_HOLE_DURATION_SECONDS,
+      },
+    ];
+    updateGameState(state, input, BULLET_HOLE_DURATION_SECONDS - 0.1);
+    expect(state.bulletHoles.length).toBe(1);
+    updateGameState(state, input, 0.2);
+    expect(state.bulletHoles.length).toBe(0);
+
+    // Hitting Alex NPC with an Uzi bullet spawns falling blood particles -> 20s ground blood pools
+    state.projectiles = [
+      {
+        kind: 'bullet',
+        x: OUTSIDE_ALEX_NPC.x - 4,
+        y: OUTSIDE_ALEX_NPC.y + OUTSIDE_ALEX_NPC.height * 0.5,
+        z: 9,
+        vx: UZI_PROJECTILE_SPEED,
+        vy: 0,
+        vz: 0,
+        yaw: 0,
+      },
+    ];
+    updateGameState(state, input, 0.05);
+    expect(state.bloodParticles.length).toBeGreaterThan(0);
+
+    // Advance enough for blood particles to land and create 20s ground blood pools
+    for (let i = 0; i < 15; i++) {
+      updateGameState(state, input, 0.1);
+    }
+    expect(state.bloodPools.length).toBeGreaterThan(0);
+    const meshWithBlood = buildDynamicSceneMeshes(state, 50);
+    expect(meshWithBlood.translucent.vertexCount).toBeGreaterThan(0);
+
+    // Advance remaining lifetime past 20s -> blood pools disappear
+    updateGameState(state, input, BLOOD_POOL_DURATION_SECONDS);
+    expect(state.bloodPools.length).toBe(0);
+
+    // Unarmed punch reaching Alex NPC also spawns blood splatter & pools
+    applyKeyEvent(input, 'Digit2', true);
+    applyKeyEvent(input, 'Digit2', false);
+    updateGameState(state, input, 0.01);
+    state.player.x = OUTSIDE_ALEX_NPC.x - state.player.width - 2;
+    state.player.y = OUTSIDE_ALEX_NPC.y;
+    state.player.yaw = 0; // facing east toward Alex
+    applyKeyEvent(input, 'KeyF', true);
+    updateGameState(state, input, 0.016);
+    applyKeyEvent(input, 'KeyF', false);
+    expect(state.bloodParticles.length).toBeGreaterThan(0);
+  });
+
+  it('tracks 30-bullet Uzi magazine, HUD badge, 0-ammo right-arm drop animation, floor Uzi, and removes slot 3 after depletion', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+    state.player.unlockedUzi = true;
+    state.player.equippedItem = 'uzi';
+    expect(state.player.uziAmmo).toBe(MAX_UZI_AMMO);
+
+    // Verify drawEquippedItemHud renders the ammo badge left of main HUD box & hides slot 3 after depletion
+    const rects: Array<{ x: number; y: number; w: number; h: number }> = [];
+    const mockCtx = {
+      canvas: { width: 320, height: 240 },
+      save: () => {},
+      restore: () => {},
+      translate: () => {},
+      scale: () => {},
+      rotate: () => {},
+      fillRect: (x: number, y: number, w: number, h: number) => {
+        rects.push({ x, y, w, h });
+      },
+      strokeRect: () => {},
+      beginPath: () => {},
+      arc: () => {},
+      fill: () => {},
+      stroke: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      fillText: () => {},
+      font: '',
+      textAlign: 'left',
+      textBaseline: 'alphabetic',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+    } as unknown as CanvasRenderingContext2D;
+
+    drawEquippedItemHud(mockCtx, state.player);
+    // Ammo badge renders to the left of main box (x < 262, y between 8..42)
+    expect(rects.some((r) => r.x < 262 && r.y >= 10 && r.y <= 35)).toBe(true);
+    // With 3 slots (1, 2, 3), leftmost slot starts at x = 246 (y = 46)
+    expect(rects.some((r) => r.x < 265 && r.y >= 46)).toBe(true);
+
+    // Drop down to 1 bullet left and fire the last bullet in open yard
+    state.player.uziAmmo = 1;
+    state.player.x = 15 * TILE_SIZE;
+    state.player.y = 25 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.016);
+    applyKeyEvent(input, 'Space', false);
+
+    expect(state.player.uziAmmo).toBe(0);
+    expect(state.player.uziDepleted).toBe(true);
+    expect(state.player.equippedItem).toBe('empty');
+    expect(state.player.uziDropTimer).toBeCloseTo(UZI_DROP_DURATION_SECONDS, 4);
+    expect(state.droppedUzis.length).toBe(1);
+
+    // Slot 3 now acts like 'empty' and HUD hides slot 3 (only 2 slots: x >= 269)
+    applyKeyEvent(input, 'Digit3', true);
+    applyKeyEvent(input, 'Digit3', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('empty');
+
+    rects.length = 0;
+    drawEquippedItemHud(mockCtx, state.player);
+    expect(rects.some((r) => r.x < 265 && r.y >= 46)).toBe(false);
+
+    // 3D scene builds cleanly with drop animation and floor Uzi
+    const dropMesh = buildDynamicSceneMeshes(state, 50);
+    expect(dropMesh.opaque.vertexCount).toBeGreaterThan(0);
+  });
+
+  it('triggers 3s blinking landmine in basement to open Spa Room, unlocks Slot 4 Flamethrower with 3-tile fireballs, burns NPCs, and burns stairs wood stack', () => {
+    const state = createGameState({
+      initialLevelId: 'level-basement',
+      cheat: true,
+      showIntroDialogue: false,
+    });
+    const input = createEmptyInput();
+    const basement = state.levels['level-basement'];
+
+    // 1. Spa Room is initially closed & mine idle 1 tile south
+    expect(basement.spaDoorClosed).toBe(true);
+    expect(basement.mineState).toBe('idle');
+
+    // Step onto mine -> blinks for 3 seconds then explodes & reveals Spa Room
+    state.player.x = BASEMENT_MINE_BOUNDS.x + 2;
+    state.player.y = BASEMENT_MINE_BOUNDS.y + 2;
+    updateGameState(state, input, 0.05);
+    expect(basement.mineState).toBe('blinking');
+    expect(basement.mineTimer).toBeCloseTo(BASEMENT_MINE_FUSE_SECONDS, 4);
+
+    updateGameState(state, input, 2.85);
+    expect(basement.mineState).toBe('blinking');
+    expect(basement.spaDoorClosed).toBe(true);
+
+    updateGameState(state, input, 0.25);
+    expect(basement.mineState).toBe('exploded');
+    expect(basement.mineExplosionTimer).toBeGreaterThan(0);
+    expect(basement.spaDoorClosed).toBe(false);
+
+    // 2. Walk north through open doorway into Spa Room to collect Flamethrower (slot 4)
+    state.player.x = BASEMENT_FLAMETHROWER_BOUNDS.x + 2;
+    state.player.y = BASEMENT_FLAMETHROWER_BOUNDS.y + 2;
+    expect(state.player.x).toBeGreaterThanOrEqual(BASEMENT_SPA_ROOM_BOUNDS.x);
+    updateGameState(state, input, 0.05);
+    expect(basement.flamethrowerPickedUp).toBe(true);
+    expect(state.player.unlockedFlamethrower).toBe(true);
+    expect(state.player.equippedItem).toBe('flamethrower');
+
+    // Switch slot 1 (empty) and back to slot 4 (flamethrower)
+    applyKeyEvent(input, 'Digit1', true);
+    applyKeyEvent(input, 'Digit1', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('empty');
+
+    applyKeyEvent(input, 'Digit4', true);
+    applyKeyEvent(input, 'Digit4', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('flamethrower');
+
+    // 3. Fireball travels slowly and disappears after 3 tiles (FLAMETHROWER_MAX_DISTANCE)
+    state.player.x = 12 * TILE_SIZE;
+    state.player.y = 16 * TILE_SIZE;
+    state.player.yaw = Math.PI; // shoot west along empty hallway from col 12 toward col 7
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.016);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.projectiles.length).toBe(1);
+    expect(state.projectiles[0].kind).toBe('fireball');
+    expect(
+      Math.hypot(state.projectiles[0].vx, state.projectiles[0].vy)
+    ).toBeCloseTo(FLAMETHROWER_PROJECTILE_SPEED, 4);
+
+    // Advance 1.3s (> FLAMETHROWER_MAX_DISTANCE / FLAMETHROWER_PROJECTILE_SPEED = 48 / 40 = 1.2s)
+    updateGameState(state, input, 1.3);
+    expect(state.projectiles.length).toBe(0);
+
+    // 4. Hitting Arjan NPC with a fireball sets him on fire ('basement:Arjan')
+    state.projectiles.push({
+      kind: 'fireball',
+      x: basement.windowNpc.x - 4,
+      y: basement.windowNpc.y + basement.windowNpc.height * 0.5,
+      z: 9,
+      vx: FLAMETHROWER_PROJECTILE_SPEED,
+      vy: 0,
+      vz: 0,
+      yaw: 0,
+      distanceTraveled: 0,
+      maxDistance: FLAMETHROWER_MAX_DISTANCE,
+    });
+    updateGameState(state, input, 0.2);
+    expect(state.burningNpcs.has('basement:Arjan')).toBe(true);
+
+    // 5. Basement stairs are blocked by stacked wood until a fireball burns it away
+    expect(basement.stairsWoodBurned).toBe(false);
+    state.player.x = BASEMENT_STAIRS_WOOD_BOUNDS.x - state.player.width - 2;
+    state.player.y = BASEMENT_STAIRS_WOOD_BOUNDS.y + TILE_SIZE;
+    applyKeyEvent(input, 'KeyD', true);
+    updateGameState(state, input, 0.25);
+    applyKeyEvent(input, 'KeyD', false);
+    expect(state.player.x).toBeLessThanOrEqual(
+      BASEMENT_STAIRS_WOOD_BOUNDS.x - state.player.width + 0.01
+    );
+
+    // Shoot fireball east into wood stack -> burns over STAIRS_WOOD_BURN_DURATION then clears path
+    state.player.yaw = 0;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    updateGameState(state, input, 0.4);
+    expect(basement.stairsWoodBurnTimer).toBeGreaterThan(0);
+    expect(basement.stairsWoodBurned).toBe(false);
+
+    // Build 3D scene while wood is burning and NPC is burning
+    const burningMesh = buildDynamicSceneMeshes(state, 50);
+    expect(burningMesh.translucent.vertexCount).toBeGreaterThan(0);
+
+    updateGameState(state, input, STAIRS_WOOD_BURN_DURATION + 0.1);
+    expect(basement.stairsWoodBurned).toBe(true);
+
+    // Now Santa can walk right up into 'basement-stairs-up'
+    state.player.x = BASEMENT_STAIRS_WOOD_BOUNDS.x;
+    state.player.y = BASEMENT_STAIRS_TRIGGER_BOUNDS.y + 4;
+    applyKeyEvent(input, 'KeyD', true);
+    for (let i = 0; i < 20; i++) {
+      updateGameState(state, input, 0.02);
+    }
+    applyKeyEvent(input, 'KeyD', false);
+    expect(state.nearbyInteractable?.id).toBe('basement-stairs-up');
   });
 });

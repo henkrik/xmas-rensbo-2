@@ -1,4 +1,10 @@
-import { Direction, Player, Rect } from '../../entities/player';
+import {
+  Direction,
+  Player,
+  Rect,
+  rectsIntersect,
+  selectPlayerEquipmentSlot,
+} from '../../entities/player';
 import { ConeOfSight } from '../../entities/sight';
 import { Interactable } from '../interaction';
 import { MAP_COLS, MAP_ROWS, TILE_SIZE, TileMap, TileType } from '../tilemap';
@@ -45,12 +51,12 @@ export const BASEMENT_TILES: TileType[][] = [
   [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 4
   [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 5
   [V, V, V, V, V, V, W, W, W, W, W, W, W, W, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V], // 6: Library Bookshelf top
-  [V, V, V, V, V, V, W, W, W, W, W, W, W, W, V, V, V, V, W, W, W, W, W, V, V, V, V, V, V, V, V, V], // 7: Library Bookshelf base | Bathroom north wall
-  [V, V, V, V, V, V, W, F, F, F, F, F, O, W, V, V, V, V, W, B, B, B, W, V, V, V, V, V, V, V, V, V], // 8: Wood stack (12) | Bathroom floor (21)
-  [V, V, V, V, V, V, W, O, F, F, F, F, O, W, V, V, V, V, W, O, B, O, W, V, V, V, V, V, V, V, V, V], // 9: Library couch (7) | Wood stack (12) | Sink (19) | Toilet facing west (21)
-  [V, V, V, V, V, V, W, O, F, F, F, F, F, W, V, V, V, V, W, O, B, B, W, V, V, V, V, V, V, V, V, V], // 10: Library couch (7) | Sink (19)
-  [V, V, V, V, V, V, W, O, F, F, F, O, O, W, V, V, V, V, W, B, B, B, W, V, V, V, V, V, V, V, V, V], // 11: Library couch (7) | Fireplace (11..12)
-  [V, V, V, V, V, V, W, F, F, F, F, O, O, W, W, W, W, W, W, W, B, W, W, V, V, V, V, V, V, V, V, V], // 12: Fireplace (11..12) | North Locked Door (15..16) | Bathroom Door (20)
+  [V, V, V, V, V, V, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, V, V, V, V, V, V, V, V, V], // 7: Library Bookshelf base | Spa north wall | Bathroom north wall
+  [V, V, V, V, V, V, W, F, F, F, F, F, O, W, B, B, B, B, W, B, B, B, W, V, V, V, V, V, V, V, V, V], // 8: Wood stack (12) | Spa Room (14..17) | Bathroom floor (19..21)
+  [V, V, V, V, V, V, W, O, F, F, F, F, O, W, B, B, B, B, W, O, B, O, W, V, V, V, V, V, V, V, V, V], // 9: Library couch (7) | Wood stack (12) | Spa Room | Sink (19) | Toilet (21)
+  [V, V, V, V, V, V, W, O, F, F, F, F, F, W, B, B, B, B, W, O, B, B, W, V, V, V, V, V, V, V, V, V], // 10: Library couch (7) | Spa Room | Sink (19)
+  [V, V, V, V, V, V, W, O, F, F, F, O, O, W, B, B, B, B, W, B, B, B, W, V, V, V, V, V, V, V, V, V], // 11: Library couch (7) | Fireplace (11..12) | Spa Room
+  [V, V, V, V, V, V, W, F, F, F, F, O, O, W, W, B, B, W, W, W, B, W, W, V, V, V, V, V, V, V, V, V], // 12: Fireplace (11..12) | Spa Doors (15..16) | Bathroom Door (20)
   [V, V, V, V, V, V, W, F, F, F, F, F, F, F, S, S, S, S, S, S, S, S, W, V, V, V, V, V, V, V, V, V], // 13: Wood->Stone threshold (14) | Hallway
   [V, V, V, V, V, V, W, F, O, O, O, F, F, F, S, S, S, S, S, S, S, S, W, V, V, V, V, V, V, V, V, V], // 14: Living Room couch (8..10)
   [V, V, V, V, V, V, W, F, F, F, F, F, F, F, S, S, S, S, T, T, T, T, W, V, V, V, V, V, V, V, V, V], // 15: Stairs (18..21)
@@ -148,6 +154,50 @@ export const BASEMENT_BATHROOM_HIDDEN_MASK: Rect = {
   height: 5 * TILE_SIZE,
 };
 
+/** Spa Room interior bounds (cols 14..17, rows 8..11) behind the Spa Doors. */
+export const BASEMENT_SPA_ROOM_BOUNDS: Rect = {
+  x: 14 * TILE_SIZE,
+  y: 8 * TILE_SIZE,
+  width: 4 * TILE_SIZE,
+  height: 4 * TILE_SIZE,
+};
+
+/** Black fog-of-war mask hiding the Spa Room until the mine breaks open the Spa Doors. */
+export const BASEMENT_SPA_HIDDEN_MASK: Rect = {
+  x: 14 * TILE_SIZE,
+  y: 7 * TILE_SIZE,
+  width: 4 * TILE_SIZE,
+  height: 5 * TILE_SIZE,
+};
+
+/** Landmine 1 tile south of the Spa Doors (cols 15..16, row 13). */
+export const BASEMENT_MINE_BOUNDS: Rect = {
+  x: 15 * TILE_SIZE + 11,
+  y: 13 * TILE_SIZE + 3,
+  width: 10,
+  height: 10,
+};
+
+export const BASEMENT_MINE_FUSE_SECONDS = 3.0;
+
+/** Flamethrower pickup resting inside the Spa Room (slot 4). */
+export const BASEMENT_FLAMETHROWER_BOUNDS: Rect = {
+  x: 15 * TILE_SIZE + 8,
+  y: 9 * TILE_SIZE + 4,
+  width: 16,
+  height: 10,
+};
+
+/** Burnable stack of wood blocking the foot of the basement stairs (col 18, rows 15..18). */
+export const BASEMENT_STAIRS_WOOD_BOUNDS: Rect = {
+  x: 18 * TILE_SIZE,
+  y: 15 * TILE_SIZE,
+  width: TILE_SIZE,
+  height: 4 * TILE_SIZE,
+};
+
+export const STAIRS_WOOD_BURN_DURATION = 1.0;
+
 /** Invisible collision box halfway up the stairs that offers "Walk upstairs". */
 export const BASEMENT_STAIRS_TRIGGER_BOUNDS: Rect = {
   x: 20 * TILE_SIZE,
@@ -170,6 +220,13 @@ export class LevelBasement implements GameLevel {
   public readonly map: TileMap = BASEMENT_MAP;
   public doors: CollidableDoor[];
   public openedDoors: OpenedDoorAnimation[] = [];
+  public spaDoorClosed: boolean = true;
+  public mineState: 'idle' | 'blinking' | 'exploded' = 'idle';
+  public mineTimer: number = 0;
+  public mineExplosionTimer: number = 0;
+  public flamethrowerPickedUp: boolean = false;
+  public stairsWoodBurned: boolean = false;
+  public stairsWoodBurnTimer: number = 0;
   public readonly windowNpc = { ...BASEMENT_WINDOW_NPC };
   public readonly olexaNpc = { ...BASEMENT_OLEXA_NPC };
   public readonly toiletNpc = { ...BASEMENT_TOILET_NPC };
@@ -252,22 +309,23 @@ export class LevelBasement implements GameLevel {
   }
 
   public getSolidObstacles(): readonly Rect[] {
-    return [
+    const obs: Rect[] = [
       this.windowNpc,
       this.olexaNpc,
       BASEMENT_STAIRS_TRIGGER_BOUNDS,
       ...this.doors.map((d) => d.bounds),
     ];
+    if (this.spaDoorClosed) {
+      obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
+    }
+    if (!this.stairsWoodBurned) {
+      obs.push(BASEMENT_STAIRS_WOOD_BOUNDS);
+    }
+    return obs;
   }
 
   public getInteractables(): Interactable[] {
     const list: Interactable[] = [
-      {
-        id: 'basement-hall-north-door',
-        bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
-        promptText: 'Open door',
-        dialogueLines: ["It's locked."],
-      },
       {
         id: 'basement-front-door',
         bounds: { ...BASEMENT_FRONT_DOOR_BOUNDS },
@@ -282,6 +340,24 @@ export class LevelBasement implements GameLevel {
       },
     ];
 
+    if (this.spaDoorClosed) {
+      list.push({
+        id: 'basement-hall-north-door',
+        bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
+        promptText: 'Open door',
+        dialogueLines: ["It's locked."],
+      });
+    }
+
+    if (!this.spaDoorClosed && !this.flamethrowerPickedUp) {
+      list.push({
+        id: 'basement-flamethrower',
+        bounds: { ...BASEMENT_FLAMETHROWER_BOUNDS },
+        promptText: 'Pick up flamethrower',
+        dialogueLines: [],
+      });
+    }
+
     for (const door of this.doors) {
       list.push({
         id: door.id,
@@ -294,11 +370,53 @@ export class LevelBasement implements GameLevel {
     return list;
   }
 
+  public updateHazardsAndItems(dtSeconds: number, player: Player): void {
+    if (this.mineState === 'idle' && rectsIntersect(player, BASEMENT_MINE_BOUNDS)) {
+      this.mineState = 'blinking';
+      this.mineTimer = BASEMENT_MINE_FUSE_SECONDS;
+    } else if (this.mineState === 'blinking') {
+      this.mineTimer = Math.max(0, this.mineTimer - dtSeconds);
+      if (this.mineTimer <= 0) {
+        this.mineState = 'exploded';
+        this.mineExplosionTimer = 0.65;
+        this.spaDoorClosed = false;
+      }
+    }
+
+    if (this.mineExplosionTimer > 0) {
+      this.mineExplosionTimer = Math.max(0, this.mineExplosionTimer - dtSeconds);
+    }
+
+    if (
+      !this.spaDoorClosed &&
+      !this.flamethrowerPickedUp &&
+      rectsIntersect(player, BASEMENT_FLAMETHROWER_BOUNDS)
+    ) {
+      this.flamethrowerPickedUp = true;
+      player.unlockedFlamethrower = true;
+      selectPlayerEquipmentSlot(player, 4);
+    }
+
+    if (this.stairsWoodBurnTimer > 0) {
+      this.stairsWoodBurnTimer = Math.max(0, this.stairsWoodBurnTimer - dtSeconds);
+      if (this.stairsWoodBurnTimer <= 0) {
+        this.stairsWoodBurned = true;
+      }
+    }
+  }
+
   public handleInteraction(
     interactableId: string,
     player: Player,
     ctx: LevelTransitionContext
   ): boolean {
+    if (interactableId === 'basement-flamethrower') {
+      this.flamethrowerPickedUp = true;
+      player.unlockedFlamethrower = true;
+      selectPlayerEquipmentSlot(player, 4);
+      return true;
+    }
+
     const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
     if (doorIdx !== -1) {
       const openedDoor = this.doors[doorIdx];

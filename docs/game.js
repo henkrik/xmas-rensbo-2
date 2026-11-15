@@ -758,8 +758,13 @@
   var MAX_PLAYER_HEALTH = 100;
   var PUNCH_DURATION_SECONDS = 0.28;
   var UZI_EQUIP_DURATION_SECONDS = 0.5;
+  var UZI_DROP_DURATION_SECONDS = 0.45;
   var UZI_FIRE_INTERVAL_SECONDS = 0.2;
-  var UZI_PROJECTILE_SPEED = 4 * TILE_SIZE;
+  var UZI_PROJECTILE_SPEED = 16 * TILE_SIZE;
+  var MAX_UZI_AMMO = 30;
+  var FLAMETHROWER_FIRE_INTERVAL_SECONDS = 0.25;
+  var FLAMETHROWER_PROJECTILE_SPEED = 2.5 * TILE_SIZE;
+  var FLAMETHROWER_MAX_DISTANCE = 3 * TILE_SIZE;
   function createPlayer(x, y) {
     return {
       x,
@@ -782,8 +787,14 @@
       health: MAX_PLAYER_HEALTH,
       delayedHealth: MAX_PLAYER_HEALTH,
       delayedHealthRate: 0,
-      equippedItem: "unarmed",
+      equippedItem: "empty",
       unlockedUzi: false,
+      uziAmmo: MAX_UZI_AMMO,
+      uziDepleted: false,
+      uziDropTimer: 0,
+      unlockedFlamethrower: false,
+      flamethrowerFireCooldown: 0,
+      weaponVibrationTimer: 0,
       punchTimer: 0,
       punchHand: "right",
       uziEquipTimer: 0,
@@ -821,6 +832,21 @@
     if (player.uziFireCooldown > 0) {
       player.uziFireCooldown = Math.max(0, player.uziFireCooldown - dtSeconds);
     }
+    if (player.uziDropTimer > 0) {
+      player.uziDropTimer = Math.max(0, player.uziDropTimer - dtSeconds);
+    }
+    if (player.flamethrowerFireCooldown > 0) {
+      player.flamethrowerFireCooldown = Math.max(
+        0,
+        player.flamethrowerFireCooldown - dtSeconds
+      );
+    }
+    if (player.weaponVibrationTimer > 0) {
+      player.weaponVibrationTimer = Math.max(
+        0,
+        player.weaponVibrationTimer - dtSeconds
+      );
+    }
   }
   function triggerPlayerPunch(player) {
     if (player.equippedItem !== "unarmed") {
@@ -832,19 +858,38 @@
   }
   function selectPlayerEquipmentSlot(player, slot) {
     if (slot === 1) {
-      player.equippedItem = "unarmed";
+      player.equippedItem = "empty";
       player.uziEquipTimer = 0;
       return true;
     }
     if (slot === 2) {
-      if (!player.unlockedUzi) {
+      player.equippedItem = "unarmed";
+      player.uziEquipTimer = 0;
+      return true;
+    }
+    if (slot === 3) {
+      if (player.unlockedUzi && !player.uziDepleted) {
+        if (player.equippedItem !== "uzi") {
+          player.equippedItem = "uzi";
+          player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+          player.punchTimer = 0;
+        }
+        return true;
+      }
+      if (player.uziDepleted) {
+        player.equippedItem = "empty";
+        player.uziEquipTimer = 0;
+        return true;
+      }
+      return false;
+    }
+    if (slot === 4) {
+      if (!player.unlockedFlamethrower) {
         return false;
       }
-      if (player.equippedItem !== "uzi") {
-        player.equippedItem = "uzi";
-        player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
-        player.punchTimer = 0;
-      }
+      player.equippedItem = "flamethrower";
+      player.uziEquipTimer = 0;
+      player.punchTimer = 0;
       return true;
     }
     return false;
@@ -923,9 +968,22 @@
       player.footprintSpawnTimer = 0;
     }
   }
+  function localYawToDirection(yaw) {
+    const cx = Math.cos(yaw);
+    const cy = Math.sin(yaw);
+    if (Math.abs(cy) >= Math.abs(cx)) {
+      return cy < 0 ? "up" : "down";
+    }
+    return cx < 0 ? "left" : "right";
+  }
   function updatePlayer(player, input, dtSeconds, map, solidObstacles = [], ignoreTilePred) {
     if (player.blinkTimer > 0) {
       player.blinkTimer = Math.max(0, player.blinkTimer - dtSeconds);
+    }
+    const isStrafeMode = player.equippedItem !== "empty";
+    if (isStrafeMode && typeof input.cameraYaw === "number") {
+      player.yaw = input.cameraYaw;
+      player.facing = localYawToDirection(input.cameraYaw);
     }
     let dx = 0;
     let dy = 0;
@@ -979,19 +1037,32 @@
       player.isMoving = false;
       player.walkTimer = 0;
       const targetYaw = player.yaw ?? -Math.PI / 2;
-      const turnBlend2 = Math.min(1, dtSeconds * 16);
-      player.renderYaw = lerpAngle(player.renderYaw ?? targetYaw, targetYaw, turnBlend2);
+      const turnBlend = Math.min(1, dtSeconds * 16);
+      player.renderYaw = lerpAngle(player.renderYaw ?? targetYaw, targetYaw, turnBlend);
       return;
     }
     player.isMoving = true;
     player.walkTimer += dtSeconds;
-    player.yaw = Math.atan2(dy, dx);
-    const turnBlend = Math.min(1, dtSeconds * 16);
-    player.renderYaw = lerpAngle(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
-    if (Math.abs(dy) > Math.abs(dx)) {
-      player.facing = dy < 0 ? "up" : "down";
-    } else if (Math.abs(dx) > 0) {
-      player.facing = dx < 0 ? "left" : "right";
+    if (isStrafeMode) {
+      if (typeof input.cameraYaw === "number") {
+        player.yaw = input.cameraYaw;
+        player.facing = localYawToDirection(input.cameraYaw);
+      } else if (Math.abs(dy) > Math.abs(dx)) {
+        player.yaw = Math.atan2(dy, dx);
+        player.facing = dy < 0 ? "up" : "down";
+      }
+      const targetYaw = player.yaw ?? -Math.PI / 2;
+      const turnBlend = Math.min(1, dtSeconds * 16);
+      player.renderYaw = lerpAngle(player.renderYaw ?? targetYaw, targetYaw, turnBlend);
+    } else {
+      player.yaw = Math.atan2(dy, dx);
+      const turnBlend = Math.min(1, dtSeconds * 16);
+      player.renderYaw = lerpAngle(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
+      if (Math.abs(dy) > Math.abs(dx)) {
+        player.facing = dy < 0 ? "up" : "down";
+      } else if (Math.abs(dx) > 0) {
+        player.facing = dx < 0 ? "left" : "right";
+      }
     }
     const moveX = dx * player.speed * dtSeconds;
     const moveY = dy * player.speed * dtSeconds;
@@ -1266,6 +1337,14 @@
       case "right":
         return 0;
     }
+  }
+  function yawToDirection(yaw) {
+    const dx = Math.cos(yaw);
+    const dy = Math.sin(yaw);
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      return dy < 0 ? "up" : "down";
+    }
+    return dx < 0 ? "left" : "right";
   }
   function mat4Perspective(fovYRadians, aspect, near, far) {
     const f = 1 / Math.tan(fovYRadians / 2);
@@ -1568,6 +1647,15 @@
           MAX_CAMERA_PITCH,
           (typeof input.cameraPitch === "number" ? input.cameraPitch : basePitch) + pitchSpeed * dtSeconds
         );
+      }
+    }
+    const isCutsceneOrSpecialLock = state.currentLevelId === "level-outside" && (state.motorcycle.status === "driving" || state.climbing !== null) || state.currentLevelId === "level-upstairs" && state.levels["level-upstairs"].rosannaCutscene?.active === true || state.currentLevelId === "level-basement" && state.levels["level-basement"].toiletCutscene?.active === true;
+    if (typeof input.cameraYaw === "number" && player.equippedItem !== "empty" && !isCutsceneOrSpecialLock) {
+      player.yaw = wrapAngle(input.cameraYaw);
+      player.facing = yawToDirection(player.yaw);
+      if (dtSeconds > 0) {
+        const turnBlend = Math.min(1, dtSeconds * 16);
+        player.renderYaw = lerpAngle2(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
       }
     }
     if (typeof input.cameraYaw === "number") {
@@ -2590,6 +2678,456 @@
         },
         speaker
       );
+    }
+  };
+
+  // src/world/levels/levelBasement.ts
+  var V2 = 20 /* VoidBlack */;
+  var W2 = 21 /* InteriorWall */;
+  var F2 = 16 /* WoodFloor */;
+  var S = 17 /* StoneTileFloor */;
+  var B2 = 18 /* BathroomTileFloor */;
+  var T2 = 19 /* StairsFloor */;
+  var O2 = 22 /* FurnitureSolid */;
+  var BASEMENT_TILES = [
+    //0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 0
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 1
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 2
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 3
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 4
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 5
+    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 6: Library Bookshelf top
+    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 7: Library Bookshelf base | Spa north wall | Bathroom north wall
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, O2, W2, B2, B2, B2, B2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 8: Wood stack (12) | Spa Room (14..17) | Bathroom floor (19..21)
+    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, O2, W2, B2, B2, B2, B2, W2, O2, B2, O2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 9: Library couch (7) | Wood stack (12) | Spa Room | Sink (19) | Toilet (21)
+    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, F2, W2, B2, B2, B2, B2, W2, O2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 10: Library couch (7) | Spa Room | Sink (19)
+    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, O2, O2, W2, B2, B2, B2, B2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 11: Library couch (7) | Fireplace (11..12) | Spa Room
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, O2, O2, W2, W2, B2, B2, W2, W2, W2, B2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 12: Fireplace (11..12) | Spa Doors (15..16) | Bathroom Door (20)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, F2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 13: Wood->Stone threshold (14) | Hallway
+    [V2, V2, V2, V2, V2, V2, W2, F2, O2, O2, O2, F2, F2, F2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 14: Living Room couch (8..10)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, F2, S, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 15: Stairs (18..21)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, S, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 16: Dividing wall (13) | Stairs (18..21)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, O2, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 17: Chess table (8..9, non-collidable) | Coat hangers (14) | Stairs (18..21)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, O2, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 18: Coat hangers (14) | Stairs (18..21)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 19: Window NPC at col 11, row 18.5
+    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 20: Big south windows (7..9, 10..12) | Front Door (15..16)
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 21
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 22
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 23
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 24
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 25
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 26
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2]
+    // 27
+  ];
+  var BASEMENT_MAP = {
+    cols: MAP_COLS,
+    rows: MAP_ROWS,
+    tileSize: TILE_SIZE,
+    tiles: BASEMENT_TILES
+  };
+  var BASEMENT_FIREPLACE_SPAWN = {
+    x: 9.5 * TILE_SIZE,
+    y: 11 * TILE_SIZE + 2,
+    facing: "down"
+  };
+  var BASEMENT_STAIRS_SPAWN = {
+    x: 18.5 * TILE_SIZE,
+    y: 16 * TILE_SIZE + 2,
+    facing: "left"
+  };
+  var BASEMENT_WINDOW_NPC = {
+    x: 11 * TILE_SIZE + 2,
+    y: 18.5 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "down"
+  };
+  var BASEMENT_OLEXA_NPC = {
+    x: 8.5 * TILE_SIZE + 2,
+    y: 18 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "up"
+  };
+  var BASEMENT_TOILET_NPC = {
+    x: 21 * TILE_SIZE + 2,
+    y: 9 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "left"
+  };
+  var BASEMENT_HALL_NORTH_DOOR_BOUNDS = {
+    x: 15 * TILE_SIZE,
+    y: 12 * TILE_SIZE,
+    width: 2 * TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_FRONT_DOOR_BOUNDS = {
+    x: 15 * TILE_SIZE,
+    y: 20 * TILE_SIZE,
+    width: 2 * TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_BATHROOM_DOOR_BOUNDS = {
+    x: 20 * TILE_SIZE,
+    y: 12 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_BATHROOM_HIDDEN_MASK = {
+    x: 18 * TILE_SIZE,
+    y: 7 * TILE_SIZE,
+    width: 5 * TILE_SIZE,
+    height: 5 * TILE_SIZE
+  };
+  var BASEMENT_SPA_ROOM_BOUNDS = {
+    x: 14 * TILE_SIZE,
+    y: 8 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: 4 * TILE_SIZE
+  };
+  var BASEMENT_SPA_HIDDEN_MASK = {
+    x: 14 * TILE_SIZE,
+    y: 7 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: 5 * TILE_SIZE
+  };
+  var BASEMENT_MINE_BOUNDS = {
+    x: 15 * TILE_SIZE + 11,
+    y: 13 * TILE_SIZE + 3,
+    width: 10,
+    height: 10
+  };
+  var BASEMENT_MINE_FUSE_SECONDS = 3;
+  var BASEMENT_FLAMETHROWER_BOUNDS = {
+    x: 15 * TILE_SIZE + 8,
+    y: 9 * TILE_SIZE + 4,
+    width: 16,
+    height: 10
+  };
+  var BASEMENT_STAIRS_WOOD_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 15 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: 4 * TILE_SIZE
+  };
+  var STAIRS_WOOD_BURN_DURATION = 1;
+  var BASEMENT_STAIRS_TRIGGER_BOUNDS = {
+    x: 20 * TILE_SIZE,
+    y: 15 * TILE_SIZE,
+    width: 2 * TILE_SIZE,
+    height: 4 * TILE_SIZE
+  };
+  var USED_STAIRS_STATE_KEY = "usedStairs";
+  var TOILET_EVENT_TRIGGERED_KEY = "basementToiletEventTriggered";
+  var BASEMENT_CHIMNEY_INTRO_STATE_KEY = "basementChimneyIntroTriggered";
+  var LevelBasement = class {
+    constructor() {
+      __publicField(this, "id", "level-basement");
+      __publicField(this, "map", BASEMENT_MAP);
+      __publicField(this, "doors");
+      __publicField(this, "openedDoors", []);
+      __publicField(this, "spaDoorClosed", true);
+      __publicField(this, "mineState", "idle");
+      __publicField(this, "mineTimer", 0);
+      __publicField(this, "mineExplosionTimer", 0);
+      __publicField(this, "flamethrowerPickedUp", false);
+      __publicField(this, "stairsWoodBurned", false);
+      __publicField(this, "stairsWoodBurnTimer", 0);
+      __publicField(this, "windowNpc", { ...BASEMENT_WINDOW_NPC });
+      __publicField(this, "olexaNpc", { ...BASEMENT_OLEXA_NPC });
+      __publicField(this, "toiletNpc", { ...BASEMENT_TOILET_NPC });
+      __publicField(this, "toiletCutscene", null);
+      __publicField(this, "coneOfSight");
+      __publicField(this, "olexaConeOfSight");
+      __publicField(this, "npcSightAngle", -Math.PI / 2);
+      // North is -90 degrees in screen Y coordinates
+      __publicField(this, "npcSightTimer", 0);
+      __publicField(this, "intruderDetected", false);
+      this.doors = [
+        {
+          id: "basement-bathroom-door",
+          bounds: { ...BASEMENT_BATHROOM_DOOR_BOUNDS },
+          hiddenRegions: [{ ...BASEMENT_BATHROOM_HIDDEN_MASK }]
+        }
+      ];
+      this.coneOfSight = new ConeOfSight(
+        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+        this.npcSightAngle,
+        void 0,
+        this.map
+      );
+      this.olexaConeOfSight = new ConeOfSight(
+        { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+        -Math.PI / 2,
+        // Looking north
+        void 0,
+        this.map
+      );
+    }
+    enter(player) {
+      const hasUsedStairs = Boolean(player.states.get(USED_STAIRS_STATE_KEY));
+      if (hasUsedStairs) {
+        player.x = BASEMENT_STAIRS_SPAWN.x;
+        player.y = BASEMENT_STAIRS_SPAWN.y;
+        player.facing = BASEMENT_STAIRS_SPAWN.facing;
+      } else {
+        player.x = BASEMENT_FIREPLACE_SPAWN.x;
+        player.y = BASEMENT_FIREPLACE_SPAWN.y;
+        player.facing = BASEMENT_FIREPLACE_SPAWN.facing;
+      }
+      const spawnYaw = player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
+      player.yaw = spawnYaw;
+      player.renderYaw = spawnYaw;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
+      player.isMoving = false;
+      player.walkTimer = 0;
+      if (this.doors.some((d) => d.id === "basement-bathroom-door")) {
+        this.openedDoors = [];
+      }
+      this.npcSightAngle = -Math.PI / 2;
+      this.npcSightTimer = 0;
+      this.intruderDetected = false;
+      this.coneOfSight = new ConeOfSight(
+        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+        this.npcSightAngle,
+        void 0,
+        this.map
+      );
+      this.olexaConeOfSight = new ConeOfSight(
+        { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+        -Math.PI / 2,
+        void 0,
+        this.map
+      );
+    }
+    getSolidObstacles() {
+      const obs = [
+        this.windowNpc,
+        this.olexaNpc,
+        BASEMENT_STAIRS_TRIGGER_BOUNDS,
+        ...this.doors.map((d) => d.bounds)
+      ];
+      if (this.spaDoorClosed) {
+        obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
+      }
+      if (!this.stairsWoodBurned) {
+        obs.push(BASEMENT_STAIRS_WOOD_BOUNDS);
+      }
+      return obs;
+    }
+    getInteractables() {
+      const list = [
+        {
+          id: "basement-front-door",
+          bounds: { ...BASEMENT_FRONT_DOOR_BOUNDS },
+          promptText: "Open door",
+          dialogueLines: ["It's locked."]
+        },
+        {
+          id: "basement-stairs-up",
+          bounds: { ...BASEMENT_STAIRS_TRIGGER_BOUNDS },
+          promptText: "Walk upstairs",
+          dialogueLines: []
+        }
+      ];
+      if (this.spaDoorClosed) {
+        list.push({
+          id: "basement-hall-north-door",
+          bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
+          promptText: "Open door",
+          dialogueLines: ["It's locked."]
+        });
+      }
+      if (!this.spaDoorClosed && !this.flamethrowerPickedUp) {
+        list.push({
+          id: "basement-flamethrower",
+          bounds: { ...BASEMENT_FLAMETHROWER_BOUNDS },
+          promptText: "Pick up flamethrower",
+          dialogueLines: []
+        });
+      }
+      for (const door of this.doors) {
+        list.push({
+          id: door.id,
+          bounds: { ...door.bounds },
+          promptText: "Open door",
+          dialogueLines: []
+        });
+      }
+      return list;
+    }
+    updateHazardsAndItems(dtSeconds, player) {
+      if (this.mineState === "idle" && rectsIntersect(player, BASEMENT_MINE_BOUNDS)) {
+        this.mineState = "blinking";
+        this.mineTimer = BASEMENT_MINE_FUSE_SECONDS;
+      } else if (this.mineState === "blinking") {
+        this.mineTimer = Math.max(0, this.mineTimer - dtSeconds);
+        if (this.mineTimer <= 0) {
+          this.mineState = "exploded";
+          this.mineExplosionTimer = 0.65;
+          this.spaDoorClosed = false;
+        }
+      }
+      if (this.mineExplosionTimer > 0) {
+        this.mineExplosionTimer = Math.max(0, this.mineExplosionTimer - dtSeconds);
+      }
+      if (!this.spaDoorClosed && !this.flamethrowerPickedUp && rectsIntersect(player, BASEMENT_FLAMETHROWER_BOUNDS)) {
+        this.flamethrowerPickedUp = true;
+        player.unlockedFlamethrower = true;
+        selectPlayerEquipmentSlot(player, 4);
+      }
+      if (this.stairsWoodBurnTimer > 0) {
+        this.stairsWoodBurnTimer = Math.max(0, this.stairsWoodBurnTimer - dtSeconds);
+        if (this.stairsWoodBurnTimer <= 0) {
+          this.stairsWoodBurned = true;
+        }
+      }
+    }
+    handleInteraction(interactableId, player, ctx) {
+      if (interactableId === "basement-flamethrower") {
+        this.flamethrowerPickedUp = true;
+        player.unlockedFlamethrower = true;
+        selectPlayerEquipmentSlot(player, 4);
+        return true;
+      }
+      const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
+      if (doorIdx !== -1) {
+        const openedDoor = this.doors[doorIdx];
+        this.doors.splice(doorIdx, 1);
+        this.openedDoors.push({
+          id: openedDoor.id,
+          bounds: { ...openedDoor.bounds },
+          progress: 0,
+          swingDirection: player.y >= openedDoor.bounds.y ? -1 : 1
+        });
+        if (openedDoor.id === "basement-bathroom-door") {
+          this.startToiletCutscene(player);
+        }
+        return true;
+      }
+      if (interactableId === "basement-stairs-up") {
+        player.states.set(USED_STAIRS_STATE_KEY, true);
+        ctx.loadLevel("level-upstairs");
+        if (!player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
+          player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
+          ctx.openDialogue([
+            "Hmm... so I believe the Christmas tree is to the left, but I must not be seen!"
+          ]);
+        }
+        return true;
+      }
+      return false;
+    }
+    startToiletCutscene(player) {
+      if (player.states.get(TOILET_EVENT_TRIGGERED_KEY)) {
+        return;
+      }
+      this.toiletCutscene = {
+        active: true,
+        timer: 0
+      };
+    }
+    updateNpcSight(dtSeconds, player, ctx) {
+      if (this.intruderDetected) {
+        return;
+      }
+      this.npcSightTimer += dtSeconds;
+      if (this.npcSightTimer >= 2) {
+        this.npcSightTimer -= 2;
+        this.npcSightAngle += Math.PI / 4;
+        this.coneOfSight = new ConeOfSight(
+          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+          this.npcSightAngle,
+          void 0,
+          this.map
+        );
+      }
+      const detectedArjan = this.coneOfSight.checkDetection(player);
+      if (detectedArjan) {
+        this.intruderDetected = true;
+        player.isMoving = false;
+        ctx.openDialogue(
+          ["You're not supposed to be here! Check-mate."],
+          () => {
+            ctx.loadLevel("level-basement");
+            player.blinkTimer = 2;
+            ctx.damagePlayer?.(30);
+          },
+          "Arjan"
+        );
+        return;
+      }
+      const detectedOlexa = this.olexaConeOfSight.checkDetection(player);
+      if (detectedOlexa) {
+        this.intruderDetected = true;
+        player.isMoving = false;
+        ctx.openDialogue(
+          ["Nobody believed me when I said you were real..."],
+          () => {
+            ctx.loadLevel("level-basement");
+            player.blinkTimer = 2;
+            ctx.damagePlayer?.(30);
+          },
+          "Olexa"
+        );
+        return;
+      }
+    }
+    updateCutscene(dtSeconds, player, ctx) {
+      if (!this.toiletCutscene?.active) {
+        return false;
+      }
+      player.isMoving = false;
+      player.walkTimer = 0;
+      this.toiletCutscene.timer += dtSeconds;
+      if (this.toiletCutscene.timer >= 2) {
+        this.toiletCutscene.active = false;
+        this.toiletCutscene = null;
+        player.states.set(TOILET_EVENT_TRIGGERED_KEY, true);
+        ctx.openDialogue(
+          [
+            "What are you doing here?? I know you see me when I'm sleeping but this is not okay."
+          ],
+          () => {
+            ctx.loadLevel("level-basement");
+            player.blinkTimer = 2;
+            ctx.damagePlayer?.(30);
+          },
+          "Hanneloes"
+        );
+      }
+      return true;
     }
   };
 
@@ -4179,7 +4717,7 @@
     const mb = new MeshBuilder();
     const ts = map.tileSize;
     const wallOverrides = /* @__PURE__ */ new Map([
-      // Locked North Door (cols 15..16, row 12)
+      // Spa double doorway flanking jamb pullback hints (cols 15..16, row 12)
       [tileKey(15, 12), "door-left"],
       [tileKey(16, 12), "door-right"],
       // Locked Front Door (cols 15..16, row 20)
@@ -4199,15 +4737,28 @@
       openableDoorCoords: [[20, 12]]
       // Bathroom door
     });
+    addDoorWallLintelTile3D(mb, 15, 12, ts, INDOOR_WALL_HEIGHT, "door-left");
+    addDoorWallLintelTile3D(mb, 16, 12, ts, INDOOR_WALL_HEIGHT, "door-right");
     addIndoorCeiling3D(mb, map, {
       skipRect: { minCol: 18, maxCol: 21, minRow: 15, maxRow: 18 },
       chandeliers: [
         [9.5, 9.5],
         [9.5, 16.5],
         [16, 16],
+        [16, 9.8],
+        // Spa Room chandelier
         [20.5, 9.5]
       ]
     });
+    {
+      const sx = 16 * ts;
+      const sz = 8.45 * ts;
+      mb.addBeveledBox(sx, 0, sz, 3.2 * ts, 5.2, 13.5, 0.7, rgb(146, 90, 48), TexId.WOOD_GRAIN, 0.7);
+      mb.addTorus(sx, 5.1, sz, 16, 0.85, 14, 6, "y", rgb(118, 70, 36), TexId.WOOD_GRAIN, 0.45);
+      mb.addBox(sx, 4.7, sz, 2.7 * ts, 0.5, 9.5, rgb(84, 198, 224), TexId.WINDOW_GLOW, 0.25);
+      mb.addBeveledBox(17.45 * ts, 0, 10.7 * ts, 8.5, 3.4, 18, 0.4, rgb(154, 98, 52), TexId.WOOD_GRAIN, 0.55);
+      mb.addBeveledBox(17.45 * ts, 3.4, 10.7 * ts, 5.5, 1.4, 7.5, 0.4, rgb(248, 250, 255), TexId.FABRIC, 0.4);
+    }
     {
       const bx = 10 * ts;
       const bz = 7.55 * ts;
@@ -4321,7 +4872,6 @@
       mb.addCylinder(tx, 19.65, tz, 1.95, 1.7, 2.1, 12, rgb(44, 46, 56), TexId.FABRIC, 0.45);
       mb.addCylinder(tx, 19.75, tz, 2.02, 2.02, 0.5, 12, rgb(168, 42, 44), TexId.SOLID, 0.25);
     }
-    addLockedDoubleDoor3D(mb, 16 * ts, 12.5 * ts, ts);
     addLockedDoubleDoor3D(mb, 16 * ts, 20.5 * ts, ts);
     for (let s = 0; s < 12; s++) {
       const sx = 18 * ts + s * 5.2 + 2.6;
@@ -4616,6 +5166,194 @@
     staticMeshCache.set(levelId, mesh);
     return mesh;
   }
+  function addUziGeometry3D(mb, hx, hy, hz, dirX, dirY, dirZ, upGX, upGY, upGZ, yaw, gunPitch, scale = 1) {
+    const gunDark = rgb(32, 36, 46);
+    const gunSteel = rgb(64, 72, 88);
+    const gunBarrel = rgb(20, 24, 32);
+    mb.addOrientedBox(
+      hx + dirX * 1.1 * scale + upGX * 1.35 * scale,
+      hy + dirY * 1.1 * scale + upGY * 1.35 * scale,
+      hz + dirZ * 1.1 * scale + upGZ * 1.35 * scale,
+      4.6 * scale,
+      1.6 * scale,
+      1.15 * scale,
+      yaw,
+      gunPitch,
+      gunDark,
+      TexId.SOLID,
+      0.45 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 1 * scale + upGX * 2.25 * scale,
+      hy + dirY * 1 * scale + upGY * 2.25 * scale,
+      hz + dirZ * 1 * scale + upGZ * 2.25 * scale,
+      3.2 * scale,
+      0.55 * scale,
+      0.9 * scale,
+      yaw,
+      gunPitch,
+      gunSteel,
+      TexId.SOLID,
+      0.3 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 4.3 * scale + upGX * 1.5 * scale,
+      hy + dirY * 4.3 * scale + upGY * 1.5 * scale,
+      hz + dirZ * 4.3 * scale + upGZ * 1.5 * scale,
+      2.6 * scale,
+      0.65 * scale,
+      0.65 * scale,
+      yaw,
+      gunPitch,
+      gunBarrel,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 0.2 * scale - upGX * 0.55 * scale,
+      hy + dirY * 0.2 * scale - upGY * 0.55 * scale,
+      hz + dirZ * 0.2 * scale - upGZ * 0.55 * scale,
+      1.1 * scale,
+      2.6 * scale,
+      0.85 * scale,
+      yaw,
+      gunPitch,
+      gunDark,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 0.2 * scale - upGX * 2.1 * scale,
+      hy + dirY * 0.2 * scale - upGY * 2.1 * scale,
+      hz + dirZ * 0.2 * scale - upGZ * 2.1 * scale,
+      0.85 * scale,
+      1.5 * scale,
+      0.7 * scale,
+      yaw,
+      gunPitch,
+      gunSteel,
+      TexId.SOLID,
+      0.3 * scale
+    );
+  }
+  function addFlamethrowerGeometry3D(mb, hx, hy, hz, dirX, dirY, dirZ, upGX, upGY, upGZ, rx, rz, yaw, gunPitch, scale = 1) {
+    const barrelDark = rgb(44, 48, 56);
+    const tankRed = rgb(212, 46, 36);
+    const brass = rgb(228, 178, 62);
+    const nozzleDark = rgb(28, 30, 36);
+    mb.addOrientedBox(
+      hx + dirX * 2.5 * scale + upGX * 1.2 * scale,
+      hy + dirY * 2.5 * scale + upGY * 1.2 * scale,
+      hz + dirZ * 2.5 * scale + upGZ * 1.2 * scale,
+      7.8 * scale,
+      1.7 * scale,
+      1.5 * scale,
+      yaw,
+      gunPitch,
+      barrelDark,
+      TexId.SOLID,
+      0.45 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 1.4 * scale - upGX * 0.8 * scale + rx * 0.9 * scale,
+      hy + dirY * 1.4 * scale - upGY * 0.8 * scale,
+      hz + dirZ * 1.4 * scale - upGZ * 0.8 * scale + rz * 0.9 * scale,
+      4.6 * scale,
+      2.1 * scale,
+      1.9 * scale,
+      yaw,
+      gunPitch,
+      tankRed,
+      TexId.SOLID,
+      0.45 * scale
+    );
+    mb.addOrientedBox(
+      hx - dirX * 0.2 * scale - upGX * 0.5 * scale,
+      hy - dirY * 0.2 * scale - upGY * 0.5 * scale,
+      hz - dirZ * 0.2 * scale - upGZ * 0.5 * scale,
+      1.3 * scale,
+      2.6 * scale,
+      1 * scale,
+      yaw,
+      gunPitch,
+      nozzleDark,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 5.6 * scale + upGX * 1.2 * scale,
+      hy + dirY * 5.6 * scale + upGY * 1.2 * scale,
+      hz + dirZ * 5.6 * scale + upGZ * 1.2 * scale,
+      1.2 * scale,
+      2 * scale,
+      1.8 * scale,
+      yaw,
+      gunPitch,
+      brass,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 7.2 * scale + upGX * 1.2 * scale,
+      hy + dirY * 7.2 * scale + upGY * 1.2 * scale,
+      hz + dirZ * 7.2 * scale + upGZ * 1.2 * scale,
+      2.2 * scale,
+      1.25 * scale,
+      1.25 * scale,
+      yaw,
+      gunPitch,
+      nozzleDark,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addSphere(
+      hx + dirX * 8.6 * scale + upGX * 1.45 * scale,
+      hy + dirY * 8.6 * scale + upGY * 1.45 * scale,
+      hz + dirZ * 8.6 * scale + upGZ * 1.45 * scale,
+      0.7 * scale,
+      0.7 * scale,
+      0.7 * scale,
+      6,
+      6,
+      rgb(255, 168, 48),
+      TexId.SOLID,
+      0
+    );
+  }
+  function addBurningFireEffect3D(translucentMb, pointLights, cx, baseY, cz, t, scale = 1, addLight = true) {
+    for (let i = 0; i < 6; i++) {
+      const ang = t * 5.2 + i * (Math.PI * 2 / 6);
+      const orbitR = (1.6 + i % 2 * 1.3) * scale;
+      const fx = cx + Math.cos(ang) * orbitR;
+      const fz = cz + Math.sin(ang) * orbitR;
+      const flicker = Math.sin(t * 15 + i * 1.9) * 1.8 * scale;
+      const flameH = Math.max(2.5, (5.8 + flicker) * scale);
+      const flameBaseY = baseY + (0.8 + i % 3 * 2.2) * scale;
+      translucentMb.addCone(
+        fx,
+        flameBaseY,
+        fz,
+        1.9 * scale,
+        flameH,
+        8,
+        i % 2 === 0 ? rgb(255, 128, 28, 0.92) : rgb(255, 224, 68, 0.92),
+        TexId.SOLID,
+        0
+      );
+    }
+    if (addLight) {
+      pointLights.push({
+        x: cx,
+        y: baseY + 8 * scale,
+        z: cz,
+        r: 1,
+        g: 0.56,
+        b: 0.16,
+        radius: 75 * scale,
+        intensity: 0.9 + Math.sin(t * 16) * 0.18
+      });
+    }
+  }
   function addHumanoid3D(mb, cx, baseY, cz, yaw, walkPhase, isMoving, style, isSanta = false, carryingLadder = false, translucentMb, shadowGroundY = baseY) {
     if (translucentMb) {
       translucentMb.addShadowDisc(cx, shadowGroundY, cz, 5.6, 5.6, 0.36);
@@ -4667,18 +5405,64 @@
     }
     const armSpread = 4.35;
     const mittenColor = isSanta ? rgb(224, 232, 245) : style.skin;
-    const isUnarmedPunch = (style.equippedItem ?? "unarmed") === "unarmed" && (style.punchTimer ?? 0) > 0;
+    const equippedItem = style.equippedItem ?? "empty";
+    const isUnarmedPunch = equippedItem === "unarmed" && (style.punchTimer ?? 0) > 0;
     const punchProgress = isUnarmedPunch ? 1 - Math.max(0, Math.min(1, (style.punchTimer ?? 0) / PUNCH_DURATION_SECONDS)) : 0;
-    const punchCurve = Math.sin(punchProgress * Math.PI);
     const activePunchSide = style.punchHand === "left" ? -1 : 1;
-    const isHoldingUzi = style.equippedItem === "uzi";
+    const isHoldingUzi = equippedItem === "uzi";
+    const isHoldingFlamethrower = equippedItem === "flamethrower";
+    const isDroppingUzi = (style.uziDropTimer ?? 0) > 0 && !isHoldingUzi && !isHoldingFlamethrower;
+    const vibeActive = (isHoldingUzi || isHoldingFlamethrower) && (style.weaponVibrationTimer ?? 0) > 0;
+    const vibeTime = style.elapsedTime ?? walkPhase;
+    const vibeFwd = vibeActive ? Math.sin(vibeTime * 95) * 0.55 : 0;
+    const vibeSide = vibeActive ? Math.cos(vibeTime * 115) * 0.42 : 0;
+    const vibeUp = vibeActive ? Math.sin(vibeTime * 135) * 0.42 : 0;
     for (const side of [1, -1]) {
       const shoulderX = cx + rx * 3.7 * side;
       const shoulderY = y0 + 9.4;
       const shoulderZ = cz + rz * 3.7 * side;
       mb.addSphere(shoulderX, shoulderY, shoulderZ, 1.4, 1.4, 1.4, 6, 8, style.coat, TexId.FABRIC, 0.5);
-      if (isHoldingUzi && side === 1) {
-        const equipTimer = Math.max(0, style.uziEquipTimer ?? 0);
+      if (isDroppingUzi && side === 1) {
+        const dropProgress = 1 - Math.max(0, Math.min(1, (style.uziDropTimer ?? 0) / UZI_DROP_DURATION_SECONDS));
+        const extFactor = dropProgress < 0.4 ? dropProgress / 0.4 : dropProgress < 0.72 ? 1 : Math.max(0, 1 - (dropProgress - 0.72) / 0.28);
+        const dropTheta = extFactor * (Math.PI * 0.52);
+        const sd = Math.sin(dropTheta);
+        const cd = Math.cos(dropTheta);
+        const dirX = rx * sd;
+        const dirY = -cd;
+        const dirZ = rz * sd;
+        const ax0 = cx + rx * armSpread;
+        const az0 = cz + rz * armSpread;
+        mb.addOrientedBox(
+          ax0 + dirX * 2.2,
+          shoulderY + dirY * 2.2,
+          az0 + dirZ * 2.2,
+          2,
+          4.4,
+          2,
+          yaw + Math.PI * 0.5,
+          dropTheta,
+          style.coat,
+          TexId.FABRIC,
+          0.65
+        );
+        mb.addSphere(
+          ax0 + dirX * 4.4,
+          shoulderY + dirY * 4.4,
+          az0 + dirZ * 4.4,
+          1.15,
+          1.15,
+          1.15,
+          6,
+          8,
+          mittenColor,
+          TexId.SOLID,
+          0.5
+        );
+        continue;
+      }
+      if ((isHoldingUzi || isHoldingFlamethrower) && side === 1) {
+        const equipTimer = isHoldingUzi ? Math.max(0, style.uziEquipTimer ?? 0) : 0;
         const tEquip = equipTimer > 0 ? 1 - Math.min(1, equipTimer / UZI_EQUIP_DURATION_SECONDS) : 1;
         const theta = Math.PI - tEquip * (Math.PI * 0.5);
         const st = Math.sin(theta);
@@ -4686,11 +5470,12 @@
         const dirX = st * fx;
         const dirY = -ct;
         const dirZ = st * fz;
-        const ax0 = cx + rx * armSpread * side;
-        const az0 = cz + rz * armSpread * side;
+        const ax0 = cx + rx * (armSpread * side + vibeSide) + fx * vibeFwd;
+        const az0 = cz + rz * (armSpread * side + vibeSide) + fz * vibeFwd;
+        const syVibe = shoulderY + vibeUp;
         mb.addOrientedBox(
           ax0 + dirX * 2.2,
-          shoulderY + dirY * 2.2,
+          syVibe + dirY * 2.2,
           az0 + dirZ * 2.2,
           2,
           4.4,
@@ -4702,90 +5487,62 @@
           0.65
         );
         const hx = ax0 + dirX * 4.4;
-        const hy = shoulderY + dirY * 4.4;
+        const hy = syVibe + dirY * 4.4;
         const hz = az0 + dirZ * 4.4;
         mb.addSphere(hx, hy, hz, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
         const gunPitch = theta - Math.PI * 0.5;
         const upGX = ct * fx;
         const upGY = st;
         const upGZ = ct * fz;
-        const gunDark = rgb(32, 36, 46);
-        const gunSteel = rgb(64, 72, 88);
-        const gunBarrel = rgb(20, 24, 32);
-        mb.addOrientedBox(
-          hx + dirX * 1.1 + upGX * 1.35,
-          hy + dirY * 1.1 + upGY * 1.35,
-          hz + dirZ * 1.1 + upGZ * 1.35,
-          4.6,
-          1.6,
-          1.15,
-          yaw,
-          gunPitch,
-          gunDark,
-          TexId.SOLID,
-          0.45
-        );
-        mb.addOrientedBox(
-          hx + dirX * 1 + upGX * 2.25,
-          hy + dirY * 1 + upGY * 2.25,
-          hz + dirZ * 1 + upGZ * 2.25,
-          3.2,
-          0.55,
-          0.9,
-          yaw,
-          gunPitch,
-          gunSteel,
-          TexId.SOLID,
-          0.3
-        );
-        mb.addOrientedBox(
-          hx + dirX * 4.3 + upGX * 1.5,
-          hy + dirY * 4.3 + upGY * 1.5,
-          hz + dirZ * 4.3 + upGZ * 1.5,
-          2.6,
-          0.65,
-          0.65,
-          yaw,
-          gunPitch,
-          gunBarrel,
-          TexId.SOLID,
-          0.35
-        );
-        mb.addOrientedBox(
-          hx + dirX * 0.2 - upGX * 0.55,
-          hy + dirY * 0.2 - upGY * 0.55,
-          hz + dirZ * 0.2 - upGZ * 0.55,
-          1.1,
-          2.6,
-          0.85,
-          yaw,
-          gunPitch,
-          gunDark,
-          TexId.SOLID,
-          0.35
-        );
-        mb.addOrientedBox(
-          hx + dirX * 0.2 - upGX * 2.1,
-          hy + dirY * 0.2 - upGY * 2.1,
-          hz + dirZ * 0.2 - upGZ * 2.1,
-          0.85,
-          1.5,
-          0.7,
-          yaw,
-          gunPitch,
-          gunSteel,
-          TexId.SOLID,
-          0.3
-        );
+        if (isHoldingFlamethrower) {
+          addFlamethrowerGeometry3D(
+            mb,
+            hx,
+            hy,
+            hz,
+            dirX,
+            dirY,
+            dirZ,
+            upGX,
+            upGY,
+            upGZ,
+            rx,
+            rz,
+            yaw,
+            gunPitch,
+            1
+          );
+        } else {
+          addUziGeometry3D(
+            mb,
+            hx,
+            hy,
+            hz,
+            dirX,
+            dirY,
+            dirZ,
+            upGX,
+            upGY,
+            upGZ,
+            yaw,
+            gunPitch,
+            1
+          );
+        }
         continue;
       }
-      if (isUnarmedPunch && side === activePunchSide) {
-        const punchTheta = punchCurve * (Math.PI * 0.54);
-        const reachExtra = punchCurve * 2.4;
+      if (isUnarmedPunch) {
+        const flailPhase = punchProgress * Math.PI * 6;
+        const sideSign = side === activePunchSide ? 1 : -1;
+        const envelope = Math.sin(punchProgress * Math.PI);
+        const flailSin = Math.sin(flailPhase) * sideSign;
+        const punchTheta = envelope * (Math.PI * 0.56 + flailSin * 0.44);
+        const reachExtra = envelope * (1.5 + Math.max(0, flailSin) * 2.3);
+        const lateralSway = Math.cos(flailPhase) * sideSign * envelope * 0.9;
         const sp = Math.sin(punchTheta);
         const cp = Math.cos(punchTheta);
-        const ax0 = cx + rx * armSpread * side + fx * reachExtra;
-        const az0 = cz + rz * armSpread * side + fz * reachExtra;
+        const ax0 = cx + rx * (armSpread * side + lateralSway) + fx * reachExtra;
+        const az0 = cz + rz * (armSpread * side + lateralSway) + fz * reachExtra;
         mb.addOrientedBox(
           ax0 + fx * sp * 2.2,
           shoulderY - cp * 2.2,
@@ -5172,6 +5929,20 @@
     const pointLights = [];
     const t = state.elapsedTime;
     const levelId = state.currentLevelId;
+    const maybeBurnNpc = (key, nx, ny, nz) => {
+      if (state.burningNpcs.has(key)) {
+        addBurningFireEffect3D(
+          translucent,
+          pointLights,
+          nx,
+          ny,
+          nz,
+          t,
+          1,
+          pointLights.length < 2
+        );
+      }
+    };
     const playerVisible = state.player.blinkTimer <= 0 || Math.floor(state.player.blinkTimer * 12) % 2 === 0;
     const px = state.player.x + state.player.width * 0.5;
     const pz = state.climbing && levelId === "level-outside" ? 10 * TILE_SIZE + 5.2 : state.player.y + state.player.height * 0.5;
@@ -5180,6 +5951,15 @@
     const playerYaw = state.climbing && levelId === "level-outside" ? -Math.PI / 2 : typeof state.player.renderYaw === "number" ? state.player.renderYaw : typeof state.player.yaw === "number" ? state.player.yaw : directionToYaw(state.player.facing);
     if (playerVisible) {
       const electrocutedFlash = state.electrocutionTimer > 0 && Math.floor(t * 20) % 2 === 0;
+      const sharedWeaponFields = {
+        equippedItem: state.player.equippedItem,
+        punchTimer: state.player.punchTimer,
+        punchHand: state.player.punchHand,
+        uziEquipTimer: state.player.uziEquipTimer,
+        uziDropTimer: state.player.uziDropTimer,
+        weaponVibrationTimer: state.player.weaponVibrationTimer,
+        elapsedTime: t
+      };
       const santaStyle = electrocutedFlash ? {
         coat: rgb(245, 250, 120),
         trim: rgb(255, 255, 255),
@@ -5188,10 +5968,7 @@
         hair: rgb(255, 255, 255),
         hat: rgb(245, 250, 120),
         hasBeard: true,
-        equippedItem: state.player.equippedItem,
-        punchTimer: state.player.punchTimer,
-        punchHand: state.player.punchHand,
-        uziEquipTimer: state.player.uziEquipTimer
+        ...sharedWeaponFields
       } : {
         coat: rgb(216, 34, 42),
         trim: rgb(248, 250, 255),
@@ -5200,10 +5977,7 @@
         hair: rgb(250, 252, 255),
         hat: rgb(220, 36, 42),
         hasBeard: true,
-        equippedItem: state.player.equippedItem,
-        punchTimer: state.player.punchTimer,
-        punchHand: state.player.punchHand,
-        uziEquipTimer: state.player.uziEquipTimer
+        ...sharedWeaponFields
       };
       const rosannaCutsceneActive = levelId === "level-upstairs" && Boolean(state.levels["level-upstairs"].rosannaCutscene?.active);
       const toiletCutsceneActive = levelId === "level-basement" && Boolean(state.levels["level-basement"].toiletCutscene?.active);
@@ -5273,6 +6047,7 @@
           false,
           translucent
         );
+        maybeBurnNpc("outside:Alex", ax, ay, az);
       }
       state.throwers.forEach((th, idx) => {
         const tx = th.x + th.width * 0.5;
@@ -5296,6 +6071,7 @@
           hat: rgb(128, 64, 112)
         };
         addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style, false, false, translucent);
+        maybeBurnNpc(idx === 0 ? "outside:Sylvester" : "outside:Annelotte", tx, ty, tz);
       });
       for (const sb of state.snowballs) {
         const sx = sb.x + sb.width * 0.5;
@@ -5391,11 +6167,13 @@
         radius: 125,
         intensity: 1.05 + Math.sin(t * 13) * 0.18
       });
+      const arjanX = basement.windowNpc.x + basement.windowNpc.width * 0.5;
+      const arjanZ = basement.windowNpc.y + basement.windowNpc.height * 0.5;
       addHumanoid3D(
         opaque,
-        basement.windowNpc.x + basement.windowNpc.width * 0.5,
+        arjanX,
         0,
-        basement.windowNpc.y + basement.windowNpc.height * 0.5,
+        arjanZ,
         basement.coneOfSight ? basement.coneOfSight.direction : directionToYaw(basement.windowNpc.facing),
         t,
         false,
@@ -5410,11 +6188,14 @@
         false,
         translucent
       );
+      maybeBurnNpc("basement:Arjan", arjanX, 0, arjanZ);
+      const olexaX = basement.olexaNpc.x + basement.olexaNpc.width * 0.5;
+      const olexaZ = basement.olexaNpc.y + basement.olexaNpc.height * 0.5;
       addHumanoid3D(
         opaque,
-        basement.olexaNpc.x + basement.olexaNpc.width * 0.5,
+        olexaX,
         0,
-        basement.olexaNpc.y + basement.olexaNpc.height * 0.5,
+        olexaZ,
         basement.olexaConeOfSight ? basement.olexaConeOfSight.direction : directionToYaw(basement.olexaNpc.facing),
         t,
         false,
@@ -5429,6 +6210,7 @@
         false,
         translucent
       );
+      maybeBurnNpc("basement:Olexa", olexaX, 0, olexaZ);
       const isBathroomClosed = basement.doors.some((d) => d.id === "basement-bathroom-door");
       if (!isBathroomClosed) {
         const tx = basement.toiletNpc.x + basement.toiletNpc.width * 0.5;
@@ -5453,6 +6235,7 @@
           false,
           translucent
         );
+        maybeBurnNpc("basement:Hanneloes", tx, 2, tz);
         if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) {
           addExclamationBadge3D(opaque, tx, 2, tz);
         }
@@ -5464,6 +6247,199 @@
       }
       for (const door of basement.openedDoors) {
         addOpenedDoor3D(opaque, door);
+      }
+      if (basement.spaDoorClosed) {
+        addLockedDoubleDoor3D(opaque, 16 * TILE_SIZE, 12.5 * TILE_SIZE, TILE_SIZE);
+        opaque.addBox(
+          BASEMENT_SPA_HIDDEN_MASK.x + BASEMENT_SPA_HIDDEN_MASK.width * 0.5,
+          0.2,
+          BASEMENT_SPA_HIDDEN_MASK.y + BASEMENT_SPA_HIDDEN_MASK.height * 0.5,
+          BASEMENT_SPA_HIDDEN_MASK.width,
+          INDOOR_WALL_HEIGHT + 0.4,
+          BASEMENT_SPA_HIDDEN_MASK.height,
+          rgb(12, 14, 22),
+          TexId.SOLID,
+          0
+        );
+      }
+      const mineX = BASEMENT_MINE_BOUNDS.x + BASEMENT_MINE_BOUNDS.width * 0.5;
+      const mineZ = BASEMENT_MINE_BOUNDS.y + BASEMENT_MINE_BOUNDS.height * 0.5;
+      if (basement.mineState !== "exploded") {
+        translucent.addShadowDisc(mineX, 0, mineZ, 5, 5, 0.25);
+        opaque.addCylinder(mineX, 0, mineZ, 4.4, 4.7, 1.35, 12, rgb(66, 76, 56), TexId.SOLID, 0.55);
+        opaque.addCylinder(mineX, 1.35, mineZ, 2.7, 2.7, 0.5, 10, rgb(96, 104, 86), TexId.SOLID, 0.35);
+        const isBlinking = basement.mineState === "blinking";
+        const fuseProgress = isBlinking ? 1 - Math.max(0, Math.min(1, basement.mineTimer / BASEMENT_MINE_FUSE_SECONDS)) : 0;
+        const ledOn = isBlinking ? Math.sin(t * (12 + fuseProgress * 26)) > 0 : Math.sin(t * 3.5) > 0.4;
+        opaque.addSphere(
+          mineX,
+          2.15,
+          mineZ,
+          0.85,
+          0.75,
+          0.85,
+          8,
+          8,
+          ledOn ? rgb(255, 36, 36) : rgb(84, 18, 18),
+          TexId.SOLID,
+          0.2
+        );
+        if (isBlinking && ledOn && pointLights.length < 2) {
+          pointLights.push({
+            x: mineX,
+            y: 4,
+            z: mineZ,
+            r: 1,
+            g: 0.18,
+            b: 0.14,
+            radius: 65,
+            intensity: 0.95
+          });
+        }
+      }
+      if (basement.mineExplosionTimer > 0) {
+        const expAlpha = Math.max(0, Math.min(1, basement.mineExplosionTimer / 0.65));
+        const radius = 5 + (1 - expAlpha) * 18;
+        translucent.addSphere(
+          mineX,
+          radius * 0.45,
+          mineZ - 6,
+          radius,
+          radius * 0.85,
+          radius,
+          10,
+          12,
+          rgb(255, 138, 32, expAlpha * 0.85),
+          TexId.SOLID,
+          0
+        );
+        translucent.addSphere(
+          16 * TILE_SIZE,
+          10,
+          12.5 * TILE_SIZE,
+          radius * 0.72,
+          radius * 0.72,
+          radius * 0.72,
+          8,
+          10,
+          rgb(255, 224, 92, expAlpha * 0.9),
+          TexId.SOLID,
+          0
+        );
+      }
+      if (!basement.spaDoorClosed && !basement.flamethrowerPickedUp) {
+        const fx = BASEMENT_FLAMETHROWER_BOUNDS.x + BASEMENT_FLAMETHROWER_BOUNDS.width * 0.5;
+        const fz = BASEMENT_FLAMETHROWER_BOUNDS.y + BASEMENT_FLAMETHROWER_BOUNDS.height * 0.5;
+        const bobY = 3.2 + Math.sin(t * 3.4) * 0.85;
+        const spinYaw = t * 1.5;
+        const cSpin = Math.cos(spinYaw);
+        const sSpin = Math.sin(spinYaw);
+        translucent.addShadowDisc(fx, 0, fz, 5.5, 5.5, 0.28);
+        translucent.addTorus(
+          fx,
+          0.35,
+          fz,
+          4.8,
+          0.45,
+          14,
+          6,
+          "y",
+          rgb(255, 198, 56, 0.72),
+          TexId.SOLID,
+          0
+        );
+        addFlamethrowerGeometry3D(
+          opaque,
+          fx - cSpin * 3,
+          bobY,
+          fz - sSpin * 3,
+          cSpin,
+          0,
+          sSpin,
+          0,
+          1,
+          0,
+          -sSpin,
+          cSpin,
+          spinYaw,
+          0,
+          1.05
+        );
+      }
+      if (!basement.stairsWoodBurned) {
+        const wx = BASEMENT_STAIRS_WOOD_BOUNDS.x + BASEMENT_STAIRS_WOOD_BOUNDS.width * 0.5;
+        const wy0 = BASEMENT_STAIRS_WOOD_BOUNDS.y;
+        const burnRatio = basement.stairsWoodBurnTimer > 0 ? Math.max(0.18, basement.stairsWoodBurnTimer / STAIRS_WOOD_BURN_DURATION) : 1;
+        const logColor = basement.stairsWoodBurnTimer > 0 ? rgb(76, 44, 28) : rgb(138, 86, 46);
+        const barkColor = basement.stairsWoodBurnTimer > 0 ? rgb(52, 28, 18) : rgb(98, 58, 30);
+        for (let rowIdx = 0; rowIdx < 5; rowIdx++) {
+          const lz = wy0 + 7 + rowIdx * 12.5;
+          opaque.addBeveledBox(
+            wx - 2.6,
+            0,
+            lz,
+            4.4 * burnRatio,
+            3.8 * burnRatio,
+            10.8,
+            0.45,
+            logColor,
+            TexId.WOOD_GRAIN,
+            0.55
+          );
+          opaque.addBeveledBox(
+            wx + 2.6,
+            0,
+            lz,
+            4.4 * burnRatio,
+            3.8 * burnRatio,
+            10.8,
+            0.45,
+            barkColor,
+            TexId.WOOD_GRAIN,
+            0.55
+          );
+          opaque.addBeveledBox(
+            wx,
+            3.6 * burnRatio,
+            lz,
+            11.2,
+            3.8 * burnRatio,
+            4.4 * burnRatio,
+            0.45,
+            logColor,
+            TexId.WOOD_GRAIN,
+            0.55
+          );
+          if (rowIdx % 2 === 0) {
+            opaque.addBeveledBox(
+              wx,
+              7.2 * burnRatio,
+              lz,
+              8.4,
+              3.4 * burnRatio,
+              4.2 * burnRatio,
+              0.45,
+              barkColor,
+              TexId.WOOD_GRAIN,
+              0.5
+            );
+          }
+        }
+        if (basement.stairsWoodBurnTimer > 0) {
+          for (let fi = 0; fi < 3; fi++) {
+            const fz = wy0 + 12 + fi * 20;
+            addBurningFireEffect3D(
+              translucent,
+              pointLights,
+              wx,
+              1.2,
+              fz,
+              t + fi * 0.7,
+              1.1,
+              fi === 1 && pointLights.length < 2
+            );
+          }
+        }
       }
     } else if (levelId === "level-upstairs") {
       const upstairs = state.levels["level-upstairs"];
@@ -5551,12 +6527,15 @@
         false,
         translucent
       );
+      maybeBurnNpc("upstairs:Albin", UPSTAIRS_ALBIN_X + 6, 0, upstairs.albinY + 6);
       const isDianaDistracted = Boolean(state.player.states.get(DIANA_DISTRACTED_KEY));
+      const dianaX = upstairs.dianaNpc.x + upstairs.dianaNpc.width * 0.5;
+      const dianaZ = upstairs.dianaNpc.y + upstairs.dianaNpc.height * 0.5;
       addHumanoid3D(
         opaque,
-        upstairs.dianaNpc.x + upstairs.dianaNpc.width * 0.5,
+        dianaX,
         0,
-        upstairs.dianaNpc.y + upstairs.dianaNpc.height * 0.5,
+        dianaZ,
         upstairs.dianaCone ? upstairs.dianaCone.direction : Math.PI / 2,
         t,
         false,
@@ -5573,12 +6552,15 @@
         false,
         translucent
       );
+      maybeBurnNpc("upstairs:Diana", dianaX, 0, dianaZ);
       const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY));
+      const simonX = upstairs.simonNpc.x + upstairs.simonNpc.width * 0.5;
+      const simonZ = upstairs.simonNpc.y + upstairs.simonNpc.height * 0.5;
       addHumanoid3D(
         opaque,
-        upstairs.simonNpc.x + upstairs.simonNpc.width * 0.5,
+        simonX,
         0,
-        upstairs.simonNpc.y + upstairs.simonNpc.height * 0.5,
+        simonZ,
         upstairs.simonCone ? upstairs.simonCone.direction : Math.PI,
         t,
         false,
@@ -5595,12 +6577,15 @@
         false,
         translucent
       );
+      maybeBurnNpc("upstairs:Simon", simonX, 0, simonZ);
       if (isTableRoomDoorOpen) {
+        const henrikX = upstairs.henrikNpc.x + upstairs.henrikNpc.width * 0.5;
+        const henrikZ = upstairs.henrikNpc.y + upstairs.henrikNpc.height * 0.5;
         addHumanoid3D(
           opaque,
-          upstairs.henrikNpc.x + upstairs.henrikNpc.width * 0.5,
+          henrikX,
           0,
-          upstairs.henrikNpc.y + upstairs.henrikNpc.height * 0.5,
+          henrikZ,
           upstairs.henrikCone ? upstairs.henrikCone.direction : Math.PI / 2,
           t,
           false,
@@ -5615,11 +6600,14 @@
           false,
           translucent
         );
+        maybeBurnNpc("upstairs:Henrik", henrikX, 0, henrikZ);
+        const tanjaX = upstairs.tanjaNpc.x + upstairs.tanjaNpc.width * 0.5;
+        const tanjaZ = upstairs.tanjaNpc.y + upstairs.tanjaNpc.height * 0.5;
         addHumanoid3D(
           opaque,
-          upstairs.tanjaNpc.x + upstairs.tanjaNpc.width * 0.5,
+          tanjaX,
           0,
-          upstairs.tanjaNpc.y + upstairs.tanjaNpc.height * 0.5,
+          tanjaZ,
           upstairs.tanjaCone ? upstairs.tanjaCone.direction : -Math.PI / 2,
           t,
           false,
@@ -5634,13 +6622,16 @@
           false,
           translucent
         );
+        maybeBurnNpc("upstairs:Tanja", tanjaX, 0, tanjaZ);
       }
       if (isBedroomDoorOpen) {
+        const amX = upstairs.anneMarieNpc.x + upstairs.anneMarieNpc.width * 0.5;
+        const amZ = upstairs.anneMarieNpc.y + upstairs.anneMarieNpc.height * 0.5;
         addHumanoid3D(
           opaque,
-          upstairs.anneMarieNpc.x + upstairs.anneMarieNpc.width * 0.5,
+          amX,
           0,
-          upstairs.anneMarieNpc.y + upstairs.anneMarieNpc.height * 0.5,
+          amZ,
           upstairs.anneMarieCone ? upstairs.anneMarieCone.direction : -Math.PI / 2,
           t,
           false,
@@ -5656,6 +6647,7 @@
           false,
           translucent
         );
+        maybeBurnNpc("upstairs:Anne-Marie", amX, 0, amZ);
       }
       addConeOfSight3D(translucent, upstairs.albinCone);
       addConeOfSight3D(translucent, upstairs.dianaCone);
@@ -5699,22 +6691,134 @@
           false,
           translucent
         );
+        maybeBurnNpc(`people:${npc.name}`, nx, 0, nz);
       }
     }
-    for (const proj of state.projectiles) {
-      opaque.addOrientedBox(
-        proj.x,
-        proj.z,
-        proj.y,
-        3.2,
-        0.8,
-        0.8,
-        proj.yaw,
+    for (const drop of state.droppedUzis) {
+      if (drop.levelId !== levelId) continue;
+      const cDrop = Math.cos(drop.yaw);
+      const sDrop = Math.sin(drop.yaw);
+      translucent.addShadowDisc(drop.x, drop.z, drop.y, 3.2, 3.2, 0.28);
+      addUziGeometry3D(
+        opaque,
+        drop.x - cDrop * 1.4,
+        drop.z + 2.2,
+        drop.y - sDrop * 1.4,
+        cDrop,
         0,
-        rgb(255, 224, 96),
-        TexId.SOLID,
-        0.35
+        sDrop,
+        0,
+        1,
+        0,
+        drop.yaw,
+        0,
+        0.95
       );
+    }
+    for (const hole of state.bulletHoles) {
+      if (hole.levelId !== levelId) continue;
+      opaque.addBox(
+        hole.x,
+        hole.z - 0.8,
+        hole.y,
+        1.6,
+        1.6,
+        1.6,
+        rgb(12, 12, 16),
+        TexId.SOLID,
+        0
+      );
+    }
+    for (const pool of state.bloodPools) {
+      if (pool.levelId !== levelId) continue;
+      const fade = Math.max(0, Math.min(1, (pool.maxAge - pool.age) * 0.6));
+      translucent.addCylinder(
+        pool.x,
+        pool.z + 0.08,
+        pool.y,
+        3.8,
+        3.8,
+        0.18,
+        12,
+        rgb(148, 12, 18, 0.88 * fade),
+        TexId.SOLID,
+        0
+      );
+    }
+    for (const bp of state.bloodParticles) {
+      if (bp.levelId !== levelId) continue;
+      opaque.addSphere(
+        bp.x,
+        bp.z,
+        bp.y,
+        0.95,
+        0.95,
+        0.95,
+        6,
+        6,
+        rgb(176, 14, 22),
+        TexId.SOLID,
+        0.15
+      );
+    }
+    for (const proj of state.projectiles) {
+      if (proj.kind === "fireball") {
+        const pulse = 1 + Math.sin(t * 28 + proj.x * 0.2) * 0.16;
+        translucent.addSphere(
+          proj.x,
+          proj.z,
+          proj.y,
+          3.1 * pulse,
+          3.1 * pulse,
+          3.1 * pulse,
+          8,
+          10,
+          rgb(255, 118, 22, 0.88),
+          TexId.SOLID,
+          0
+        );
+        opaque.addSphere(
+          proj.x,
+          proj.z,
+          proj.y,
+          1.65 * pulse,
+          1.65 * pulse,
+          1.65 * pulse,
+          6,
+          8,
+          rgb(255, 234, 84),
+          TexId.SOLID,
+          0
+        );
+        if (pointLights.length < 2) {
+          pointLights.push({
+            x: proj.x,
+            y: proj.z + 2,
+            z: proj.y,
+            r: 1,
+            g: 0.52,
+            b: 0.14,
+            radius: 65,
+            intensity: 0.9
+          });
+        }
+      } else {
+        const speedXY = Math.hypot(proj.vx, proj.vy);
+        const pitch = speedXY > 1e-4 ? Math.atan2(proj.vz ?? 0, speedXY) : 0;
+        opaque.addOrientedBox(
+          proj.x,
+          proj.z,
+          proj.y,
+          3.2,
+          0.8,
+          0.8,
+          proj.yaw,
+          pitch,
+          rgb(255, 224, 96),
+          TexId.SOLID,
+          0.35
+        );
+      }
     }
     if (state.debugMode) {
       translucent.addBox(
@@ -5978,11 +7082,26 @@
     }
     ctx.restore();
   }
+  function drawEmptyHandsIcon(ctx, cx, cy, scale = 1) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = "#181420";
+    ctx.fillRect(-9, -1, 5, 6);
+    ctx.fillRect(4, -1, 5, 6);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillRect(-8, 0, 3, 4);
+    ctx.fillRect(5, 0, 3, 4);
+    ctx.fillStyle = "#d62828";
+    ctx.fillRect(-8, 4, 3, 3);
+    ctx.fillRect(5, 4, 3, 3);
+    ctx.restore();
+  }
   function drawUnarmedArmsIcon(ctx, cx, cy, punching, scale = 1) {
     ctx.save();
     ctx.translate(cx, cy);
     ctx.scale(scale, scale);
-    const leftReach = punching ? -2 : 0;
+    const leftReach = punching ? -3 : -1;
     ctx.fillStyle = "#181420";
     ctx.fillRect(-10, -2 + leftReach, 6, 9);
     ctx.fillStyle = "#d62828";
@@ -5991,7 +7110,7 @@
     ctx.fillRect(-9, -2 + leftReach, 4, 2);
     ctx.fillStyle = "#e2e8f0";
     ctx.fillRect(-9, -5 + leftReach, 4, 3);
-    const rightReach = punching ? -4 : 0;
+    const rightReach = punching ? -5 : -2;
     ctx.fillStyle = "#181420";
     ctx.fillRect(4, -2 + rightReach, 6, 9);
     ctx.fillStyle = "#d62828";
@@ -6027,8 +7146,26 @@
     ctx.fillRect(4, -6, 1, 1);
     ctx.restore();
   }
+  function drawFlamethrowerIcon(ctx, cx, cy, scale = 1) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = "#d62828";
+    ctx.fillRect(-9, -4, 7, 7);
+    ctx.fillStyle = "#334155";
+    ctx.fillRect(-3, -3, 11, 4);
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillRect(7, -3, 3, 3);
+    ctx.fillStyle = "#fb923c";
+    ctx.fillRect(10, -4, 3, 4);
+    ctx.fillStyle = "#fef08a";
+    ctx.fillRect(10, -3, 2, 2);
+    ctx.fillStyle = "#181420";
+    ctx.fillRect(0, 1, 3, 4);
+    ctx.restore();
+  }
   function drawEquippedItemHud(ctx, player) {
-    const boxW = 48;
+    const boxW = 50;
     const boxH = 34;
     const boxX = ctx.canvas.width - boxW - 8;
     const boxY = 8;
@@ -6048,9 +7185,48 @@
         "#ffd166",
         "#0c101a"
       );
-    } else {
+      const ammoText = String(player.uziAmmo);
+      const ammoW = Math.max(22, measurePixelText(ammoText) + 10);
+      const ammoH = 18;
+      const ammoX = boxX - ammoW - 4;
+      const ammoY = boxY + Math.round((boxH - ammoH) / 2);
+      drawSnesFrame(ctx, ammoX, ammoY, ammoW, ammoH);
+      const aw = measurePixelText(ammoText);
+      drawPixelText(
+        ctx,
+        ammoText,
+        ammoX + Math.round((ammoW - aw) / 2),
+        ammoY + 5,
+        player.uziAmmo <= 5 ? "#f87171" : "#ffd166",
+        "#0c101a"
+      );
+    } else if (player.equippedItem === "flamethrower") {
+      drawFlamethrowerIcon(ctx, iconCenterX, iconCenterY, 1);
+      const label = "FLAME";
+      const tw = measurePixelText(label);
+      drawPixelText(
+        ctx,
+        label,
+        boxX + Math.round((boxW - tw) / 2),
+        boxY + 23,
+        "#fb923c",
+        "#0c101a"
+      );
+    } else if (player.equippedItem === "unarmed") {
       drawUnarmedArmsIcon(ctx, iconCenterX, iconCenterY + 1, player.punchTimer > 0, 1);
       const label = "UNARMED";
+      const tw = measurePixelText(label);
+      drawPixelText(
+        ctx,
+        label,
+        boxX + Math.round((boxW - tw) / 2),
+        boxY + 23,
+        "#ffd166",
+        "#0c101a"
+      );
+    } else {
+      drawEmptyHandsIcon(ctx, iconCenterX, iconCenterY + 1, 1);
+      const label = "EMPTY";
       const tw = measurePixelText(label);
       drawPixelText(
         ctx,
@@ -6061,36 +7237,42 @@
         "#0c101a"
       );
     }
-    if (player.unlockedUzi) {
-      const slotSize = 20;
-      const gap = 3;
-      const slotsTotalW = slotSize * 2 + gap;
-      const slotsStartX = boxX + boxW - slotsTotalW;
-      const slotsY = boxY + boxH + 4;
-      drawSnesFrame(ctx, slotsStartX, slotsY, slotSize, slotSize);
-      if (player.equippedItem === "unarmed") {
-        ctx.strokeStyle = "#ffd166";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(slotsStartX + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
-      }
-      drawUnarmedArmsIcon(
-        ctx,
-        slotsStartX + Math.floor(slotSize / 2),
-        slotsY + 11,
-        false,
-        0.7
-      );
-      drawPixelText(ctx, "1", slotsStartX + 3, slotsY + 2, "#ffd166", "#0c101a");
-      const slot2X = slotsStartX + slotSize + gap;
-      drawSnesFrame(ctx, slot2X, slotsY, slotSize, slotSize);
-      if (player.equippedItem === "uzi") {
-        ctx.strokeStyle = "#ffd166";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(slot2X + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
-      }
-      drawUziIcon(ctx, slot2X + Math.floor(slotSize / 2), slotsY + 11, 0.7);
-      drawPixelText(ctx, "2", slot2X + 3, slotsY + 2, "#ffd166", "#0c101a");
+    const slots = [
+      { key: "1", id: "empty" },
+      { key: "2", id: "unarmed" }
+    ];
+    if (player.unlockedUzi && !player.uziDepleted) {
+      slots.push({ key: "3", id: "uzi" });
     }
+    if (player.unlockedFlamethrower) {
+      slots.push({ key: "4", id: "flamethrower" });
+    }
+    const slotSize = 20;
+    const gap = 3;
+    const slotsTotalW = slotSize * slots.length + gap * (slots.length - 1);
+    const slotsStartX = boxX + boxW - slotsTotalW;
+    const slotsY = boxY + boxH + 4;
+    slots.forEach((slot, idx) => {
+      const sx = slotsStartX + idx * (slotSize + gap);
+      drawSnesFrame(ctx, sx, slotsY, slotSize, slotSize);
+      if (player.equippedItem === slot.id) {
+        ctx.strokeStyle = "#ffd166";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sx + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
+      }
+      const icx = sx + Math.floor(slotSize / 2);
+      const icy = slotsY + 11;
+      if (slot.id === "empty") {
+        drawEmptyHandsIcon(ctx, icx, icy, 0.7);
+      } else if (slot.id === "unarmed") {
+        drawUnarmedArmsIcon(ctx, icx, icy, false, 0.7);
+      } else if (slot.id === "uzi") {
+        drawUziIcon(ctx, icx, icy, 0.7);
+      } else if (slot.id === "flamethrower") {
+        drawFlamethrowerIcon(ctx, icx, icy, 0.65);
+      }
+      drawPixelText(ctx, slot.key, sx + 3, slotsY + 2, "#ffd166", "#0c101a");
+    });
     ctx.restore();
   }
   function drawAchievementBanner(ctx, text, zKeySprite, showHint) {
@@ -6964,6 +8146,42 @@
       for (const door of basement.doors) {
         drawClosedDoorAndHiddenMask(ctx, door);
       }
+      if (basement.spaDoorClosed) {
+        drawClosedDoorAndHiddenMask(ctx, {
+          id: "basement-hall-north-door",
+          bounds: BASEMENT_HALL_NORTH_DOOR_BOUNDS,
+          hiddenRegions: [BASEMENT_SPA_HIDDEN_MASK]
+        });
+      } else if (!basement.flamethrowerPickedUp) {
+        ctx.fillStyle = "#fb923c";
+        ctx.fillRect(
+          BASEMENT_FLAMETHROWER_BOUNDS.x,
+          BASEMENT_FLAMETHROWER_BOUNDS.y,
+          BASEMENT_FLAMETHROWER_BOUNDS.width,
+          BASEMENT_FLAMETHROWER_BOUNDS.height
+        );
+      }
+      if (basement.mineState !== "exploded") {
+        const blinkRed = basement.mineState === "blinking" && Math.floor(basement.mineTimer * 10) % 2 === 0;
+        ctx.fillStyle = "#334155";
+        ctx.fillRect(
+          BASEMENT_MINE_BOUNDS.x,
+          BASEMENT_MINE_BOUNDS.y,
+          BASEMENT_MINE_BOUNDS.width,
+          BASEMENT_MINE_BOUNDS.height
+        );
+        ctx.fillStyle = blinkRed ? "#ef4444" : "#7f1d1d";
+        ctx.fillRect(BASEMENT_MINE_BOUNDS.x + 3, BASEMENT_MINE_BOUNDS.y + 3, 4, 4);
+      }
+      if (!basement.stairsWoodBurned) {
+        ctx.fillStyle = basement.stairsWoodBurnTimer > 0 ? "#ea580c" : "#6b4226";
+        ctx.fillRect(
+          BASEMENT_STAIRS_WOOD_BOUNDS.x,
+          BASEMENT_STAIRS_WOOD_BOUNDS.y,
+          BASEMENT_STAIRS_WOOD_BOUNDS.width,
+          BASEMENT_STAIRS_WOOD_BOUNDS.height
+        );
+      }
     } else if (state.currentLevelId === "level-upstairs") {
       const upstairs = state.levels["level-upstairs"];
       ctx.drawImage(
@@ -7189,10 +8407,21 @@
         state.levels["level-basement"].toiletCutscene.timer
       );
     }
+    for (const pool of state.bloodPools) {
+      if (pool.levelId !== state.currentLevelId) continue;
+      ctx.fillStyle = "#991b1b";
+      ctx.fillRect(Math.round(pool.x - 4), Math.round(pool.y - 3), 8, 6);
+    }
+    for (const drop of state.droppedUzis) {
+      if (drop.levelId !== state.currentLevelId) continue;
+      ctx.fillStyle = "#334155";
+      ctx.fillRect(Math.round(drop.x - 3), Math.round(drop.y - 2), 6, 4);
+    }
     if (state.projectiles.length > 0) {
-      ctx.fillStyle = "#fde047";
       for (const p of state.projectiles) {
-        ctx.fillRect(Math.round(p.x - 1), Math.round(p.y - 1), 3, 3);
+        ctx.fillStyle = p.kind === "fireball" ? "#fb923c" : "#fde047";
+        const sz = p.kind === "fireball" ? 5 : 3;
+        ctx.fillRect(Math.round(p.x - sz / 2), Math.round(p.y - sz / 2), sz, sz);
       }
     }
     if (state.debugMode) {
@@ -8875,367 +10104,6 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     return closest;
   }
 
-  // src/world/levels/levelBasement.ts
-  var V2 = 20 /* VoidBlack */;
-  var W2 = 21 /* InteriorWall */;
-  var F2 = 16 /* WoodFloor */;
-  var S = 17 /* StoneTileFloor */;
-  var B2 = 18 /* BathroomTileFloor */;
-  var T2 = 19 /* StairsFloor */;
-  var O2 = 22 /* FurnitureSolid */;
-  var BASEMENT_TILES = [
-    //0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 0
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 1
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 2
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 3
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 4
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 5
-    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 6: Library Bookshelf top
-    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 7: Library Bookshelf base | Bathroom north wall
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, O2, W2, V2, V2, V2, V2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 8: Wood stack (12) | Bathroom floor (21)
-    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, O2, W2, V2, V2, V2, V2, W2, O2, B2, O2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 9: Library couch (7) | Wood stack (12) | Sink (19) | Toilet facing west (21)
-    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, F2, W2, V2, V2, V2, V2, W2, O2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 10: Library couch (7) | Sink (19)
-    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, O2, O2, W2, V2, V2, V2, V2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 11: Library couch (7) | Fireplace (11..12)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, O2, O2, W2, W2, W2, W2, W2, W2, W2, B2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 12: Fireplace (11..12) | North Locked Door (15..16) | Bathroom Door (20)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, F2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 13: Wood->Stone threshold (14) | Hallway
-    [V2, V2, V2, V2, V2, V2, W2, F2, O2, O2, O2, F2, F2, F2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 14: Living Room couch (8..10)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, F2, S, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 15: Stairs (18..21)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, S, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 16: Dividing wall (13) | Stairs (18..21)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, O2, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 17: Chess table (8..9, non-collidable) | Coat hangers (14) | Stairs (18..21)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, O2, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 18: Coat hangers (14) | Stairs (18..21)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 19: Window NPC at col 11, row 18.5
-    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 20: Big south windows (7..9, 10..12) | Front Door (15..16)
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 21
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 22
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 23
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 24
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 25
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 26
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2]
-    // 27
-  ];
-  var BASEMENT_MAP = {
-    cols: MAP_COLS,
-    rows: MAP_ROWS,
-    tileSize: TILE_SIZE,
-    tiles: BASEMENT_TILES
-  };
-  var BASEMENT_FIREPLACE_SPAWN = {
-    x: 9.5 * TILE_SIZE,
-    y: 11 * TILE_SIZE + 2,
-    facing: "down"
-  };
-  var BASEMENT_STAIRS_SPAWN = {
-    x: 18.5 * TILE_SIZE,
-    y: 16 * TILE_SIZE + 2,
-    facing: "left"
-  };
-  var BASEMENT_WINDOW_NPC = {
-    x: 11 * TILE_SIZE + 2,
-    y: 18.5 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "down"
-  };
-  var BASEMENT_OLEXA_NPC = {
-    x: 8.5 * TILE_SIZE + 2,
-    y: 18 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "up"
-  };
-  var BASEMENT_TOILET_NPC = {
-    x: 21 * TILE_SIZE + 2,
-    y: 9 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "left"
-  };
-  var BASEMENT_HALL_NORTH_DOOR_BOUNDS = {
-    x: 15 * TILE_SIZE,
-    y: 12 * TILE_SIZE,
-    width: 2 * TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var BASEMENT_FRONT_DOOR_BOUNDS = {
-    x: 15 * TILE_SIZE,
-    y: 20 * TILE_SIZE,
-    width: 2 * TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var BASEMENT_BATHROOM_DOOR_BOUNDS = {
-    x: 20 * TILE_SIZE,
-    y: 12 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var BASEMENT_BATHROOM_HIDDEN_MASK = {
-    x: 18 * TILE_SIZE,
-    y: 7 * TILE_SIZE,
-    width: 5 * TILE_SIZE,
-    height: 5 * TILE_SIZE
-  };
-  var BASEMENT_STAIRS_TRIGGER_BOUNDS = {
-    x: 20 * TILE_SIZE,
-    y: 15 * TILE_SIZE,
-    width: 2 * TILE_SIZE,
-    height: 4 * TILE_SIZE
-  };
-  var USED_STAIRS_STATE_KEY = "usedStairs";
-  var TOILET_EVENT_TRIGGERED_KEY = "basementToiletEventTriggered";
-  var BASEMENT_CHIMNEY_INTRO_STATE_KEY = "basementChimneyIntroTriggered";
-  var LevelBasement = class {
-    constructor() {
-      __publicField(this, "id", "level-basement");
-      __publicField(this, "map", BASEMENT_MAP);
-      __publicField(this, "doors");
-      __publicField(this, "openedDoors", []);
-      __publicField(this, "windowNpc", { ...BASEMENT_WINDOW_NPC });
-      __publicField(this, "olexaNpc", { ...BASEMENT_OLEXA_NPC });
-      __publicField(this, "toiletNpc", { ...BASEMENT_TOILET_NPC });
-      __publicField(this, "toiletCutscene", null);
-      __publicField(this, "coneOfSight");
-      __publicField(this, "olexaConeOfSight");
-      __publicField(this, "npcSightAngle", -Math.PI / 2);
-      // North is -90 degrees in screen Y coordinates
-      __publicField(this, "npcSightTimer", 0);
-      __publicField(this, "intruderDetected", false);
-      this.doors = [
-        {
-          id: "basement-bathroom-door",
-          bounds: { ...BASEMENT_BATHROOM_DOOR_BOUNDS },
-          hiddenRegions: [{ ...BASEMENT_BATHROOM_HIDDEN_MASK }]
-        }
-      ];
-      this.coneOfSight = new ConeOfSight(
-        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-        this.npcSightAngle,
-        void 0,
-        this.map
-      );
-      this.olexaConeOfSight = new ConeOfSight(
-        { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
-        -Math.PI / 2,
-        // Looking north
-        void 0,
-        this.map
-      );
-    }
-    enter(player) {
-      const hasUsedStairs = Boolean(player.states.get(USED_STAIRS_STATE_KEY));
-      if (hasUsedStairs) {
-        player.x = BASEMENT_STAIRS_SPAWN.x;
-        player.y = BASEMENT_STAIRS_SPAWN.y;
-        player.facing = BASEMENT_STAIRS_SPAWN.facing;
-      } else {
-        player.x = BASEMENT_FIREPLACE_SPAWN.x;
-        player.y = BASEMENT_FIREPLACE_SPAWN.y;
-        player.facing = BASEMENT_FIREPLACE_SPAWN.facing;
-      }
-      const spawnYaw = player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
-      player.yaw = spawnYaw;
-      player.renderYaw = spawnYaw;
-      player.jumpOffset = 0;
-      player.jumpVelocity = 0;
-      player.isMoving = false;
-      player.walkTimer = 0;
-      if (this.doors.some((d) => d.id === "basement-bathroom-door")) {
-        this.openedDoors = [];
-      }
-      this.npcSightAngle = -Math.PI / 2;
-      this.npcSightTimer = 0;
-      this.intruderDetected = false;
-      this.coneOfSight = new ConeOfSight(
-        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-        this.npcSightAngle,
-        void 0,
-        this.map
-      );
-      this.olexaConeOfSight = new ConeOfSight(
-        { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
-        -Math.PI / 2,
-        void 0,
-        this.map
-      );
-    }
-    getSolidObstacles() {
-      return [
-        this.windowNpc,
-        this.olexaNpc,
-        BASEMENT_STAIRS_TRIGGER_BOUNDS,
-        ...this.doors.map((d) => d.bounds)
-      ];
-    }
-    getInteractables() {
-      const list = [
-        {
-          id: "basement-hall-north-door",
-          bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
-          promptText: "Open door",
-          dialogueLines: ["It's locked."]
-        },
-        {
-          id: "basement-front-door",
-          bounds: { ...BASEMENT_FRONT_DOOR_BOUNDS },
-          promptText: "Open door",
-          dialogueLines: ["It's locked."]
-        },
-        {
-          id: "basement-stairs-up",
-          bounds: { ...BASEMENT_STAIRS_TRIGGER_BOUNDS },
-          promptText: "Walk upstairs",
-          dialogueLines: []
-        }
-      ];
-      for (const door of this.doors) {
-        list.push({
-          id: door.id,
-          bounds: { ...door.bounds },
-          promptText: "Open door",
-          dialogueLines: []
-        });
-      }
-      return list;
-    }
-    handleInteraction(interactableId, player, ctx) {
-      const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
-      if (doorIdx !== -1) {
-        const openedDoor = this.doors[doorIdx];
-        this.doors.splice(doorIdx, 1);
-        this.openedDoors.push({
-          id: openedDoor.id,
-          bounds: { ...openedDoor.bounds },
-          progress: 0,
-          swingDirection: player.y >= openedDoor.bounds.y ? -1 : 1
-        });
-        if (openedDoor.id === "basement-bathroom-door") {
-          this.startToiletCutscene(player);
-        }
-        return true;
-      }
-      if (interactableId === "basement-stairs-up") {
-        player.states.set(USED_STAIRS_STATE_KEY, true);
-        ctx.loadLevel("level-upstairs");
-        if (!player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
-          player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
-          ctx.openDialogue([
-            "Hmm... so I believe the Christmas tree is to the left, but I must not be seen!"
-          ]);
-        }
-        return true;
-      }
-      return false;
-    }
-    startToiletCutscene(player) {
-      if (player.states.get(TOILET_EVENT_TRIGGERED_KEY)) {
-        return;
-      }
-      this.toiletCutscene = {
-        active: true,
-        timer: 0
-      };
-    }
-    updateNpcSight(dtSeconds, player, ctx) {
-      if (this.intruderDetected) {
-        return;
-      }
-      this.npcSightTimer += dtSeconds;
-      if (this.npcSightTimer >= 2) {
-        this.npcSightTimer -= 2;
-        this.npcSightAngle += Math.PI / 4;
-        this.coneOfSight = new ConeOfSight(
-          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-          this.npcSightAngle,
-          void 0,
-          this.map
-        );
-      }
-      const detectedArjan = this.coneOfSight.checkDetection(player);
-      if (detectedArjan) {
-        this.intruderDetected = true;
-        player.isMoving = false;
-        ctx.openDialogue(
-          ["You're not supposed to be here! Check-mate."],
-          () => {
-            ctx.loadLevel("level-basement");
-            player.blinkTimer = 2;
-            ctx.damagePlayer?.(30);
-          },
-          "Arjan"
-        );
-        return;
-      }
-      const detectedOlexa = this.olexaConeOfSight.checkDetection(player);
-      if (detectedOlexa) {
-        this.intruderDetected = true;
-        player.isMoving = false;
-        ctx.openDialogue(
-          ["Nobody believed me when I said you were real..."],
-          () => {
-            ctx.loadLevel("level-basement");
-            player.blinkTimer = 2;
-            ctx.damagePlayer?.(30);
-          },
-          "Olexa"
-        );
-        return;
-      }
-    }
-    updateCutscene(dtSeconds, player, ctx) {
-      if (!this.toiletCutscene?.active) {
-        return false;
-      }
-      player.isMoving = false;
-      player.walkTimer = 0;
-      this.toiletCutscene.timer += dtSeconds;
-      if (this.toiletCutscene.timer >= 2) {
-        this.toiletCutscene.active = false;
-        this.toiletCutscene = null;
-        player.states.set(TOILET_EVENT_TRIGGERED_KEY, true);
-        ctx.openDialogue(
-          [
-            "What are you doing here?? I know you see me when I'm sleeping but this is not okay."
-          ],
-          () => {
-            ctx.loadLevel("level-basement");
-            player.blinkTimer = 2;
-            ctx.damagePlayer?.(30);
-          },
-          "Hanneloes"
-        );
-      }
-      return true;
-    }
-  };
-
   // src/world/levels/levelOutside.ts
   function createMotorcycle() {
     return {
@@ -9246,6 +10114,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       status: "parked"
     };
   }
+  var RUDOLPH_INSPECTED_KEY = "rudolphInspected";
   var OUTSIDE_ALEX_NPC = {
     x: 4 * TILE_SIZE + 2,
     y: 19 * TILE_SIZE + 2,
@@ -9339,6 +10208,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         return true;
       }
       if (interactableId === "roof-rudolph") {
+        player.states.set(RUDOLPH_INSPECTED_KEY, true);
         ctx.openDialogue(
           [
             "RUDOLPH?!! WHO DID THIS?",
@@ -9359,7 +10229,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
                     () => {
                       if (!player.unlockedUzi) {
                         player.unlockedUzi = true;
-                        selectPlayerEquipmentSlot(player, 2);
+                        selectPlayerEquipmentSlot(player, 3);
                       }
                     },
                     void 0,
@@ -9377,6 +10247,10 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         return true;
       }
       if (interactableId === "roof-chimney") {
+        if (!player.states.get(RUDOLPH_INSPECTED_KEY) && !player.unlockedUzi) {
+          ctx.openDialogue(["You smell the stench of blood..."]);
+          return true;
+        }
         ctx.loadLevel("level-basement");
         if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
           player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
@@ -9504,6 +10378,8 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
   };
 
   // src/world/gameState.ts
+  var BULLET_HOLE_DURATION_SECONDS = 10;
+  var BLOOD_POOL_DURATION_SECONDS = 20;
   function syncOutsideToLevel(state) {
     const outside = state.levels["level-outside"];
     outside.dog = state.dog;
@@ -9626,6 +10502,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     ConeOfSight.cheatMode = cheatMode;
     const player = createPlayer(PLAYER_START_X, PLAYER_START_Y);
     const levelOutside = new LevelOutside(map);
+    if (cheatMode) {
+      levelOutside.ladderPlaced = true;
+    }
     const levelBasement = new LevelBasement();
     const levelUpstairs = new LevelUpstairs();
     const levelPeople = new LevelPeople();
@@ -9666,6 +10545,11 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       throwers: levelOutside.throwers,
       snowballs: levelOutside.snowballs,
       projectiles: [],
+      bulletHoles: [],
+      bloodParticles: [],
+      bloodPools: [],
+      droppedUzis: [],
+      burningNpcs: /* @__PURE__ */ new Set(),
       hasLadder: levelOutside.hasLadder,
       ladderPlaced: levelOutside.ladderPlaced,
       isOnRoof: levelOutside.isOnRoof,
@@ -9724,6 +10608,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
     state.player.footprintSpawnTimer = 0;
     state.player.nextFootprintFoot = "left";
+    const wasLadderPlaced = state.ladderPlaced;
     state.footprints = [];
     state.dog = createDog();
     state.motorcycle = createMotorcycle();
@@ -9731,7 +10616,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     state.snowballs = [];
     state.projectiles = [];
     state.hasLadder = false;
-    state.ladderPlaced = false;
+    state.ladderPlaced = wasLadderPlaced;
     state.isOnRoof = false;
     state.climbing = null;
     state.electrocutionTimer = 0;
@@ -9906,6 +10791,120 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     return false;
   }
+  function getLevelNpcTargets(state) {
+    const targets = [];
+    const addTarget = (key, rect) => {
+      const cx = rect.x + rect.width * 0.5;
+      const cy = rect.y + rect.height * 0.5;
+      targets.push({
+        key,
+        rect,
+        groundZ: getTerrainHeight(cx, cy, state.currentLevelId)
+      });
+    };
+    if (state.currentLevelId === "level-outside") {
+      if (state.throwers[0]) addTarget("outside:Sylvester", state.throwers[0]);
+      if (state.throwers[1]) addTarget("outside:Annelotte", state.throwers[1]);
+      addTarget("outside:Alex", state.levels["level-outside"].alexNpc);
+    } else if (state.currentLevelId === "level-basement") {
+      const basement = state.levels["level-basement"];
+      addTarget("basement:Arjan", basement.windowNpc);
+      addTarget("basement:Olexa", basement.olexaNpc);
+      addTarget("basement:Hanneloes", basement.toiletNpc);
+    } else if (state.currentLevelId === "level-upstairs") {
+      const upstairs = state.levels["level-upstairs"];
+      addTarget("upstairs:Albin", {
+        x: UPSTAIRS_ALBIN_X,
+        y: upstairs.albinY,
+        width: 12,
+        height: 12
+      });
+      addTarget("upstairs:Henrik", upstairs.henrikNpc);
+      addTarget("upstairs:Tanja", upstairs.tanjaNpc);
+      addTarget("upstairs:Diana", upstairs.dianaNpc);
+      addTarget("upstairs:Simon", upstairs.simonNpc);
+      addTarget("upstairs:Anne-Marie", upstairs.anneMarieNpc);
+    } else if (state.currentLevelId === "level-people") {
+      for (const npc of state.levels["level-people"].npcs) {
+        addTarget(`people:${npc.name}`, npc.bounds);
+      }
+    }
+    return targets;
+  }
+  function spawnNpcBlood(state, x, y, groundZ) {
+    const count = 8;
+    for (let i = 0; i < count; i++) {
+      const angle = i / count * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+      const speed = 16 + Math.random() * 24;
+      state.bloodParticles.push({
+        levelId: state.currentLevelId,
+        x,
+        y,
+        z: groundZ + 7 + Math.random() * 3,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        vz: -4 + Math.random() * 20,
+        groundZ,
+        age: 0,
+        spawnsPool: i < 3
+      });
+    }
+  }
+  function checkPunchNpcHit(state) {
+    const player = state.player;
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const cx = player.x + player.width * 0.5 + Math.cos(aimYaw) * 6;
+    const cy = player.y + player.height * 0.5 + Math.sin(aimYaw) * 6;
+    const punchRect = {
+      x: cx - 12,
+      y: cy - 12,
+      width: 24,
+      height: 24
+    };
+    for (const target of getLevelNpcTargets(state)) {
+      if (rectsIntersect(punchRect, target.rect)) {
+        const ncx = target.rect.x + target.rect.width * 0.5;
+        const ncy = target.rect.y + target.rect.height * 0.5;
+        spawnNpcBlood(state, ncx, ncy, target.groundZ);
+      }
+    }
+  }
+  function updateEffectTimers(state, dtSeconds) {
+    if (dtSeconds <= 0) return;
+    for (let i = state.bulletHoles.length - 1; i >= 0; i--) {
+      state.bulletHoles[i].age += dtSeconds;
+      if (state.bulletHoles[i].age >= state.bulletHoles[i].maxAge) {
+        state.bulletHoles.splice(i, 1);
+      }
+    }
+    for (let i = state.bloodPools.length - 1; i >= 0; i--) {
+      state.bloodPools[i].age += dtSeconds;
+      if (state.bloodPools[i].age >= state.bloodPools[i].maxAge) {
+        state.bloodPools.splice(i, 1);
+      }
+    }
+    for (let i = state.bloodParticles.length - 1; i >= 0; i--) {
+      const pt = state.bloodParticles[i];
+      pt.age += dtSeconds;
+      pt.x += pt.vx * dtSeconds;
+      pt.y += pt.vy * dtSeconds;
+      pt.z += pt.vz * dtSeconds;
+      pt.vz -= 130 * dtSeconds;
+      if (pt.z <= pt.groundZ) {
+        if (pt.spawnsPool) {
+          state.bloodPools.push({
+            levelId: pt.levelId,
+            x: pt.x,
+            y: pt.y,
+            z: pt.groundZ,
+            age: 0,
+            maxAge: BLOOD_POOL_DURATION_SECONDS
+          });
+        }
+        state.bloodParticles.splice(i, 1);
+      }
+    }
+  }
   function updateProjectiles(state, dtSeconds) {
     if (state.projectiles.length === 0 || dtSeconds <= 0) {
       return;
@@ -9914,75 +10913,191 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     const mapHeight = state.map.rows * state.map.tileSize;
     const activeLevel = getActiveLevel(state);
     const obstacles = activeLevel.getSolidObstacles();
+    const npcTargets = getLevelNpcTargets(state);
     for (let i = state.projectiles.length - 1; i >= 0; i--) {
       const p = state.projectiles[i];
-      p.x += p.vx * dtSeconds;
-      p.y += p.vy * dtSeconds;
-      if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
-        state.projectiles.splice(i, 1);
-        continue;
-      }
-      const projRect = {
-        x: p.x - 1.5,
-        y: p.y - 1.5,
-        width: 3,
-        height: 3
-      };
-      if (p.fromRoof) {
-        const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
-        const hitTallTreeOrEdge = isRectCollidingWithMap(
+      const stepSpeed = Math.hypot(p.vx, p.vy);
+      const totalStepDist = stepSpeed * dtSeconds;
+      const subSteps = Math.max(1, Math.ceil(totalStepDist / 4));
+      const subDt = dtSeconds / subSteps;
+      let removed = false;
+      for (let s = 0; s < subSteps; s++) {
+        p.x += p.vx * subDt;
+        p.y += p.vy * subDt;
+        p.z += (p.vz ?? 0) * subDt;
+        p.distanceTraveled = (p.distanceTraveled ?? 0) + stepSpeed * subDt;
+        if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
+          removed = true;
+          break;
+        }
+        if (typeof p.maxDistance === "number" && p.distanceTraveled >= p.maxDistance) {
+          removed = true;
+          break;
+        }
+        const isFireball = p.kind === "fireball";
+        const projRect = isFireball ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 } : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
+        if (isFireball && state.currentLevelId === "level-basement") {
+          const basement = state.levels["level-basement"];
+          if (!basement.stairsWoodBurned && rectsIntersect(projRect, BASEMENT_STAIRS_WOOD_BOUNDS)) {
+            if (basement.stairsWoodBurnTimer <= 0) {
+              basement.stairsWoodBurnTimer = STAIRS_WOOD_BURN_DURATION;
+            }
+            removed = true;
+            break;
+          }
+        }
+        const hitNpc = npcTargets.find((t) => rectsIntersect(projRect, t.rect));
+        if (hitNpc) {
+          if (isFireball) {
+            state.burningNpcs.add(hitNpc.key);
+          } else {
+            spawnNpcBlood(state, p.x, p.y, hitNpc.groundZ);
+          }
+          removed = true;
+          break;
+        }
+        if (p.fromRoof) {
+          const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
+          const hitTallTreeOrEdge = isRectCollidingWithMap(
+            state.map,
+            projRect.x,
+            projRect.y,
+            projRect.width,
+            projRect.height,
+            true,
+            (c, r) => c >= 0 && r >= 0 && c < state.map.cols && r < state.map.rows && state.map.tiles[r][c] !== 1 /* Tree */
+          );
+          if (hitChimney || hitTallTreeOrEdge) {
+            if (!isFireball) {
+              state.bulletHoles.push({
+                levelId: state.currentLevelId,
+                x: p.x,
+                y: p.y,
+                z: Math.max(2, p.z),
+                age: 0,
+                maxAge: BULLET_HOLE_DURATION_SECONDS
+              });
+            }
+            removed = true;
+            break;
+          }
+          continue;
+        }
+        const hitMap = isRectCollidingWithMap(
           state.map,
           projRect.x,
           projRect.y,
           projRect.width,
           projRect.height,
-          true,
-          (c, r) => c >= 0 && r >= 0 && c < state.map.cols && r < state.map.rows && state.map.tiles[r][c] !== 1 /* Tree */
+          true
         );
-        if (hitChimney || hitTallTreeOrEdge) {
-          state.projectiles.splice(i, 1);
+        const hitObstacle = obstacles.some((obs) => rectsIntersect(projRect, obs));
+        const hitOutsideDynamic = state.currentLevelId === "level-outside" && (rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle));
+        if (hitMap || hitObstacle || hitOutsideDynamic) {
+          if (!isFireball && (hitMap || hitObstacle)) {
+            state.bulletHoles.push({
+              levelId: state.currentLevelId,
+              x: p.x,
+              y: p.y,
+              z: Math.max(2, p.z),
+              age: 0,
+              maxAge: BULLET_HOLE_DURATION_SECONDS
+            });
+          }
+          removed = true;
+          break;
         }
-        continue;
       }
-      const hitMap = isRectCollidingWithMap(
-        state.map,
-        projRect.x,
-        projRect.y,
-        projRect.width,
-        projRect.height,
-        true
-      );
-      const hitObstacle = obstacles.some((obs) => rectsIntersect(projRect, obs));
-      const hitOutsideDynamic = state.currentLevelId === "level-outside" && (rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle) || state.throwers.some((t) => rectsIntersect(projRect, t)));
-      if (hitMap || hitObstacle || hitOutsideDynamic) {
+      if (removed) {
         state.projectiles.splice(i, 1);
       }
     }
   }
   function fireUziProjectile(state) {
     const player = state.player;
+    if (player.uziAmmo <= 0 || player.uziDepleted) {
+      return;
+    }
     const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const rightAngle = aimYaw + Math.PI / 2;
     const cx = player.x + player.width * 0.5;
     const cy = player.y + player.height * 0.5;
     const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
     const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
+    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180);
+    const shotYaw = aimYaw + yawSpread;
+    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180);
+    const spawnX = cx + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
+    const spawnY = cy + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
+    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 10;
     state.projectiles.push({
-      x: cx + Math.cos(aimYaw) * 6,
-      y: cy + Math.sin(aimYaw) * 6,
-      z: groundZ + (player.jumpOffset ?? 0) + 8.5,
-      vx: Math.cos(aimYaw) * UZI_PROJECTILE_SPEED,
-      vy: Math.sin(aimYaw) * UZI_PROJECTILE_SPEED,
-      yaw: aimYaw,
+      kind: "bullet",
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(shotYaw) * UZI_PROJECTILE_SPEED,
+      vy: Math.sin(shotYaw) * UZI_PROJECTILE_SPEED,
+      vz: UZI_PROJECTILE_SPEED * Math.tan(pitchSpread),
+      yaw: shotYaw,
+      distanceTraveled: 0,
       fromRoof: onRoof
     });
+    player.weaponVibrationTimer = Math.max(
+      player.weaponVibrationTimer,
+      UZI_FIRE_INTERVAL_SECONDS + 0.05
+    );
+    player.uziAmmo = Math.max(0, player.uziAmmo - 1);
+    if (player.uziAmmo <= 0) {
+      player.uziDepleted = true;
+      player.uziDropTimer = UZI_DROP_DURATION_SECONDS;
+      player.equippedItem = "empty";
+      state.droppedUzis.push({
+        levelId: state.currentLevelId,
+        x: cx + Math.cos(rightAngle) * 7,
+        y: cy + Math.sin(rightAngle) * 7,
+        z: groundZ,
+        yaw: aimYaw + 0.4
+      });
+    }
+  }
+  function fireFlamethrowerProjectile(state) {
+    const player = state.player;
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const rightAngle = aimYaw + Math.PI / 2;
+    const cx = player.x + player.width * 0.5;
+    const cy = player.y + player.height * 0.5;
+    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
+    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
+    const spawnX = cx + Math.cos(aimYaw) * 8.5 + Math.cos(rightAngle) * 3.5;
+    const spawnY = cy + Math.sin(aimYaw) * 8.5 + Math.sin(rightAngle) * 3.5;
+    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 9.5;
+    state.projectiles.push({
+      kind: "fireball",
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+      vy: Math.sin(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+      vz: 0,
+      yaw: aimYaw,
+      distanceTraveled: 0,
+      maxDistance: FLAMETHROWER_MAX_DISTANCE,
+      fromRoof: onRoof
+    });
+    player.weaponVibrationTimer = Math.max(
+      player.weaponVibrationTimer,
+      FLAMETHROWER_FIRE_INTERVAL_SECONDS + 0.05
+    );
   }
   function updateGameState(state, input, dtSeconds) {
     const safeDt = Math.max(0, dtSeconds);
     state.elapsedTime += safeDt;
     dtSeconds = safeDt;
     const prevUziCooldown = state.player.uziFireCooldown;
+    const prevFlameCooldown = state.player.flamethrowerFireCooldown;
     updatePlayerHealthAndTimers(state.player, dtSeconds);
     const uziCooldownRemainder = prevUziCooldown > 0 ? Math.max(0, dtSeconds - prevUziCooldown) : 0;
+    const flameCooldownRemainder = prevFlameCooldown > 0 ? Math.max(0, dtSeconds - prevFlameCooldown) : 0;
     const actionPressed = consumeActionPress(input);
     const attackPressed = consumeAttackPress(input);
     const slotPressed = consumeSlotPress(input);
@@ -9998,9 +11113,13 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         state.activeDialogue.currentIndex += 1;
         if (state.activeDialogue.currentIndex >= state.activeDialogue.lines.length) {
           const onClose = state.activeDialogue.onClose;
+          const prevLevel = state.currentLevelId;
           state.activeDialogue = null;
           if (onClose) {
             onClose();
+          }
+          if (state.currentLevelId !== prevLevel && typeof input.cameraYaw === "number") {
+            input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
           }
         }
       }
@@ -10011,6 +11130,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     updatePlayerJump(state.player, dtSeconds);
     updateProjectiles(state, dtSeconds);
+    updateEffectTimers(state, dtSeconds);
     for (const door of state.levels["level-basement"].openedDoors) {
       door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
     }
@@ -10018,7 +11138,12 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
     }
     const transitionCtx = {
-      loadLevel: (nextId) => loadLevel(state, nextId),
+      loadLevel: (nextId) => {
+        loadLevel(state, nextId);
+        if (typeof input.cameraYaw === "number") {
+          input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
+        }
+      },
       openDialogue: (lines, onClose, speakerPortrait, unclosable, variant) => {
         state.activeDialogue = {
           lines,
@@ -10063,6 +11188,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         basement.map,
         basement.getSolidObstacles()
       );
+      basement.updateHazardsAndItems(dtSeconds, state.player);
       basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
       if (state.activeDialogue) {
         refreshInteractables(state);
@@ -10139,12 +11265,15 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       }
       return;
     }
-    if (state.player.equippedItem === "unarmed") {
-      if (attackPressed) {
-        triggerPlayerPunch(state.player);
-      }
+    if (state.player.equippedItem === "empty") {
       if (actionPressed && !state.nearbyInteractable) {
         triggerPlayerJump(state.player);
+      }
+    } else if (state.player.equippedItem === "unarmed") {
+      if (attackPressed || !state.nearbyInteractable && actionPressed) {
+        if (triggerPlayerPunch(state.player)) {
+          checkPunchNpcHit(state);
+        }
       }
     } else if (state.player.equippedItem === "uzi") {
       const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
@@ -10154,6 +11283,15 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           UZI_FIRE_INTERVAL_SECONDS - uziCooldownRemainder
         );
         fireUziProjectile(state);
+      }
+    } else if (state.player.equippedItem === "flamethrower") {
+      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
+      if (wantsToFire && state.player.flamethrowerFireCooldown <= 1e-6) {
+        state.player.flamethrowerFireCooldown = Math.max(
+          0.01,
+          FLAMETHROWER_FIRE_INTERVAL_SECONDS - flameCooldownRemainder
+        );
+        fireFlamethrowerProjectile(state);
       }
     }
   }

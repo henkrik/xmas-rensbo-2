@@ -45,6 +45,8 @@ export function createMotorcycle(): MotorcycleState {
   };
 }
 
+export const RUDOLPH_INSPECTED_KEY = 'rudolphInspected';
+
 export const OUTSIDE_ALEX_NPC: Rect & { facing: 'down' | 'left' | 'right' | 'up' } = {
   x: 4 * TILE_SIZE + 2,
   y: 19 * TILE_SIZE + 2,
@@ -148,6 +150,7 @@ export class LevelOutside implements GameLevel {
       return true;
     }
     if (interactableId === 'roof-rudolph') {
+      player.states.set(RUDOLPH_INSPECTED_KEY, true);
       ctx.openDialogue(
         [
           'RUDOLPH?!! WHO DID THIS?',
@@ -168,7 +171,7 @@ export class LevelOutside implements GameLevel {
                   () => {
                     if (!player.unlockedUzi) {
                       player.unlockedUzi = true;
-                      selectPlayerEquipmentSlot(player, 2);
+                      selectPlayerEquipmentSlot(player, 3);
                     }
                   },
                   undefined,
@@ -186,6 +189,10 @@ export class LevelOutside implements GameLevel {
       return true;
     }
     if (interactableId === 'roof-chimney') {
+      if (!player.states.get(RUDOLPH_INSPECTED_KEY) && !player.unlockedUzi) {
+        ctx.openDialogue(['You smell the stench of blood...']);
+        return true;
+      }
       ctx.loadLevel('level-basement');
       if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
         player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);

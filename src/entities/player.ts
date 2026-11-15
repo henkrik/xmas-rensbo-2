@@ -21,10 +21,15 @@ export const PLAYER_JUMP_INITIAL_VELOCITY =
 export const MAX_PLAYER_HEALTH = 100;
 export const PUNCH_DURATION_SECONDS = 0.28;
 export const UZI_EQUIP_DURATION_SECONDS = 0.5;
+export const UZI_DROP_DURATION_SECONDS = 0.45;
 export const UZI_FIRE_INTERVAL_SECONDS = 0.2;
-export const UZI_PROJECTILE_SPEED = 4 * TILE_SIZE;
+export const UZI_PROJECTILE_SPEED = 16 * TILE_SIZE;
+export const MAX_UZI_AMMO = 30;
+export const FLAMETHROWER_FIRE_INTERVAL_SECONDS = 0.25;
+export const FLAMETHROWER_PROJECTILE_SPEED = 2.5 * TILE_SIZE;
+export const FLAMETHROWER_MAX_DISTANCE = 3 * TILE_SIZE;
 
-export type EquipmentId = 'unarmed' | 'uzi';
+export type EquipmentId = 'empty' | 'unarmed' | 'uzi' | 'flamethrower';
 
 export interface Footprint {
   x: number;
@@ -68,6 +73,12 @@ export interface Player {
   delayedHealthRate: number;
   equippedItem: EquipmentId;
   unlockedUzi: boolean;
+  uziAmmo: number;
+  uziDepleted: boolean;
+  uziDropTimer: number;
+  unlockedFlamethrower: boolean;
+  flamethrowerFireCooldown: number;
+  weaponVibrationTimer: number;
   punchTimer: number;
   punchHand: 'left' | 'right';
   uziEquipTimer: number;
@@ -95,8 +106,14 @@ export function createPlayer(x: number, y: number): Player {
     health: MAX_PLAYER_HEALTH,
     delayedHealth: MAX_PLAYER_HEALTH,
     delayedHealthRate: 0,
-    equippedItem: 'unarmed',
+    equippedItem: 'empty',
     unlockedUzi: false,
+    uziAmmo: MAX_UZI_AMMO,
+    uziDepleted: false,
+    uziDropTimer: 0,
+    unlockedFlamethrower: false,
+    flamethrowerFireCooldown: 0,
+    weaponVibrationTimer: 0,
     punchTimer: 0,
     punchHand: 'right',
     uziEquipTimer: 0,
@@ -138,6 +155,21 @@ export function updatePlayerHealthAndTimers(player: Player, dtSeconds: number): 
   if (player.uziFireCooldown > 0) {
     player.uziFireCooldown = Math.max(0, player.uziFireCooldown - dtSeconds);
   }
+  if (player.uziDropTimer > 0) {
+    player.uziDropTimer = Math.max(0, player.uziDropTimer - dtSeconds);
+  }
+  if (player.flamethrowerFireCooldown > 0) {
+    player.flamethrowerFireCooldown = Math.max(
+      0,
+      player.flamethrowerFireCooldown - dtSeconds
+    );
+  }
+  if (player.weaponVibrationTimer > 0) {
+    player.weaponVibrationTimer = Math.max(
+      0,
+      player.weaponVibrationTimer - dtSeconds
+    );
+  }
 }
 
 export function triggerPlayerPunch(player: Player): boolean {
@@ -151,19 +183,38 @@ export function triggerPlayerPunch(player: Player): boolean {
 
 export function selectPlayerEquipmentSlot(player: Player, slot: number): boolean {
   if (slot === 1) {
-    player.equippedItem = 'unarmed';
+    player.equippedItem = 'empty';
     player.uziEquipTimer = 0;
     return true;
   }
   if (slot === 2) {
-    if (!player.unlockedUzi) {
+    player.equippedItem = 'unarmed';
+    player.uziEquipTimer = 0;
+    return true;
+  }
+  if (slot === 3) {
+    if (player.unlockedUzi && !player.uziDepleted) {
+      if (player.equippedItem !== 'uzi') {
+        player.equippedItem = 'uzi';
+        player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+        player.punchTimer = 0;
+      }
+      return true;
+    }
+    if (player.uziDepleted) {
+      player.equippedItem = 'empty';
+      player.uziEquipTimer = 0;
+      return true;
+    }
+    return false;
+  }
+  if (slot === 4) {
+    if (!player.unlockedFlamethrower) {
       return false;
     }
-    if (player.equippedItem !== 'uzi') {
-      player.equippedItem = 'uzi';
-      player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
-      player.punchTimer = 0;
-    }
+    player.equippedItem = 'flamethrower';
+    player.uziEquipTimer = 0;
+    player.punchTimer = 0;
     return true;
   }
   return false;
@@ -263,6 +314,15 @@ export function updateFootprints(
   }
 }
 
+function localYawToDirection(yaw: number): Direction {
+  const cx = Math.cos(yaw);
+  const cy = Math.sin(yaw);
+  if (Math.abs(cy) >= Math.abs(cx)) {
+    return cy < 0 ? 'up' : 'down';
+  }
+  return cx < 0 ? 'left' : 'right';
+}
+
 export function updatePlayer(
   player: Player,
   input: InputState,
@@ -273,6 +333,12 @@ export function updatePlayer(
 ): void {
   if (player.blinkTimer > 0) {
     player.blinkTimer = Math.max(0, player.blinkTimer - dtSeconds);
+  }
+
+  const isStrafeMode = player.equippedItem !== 'empty';
+  if (isStrafeMode && typeof input.cameraYaw === 'number') {
+    player.yaw = input.cameraYaw;
+    player.facing = localYawToDirection(input.cameraYaw);
   }
 
   let dx = 0;
@@ -340,14 +406,29 @@ export function updatePlayer(
 
   player.isMoving = true;
   player.walkTimer += dtSeconds;
-  player.yaw = Math.atan2(dy, dx);
-  const turnBlend = Math.min(1, dtSeconds * 16);
-  player.renderYaw = lerpAngle(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
 
-  if (Math.abs(dy) > Math.abs(dx)) {
-    player.facing = dy < 0 ? 'up' : 'down';
-  } else if (Math.abs(dx) > 0) {
-    player.facing = dx < 0 ? 'left' : 'right';
+  if (isStrafeMode) {
+    if (typeof input.cameraYaw === 'number') {
+      // Non-empty equipment: Santa strafes/backpedals while staying aimed along the camera's forward direction
+      player.yaw = input.cameraYaw;
+      player.facing = localYawToDirection(input.cameraYaw);
+    } else if (Math.abs(dy) > Math.abs(dx)) {
+      player.yaw = Math.atan2(dy, dx);
+      player.facing = dy < 0 ? 'up' : 'down';
+    }
+    const targetYaw = player.yaw ?? -Math.PI / 2;
+    const turnBlend = Math.min(1, dtSeconds * 16);
+    player.renderYaw = lerpAngle(player.renderYaw ?? targetYaw, targetYaw, turnBlend);
+  } else {
+    player.yaw = Math.atan2(dy, dx);
+    const turnBlend = Math.min(1, dtSeconds * 16);
+    player.renderYaw = lerpAngle(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
+
+    if (Math.abs(dy) > Math.abs(dx)) {
+      player.facing = dy < 0 ? 'up' : 'down';
+    } else if (Math.abs(dx) > 0) {
+      player.facing = dx < 0 ? 'left' : 'right';
+    }
   }
 
   const moveX = dx * player.speed * dtSeconds;

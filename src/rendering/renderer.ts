@@ -10,6 +10,13 @@ import {
 } from '../entities/player';
 import { GameState, MotorcycleState } from '../world/gameState';
 import {
+  BASEMENT_FLAMETHROWER_BOUNDS,
+  BASEMENT_HALL_NORTH_DOOR_BOUNDS,
+  BASEMENT_MINE_BOUNDS,
+  BASEMENT_SPA_HIDDEN_MASK,
+  BASEMENT_STAIRS_WOOD_BOUNDS,
+} from '../world/levels/levelBasement';
+import {
   DIANA_DISTRACTED_KEY,
   DIANA_PRESENT_TAKEN_KEY,
   SIMON_DISTRACTED_KEY,
@@ -419,6 +426,30 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
   ctx.restore();
 }
 
+function drawEmptyHandsIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  scale = 1
+): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+
+  // Relaxed mittens open / idle
+  ctx.fillStyle = '#181420';
+  ctx.fillRect(-9, -1, 5, 6);
+  ctx.fillRect(4, -1, 5, 6);
+  ctx.fillStyle = '#e2e8f0';
+  ctx.fillRect(-8, 0, 3, 4);
+  ctx.fillRect(5, 0, 3, 4);
+  ctx.fillStyle = '#d62828';
+  ctx.fillRect(-8, 4, 3, 3);
+  ctx.fillRect(5, 4, 3, 3);
+
+  ctx.restore();
+}
+
 function drawUnarmedArmsIcon(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -431,7 +462,7 @@ function drawUnarmedArmsIcon(
   ctx.scale(scale, scale);
 
   // Left arm sleeve + cuff + mitten
-  const leftReach = punching ? -2 : 0;
+  const leftReach = punching ? -3 : -1;
   ctx.fillStyle = '#181420';
   ctx.fillRect(-10, -2 + leftReach, 6, 9);
   ctx.fillStyle = '#d62828';
@@ -442,7 +473,7 @@ function drawUnarmedArmsIcon(
   ctx.fillRect(-9, -5 + leftReach, 4, 3);
 
   // Right arm sleeve + cuff + mitten
-  const rightReach = punching ? -4 : 0;
+  const rightReach = punching ? -5 : -2;
   ctx.fillStyle = '#181420';
   ctx.fillRect(4, -2 + rightReach, 6, 9);
   ctx.fillStyle = '#d62828';
@@ -495,8 +526,37 @@ function drawUziIcon(
   ctx.restore();
 }
 
-function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Player): void {
-  const boxW = 48;
+function drawFlamethrowerIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  scale = 1
+): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+
+  // Fuel tank & body
+  ctx.fillStyle = '#d62828';
+  ctx.fillRect(-9, -4, 7, 7);
+  ctx.fillStyle = '#334155';
+  ctx.fillRect(-3, -3, 11, 4);
+  // Nozzle + pilot flame
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillRect(7, -3, 3, 3);
+  ctx.fillStyle = '#fb923c';
+  ctx.fillRect(10, -4, 3, 4);
+  ctx.fillStyle = '#fef08a';
+  ctx.fillRect(10, -3, 2, 2);
+  // Grip
+  ctx.fillStyle = '#181420';
+  ctx.fillRect(0, 1, 3, 4);
+
+  ctx.restore();
+}
+
+export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Player): void {
+  const boxW = 50;
   const boxH = 34;
   const boxX = ctx.canvas.width - boxW - 8;
   const boxY = 8;
@@ -519,9 +579,50 @@ function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Player): voi
       '#ffd166',
       '#0c101a'
     );
-  } else {
+
+    // Remaining bullet count badge next to the current equipment HUD
+    const ammoText = String(player.uziAmmo);
+    const ammoW = Math.max(22, measurePixelText(ammoText) + 10);
+    const ammoH = 18;
+    const ammoX = boxX - ammoW - 4;
+    const ammoY = boxY + Math.round((boxH - ammoH) / 2);
+    drawSnesFrame(ctx, ammoX, ammoY, ammoW, ammoH);
+    const aw = measurePixelText(ammoText);
+    drawPixelText(
+      ctx,
+      ammoText,
+      ammoX + Math.round((ammoW - aw) / 2),
+      ammoY + 5,
+      player.uziAmmo <= 5 ? '#f87171' : '#ffd166',
+      '#0c101a'
+    );
+  } else if (player.equippedItem === 'flamethrower') {
+    drawFlamethrowerIcon(ctx, iconCenterX, iconCenterY, 1);
+    const label = 'FLAME';
+    const tw = measurePixelText(label);
+    drawPixelText(
+      ctx,
+      label,
+      boxX + Math.round((boxW - tw) / 2),
+      boxY + 23,
+      '#fb923c',
+      '#0c101a'
+    );
+  } else if (player.equippedItem === 'unarmed') {
     drawUnarmedArmsIcon(ctx, iconCenterX, iconCenterY + 1, player.punchTimer > 0, 1);
     const label = 'UNARMED';
+    const tw = measurePixelText(label);
+    drawPixelText(
+      ctx,
+      label,
+      boxX + Math.round((boxW - tw) / 2),
+      boxY + 23,
+      '#ffd166',
+      '#0c101a'
+    );
+  } else {
+    drawEmptyHandsIcon(ctx, iconCenterX, iconCenterY + 1, 1);
+    const label = 'EMPTY';
     const tw = measurePixelText(label);
     drawPixelText(
       ctx,
@@ -533,41 +634,45 @@ function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Player): voi
     );
   }
 
-  // Only show slot numbers once Uzi is unlocked so the twist stays hidden before Rudolph
-  if (player.unlockedUzi) {
-    const slotSize = 20;
-    const gap = 3;
-    const slotsTotalW = slotSize * 2 + gap;
-    const slotsStartX = boxX + boxW - slotsTotalW;
-    const slotsY = boxY + boxH + 4;
-
-    // Slot 1: Unarmed
-    drawSnesFrame(ctx, slotsStartX, slotsY, slotSize, slotSize);
-    if (player.equippedItem === 'unarmed') {
-      ctx.strokeStyle = '#ffd166';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(slotsStartX + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
-    }
-    drawUnarmedArmsIcon(
-      ctx,
-      slotsStartX + Math.floor(slotSize / 2),
-      slotsY + 11,
-      false,
-      0.7
-    );
-    drawPixelText(ctx, '1', slotsStartX + 3, slotsY + 2, '#ffd166', '#0c101a');
-
-    // Slot 2: Uzi
-    const slot2X = slotsStartX + slotSize + gap;
-    drawSnesFrame(ctx, slot2X, slotsY, slotSize, slotSize);
-    if (player.equippedItem === 'uzi') {
-      ctx.strokeStyle = '#ffd166';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(slot2X + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
-    }
-    drawUziIcon(ctx, slot2X + Math.floor(slotSize / 2), slotsY + 11, 0.7);
-    drawPixelText(ctx, '2', slot2X + 3, slotsY + 2, '#ffd166', '#0c101a');
+  // Always show equipment slots: 1: empty, 2: unarmed, plus 3: uzi (when unlocked & not depleted), 4: flamethrower (when unlocked)
+  const slots: Array<{ key: string; id: Player['equippedItem'] }> = [
+    { key: '1', id: 'empty' },
+    { key: '2', id: 'unarmed' },
+  ];
+  if (player.unlockedUzi && !player.uziDepleted) {
+    slots.push({ key: '3', id: 'uzi' });
   }
+  if (player.unlockedFlamethrower) {
+    slots.push({ key: '4', id: 'flamethrower' });
+  }
+
+  const slotSize = 20;
+  const gap = 3;
+  const slotsTotalW = slotSize * slots.length + gap * (slots.length - 1);
+  const slotsStartX = boxX + boxW - slotsTotalW;
+  const slotsY = boxY + boxH + 4;
+
+  slots.forEach((slot, idx) => {
+    const sx = slotsStartX + idx * (slotSize + gap);
+    drawSnesFrame(ctx, sx, slotsY, slotSize, slotSize);
+    if (player.equippedItem === slot.id) {
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
+    }
+    const icx = sx + Math.floor(slotSize / 2);
+    const icy = slotsY + 11;
+    if (slot.id === 'empty') {
+      drawEmptyHandsIcon(ctx, icx, icy, 0.7);
+    } else if (slot.id === 'unarmed') {
+      drawUnarmedArmsIcon(ctx, icx, icy, false, 0.7);
+    } else if (slot.id === 'uzi') {
+      drawUziIcon(ctx, icx, icy, 0.7);
+    } else if (slot.id === 'flamethrower') {
+      drawFlamethrowerIcon(ctx, icx, icy, 0.65);
+    }
+    drawPixelText(ctx, slot.key, sx + 3, slotsY + 2, '#ffd166', '#0c101a');
+  });
 
   ctx.restore();
 }
@@ -1788,9 +1893,47 @@ export function renderGame(
       }
     }
 
-    // Closed doors & black fog-of-war over unopened rooms (e.g. bathroom)
+    // Closed doors & black fog-of-war over unopened rooms (e.g. bathroom & spa room)
     for (const door of basement.doors) {
       drawClosedDoorAndHiddenMask(ctx, door);
+    }
+    if (basement.spaDoorClosed) {
+      drawClosedDoorAndHiddenMask(ctx, {
+        id: 'basement-hall-north-door',
+        bounds: BASEMENT_HALL_NORTH_DOOR_BOUNDS,
+        hiddenRegions: [BASEMENT_SPA_HIDDEN_MASK],
+      });
+    } else if (!basement.flamethrowerPickedUp) {
+      ctx.fillStyle = '#fb923c';
+      ctx.fillRect(
+        BASEMENT_FLAMETHROWER_BOUNDS.x,
+        BASEMENT_FLAMETHROWER_BOUNDS.y,
+        BASEMENT_FLAMETHROWER_BOUNDS.width,
+        BASEMENT_FLAMETHROWER_BOUNDS.height
+      );
+    }
+    if (basement.mineState !== 'exploded') {
+      const blinkRed =
+        basement.mineState === 'blinking' &&
+        Math.floor(basement.mineTimer * 10) % 2 === 0;
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(
+        BASEMENT_MINE_BOUNDS.x,
+        BASEMENT_MINE_BOUNDS.y,
+        BASEMENT_MINE_BOUNDS.width,
+        BASEMENT_MINE_BOUNDS.height
+      );
+      ctx.fillStyle = blinkRed ? '#ef4444' : '#7f1d1d';
+      ctx.fillRect(BASEMENT_MINE_BOUNDS.x + 3, BASEMENT_MINE_BOUNDS.y + 3, 4, 4);
+    }
+    if (!basement.stairsWoodBurned) {
+      ctx.fillStyle = basement.stairsWoodBurnTimer > 0 ? '#ea580c' : '#6b4226';
+      ctx.fillRect(
+        BASEMENT_STAIRS_WOOD_BOUNDS.x,
+        BASEMENT_STAIRS_WOOD_BOUNDS.y,
+        BASEMENT_STAIRS_WOOD_BOUNDS.width,
+        BASEMENT_STAIRS_WOOD_BOUNDS.height
+      );
     }
   } else if (state.currentLevelId === 'level-upstairs') {
     const upstairs = state.levels['level-upstairs'];
@@ -2058,11 +2201,22 @@ export function renderGame(
     );
   }
 
-  // Draw Uzi projectiles in 2D fallback mode
+  // Draw Uzi & flamethrower projectiles, blood pools/particles, and dropped Uzis in 2D fallback mode
+  for (const pool of state.bloodPools) {
+    if (pool.levelId !== state.currentLevelId) continue;
+    ctx.fillStyle = '#991b1b';
+    ctx.fillRect(Math.round(pool.x - 4), Math.round(pool.y - 3), 8, 6);
+  }
+  for (const drop of state.droppedUzis) {
+    if (drop.levelId !== state.currentLevelId) continue;
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(Math.round(drop.x - 3), Math.round(drop.y - 2), 6, 4);
+  }
   if (state.projectiles.length > 0) {
-    ctx.fillStyle = '#fde047';
     for (const p of state.projectiles) {
-      ctx.fillRect(Math.round(p.x - 1), Math.round(p.y - 1), 3, 3);
+      ctx.fillStyle = p.kind === 'fireball' ? '#fb923c' : '#fde047';
+      const sz = p.kind === 'fireball' ? 5 : 3;
+      ctx.fillRect(Math.round(p.x - sz / 2), Math.round(p.y - sz / 2), sz, sz);
     }
   }
 

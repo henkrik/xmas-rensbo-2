@@ -12,6 +12,9 @@ import { ConeOfSight } from '../entities/sight';
 import {
   applyPlayerDamage,
   createPlayer,
+  FLAMETHROWER_FIRE_INTERVAL_SECONDS,
+  FLAMETHROWER_MAX_DISTANCE,
+  FLAMETHROWER_PROJECTILE_SPEED,
   Footprint,
   Player,
   Rect,
@@ -23,6 +26,7 @@ import {
   updatePlayer,
   updatePlayerHealthAndTimers,
   updatePlayerJump,
+  UZI_DROP_DURATION_SECONDS,
   UZI_FIRE_INTERVAL_SECONDS,
   UZI_PROJECTILE_SPEED,
 } from '../entities/player';
@@ -39,7 +43,11 @@ import {
   findNearbyInteractable,
   Interactable,
 } from './interaction';
-import { LevelBasement } from './levels/levelBasement';
+import {
+  BASEMENT_STAIRS_WOOD_BOUNDS,
+  LevelBasement,
+  STAIRS_WOOD_BURN_DURATION,
+} from './levels/levelBasement';
 import {
   ClimbingState,
   createMotorcycle,
@@ -47,7 +55,7 @@ import {
   MotorcycleState,
   MotorcycleStatus,
 } from './levels/levelOutside';
-import { LevelUpstairs } from './levels/levelUpstairs';
+import { LevelUpstairs, UPSTAIRS_ALBIN_X } from './levels/levelUpstairs';
 import { LevelPeople } from './levels/levelPeople';
 import { GameLevel, LevelId, LevelTransitionContext } from './levels/types';
 import {
@@ -78,14 +86,60 @@ import {
 export { createMotorcycle };
 export type { ClimbingState, MotorcycleState, MotorcycleStatus };
 
+export const BULLET_HOLE_DURATION_SECONDS = 10;
+export const BLOOD_POOL_DURATION_SECONDS = 20;
+
 export interface Projectile {
+  kind?: 'bullet' | 'fireball';
   x: number;
   y: number;
   z: number;
   vx: number;
   vy: number;
+  vz?: number;
   yaw: number;
+  distanceTraveled?: number;
+  maxDistance?: number;
   fromRoof?: boolean;
+}
+
+export interface BulletHole {
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+  age: number;
+  maxAge: number;
+}
+
+export interface BloodParticle {
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  groundZ: number;
+  age: number;
+  spawnsPool?: boolean;
+}
+
+export interface BloodPool {
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+  age: number;
+  maxAge: number;
+}
+
+export interface DroppedUzi {
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
 }
 
 export interface LevelRegistry {
@@ -106,6 +160,11 @@ export interface GameState {
   throwers: SnowballThrower[];
   snowballs: Snowball[];
   projectiles: Projectile[];
+  bulletHoles: BulletHole[];
+  bloodParticles: BloodParticle[];
+  bloodPools: BloodPool[];
+  droppedUzis: DroppedUzi[];
+  burningNpcs: Set<string>;
   hasLadder: boolean;
   ladderPlaced: boolean;
   isOnRoof: boolean;
@@ -305,6 +364,9 @@ export function createGameState(
 
   const player = createPlayer(PLAYER_START_X, PLAYER_START_Y);
   const levelOutside = new LevelOutside(map);
+  if (cheatMode) {
+    levelOutside.ladderPlaced = true;
+  }
   const levelBasement = new LevelBasement();
   const levelUpstairs = new LevelUpstairs();
   const levelPeople = new LevelPeople();
@@ -354,6 +416,11 @@ export function createGameState(
     throwers: levelOutside.throwers,
     snowballs: levelOutside.snowballs,
     projectiles: [],
+    bulletHoles: [],
+    bloodParticles: [],
+    bloodPools: [],
+    droppedUzis: [],
+    burningNpcs: new Set<string>(),
     hasLadder: levelOutside.hasLadder,
     ladderPlaced: levelOutside.ladderPlaced,
     isOnRoof: levelOutside.isOnRoof,
@@ -423,6 +490,7 @@ export function resetAfterSnowballHit(state: GameState): void {
   state.player.footprintSpawnTimer = 0;
   state.player.nextFootprintFoot = 'left';
 
+  const wasLadderPlaced = state.ladderPlaced;
   state.footprints = [];
   state.dog = createDog();
   state.motorcycle = createMotorcycle();
@@ -430,7 +498,7 @@ export function resetAfterSnowballHit(state: GameState): void {
   state.snowballs = [];
   state.projectiles = [];
   state.hasLadder = false;
-  state.ladderPlaced = false;
+  state.ladderPlaced = wasLadderPlaced;
   state.isOnRoof = false;
   state.climbing = null;
   state.electrocutionTimer = 0;
@@ -647,6 +715,143 @@ function updateOutsideLevel(
   return false;
 }
 
+interface NpcTarget {
+  key: string;
+  rect: Rect;
+  groundZ: number;
+}
+
+function getLevelNpcTargets(state: GameState): NpcTarget[] {
+  const targets: NpcTarget[] = [];
+  const addTarget = (key: string, rect: Rect): void => {
+    const cx = rect.x + rect.width * 0.5;
+    const cy = rect.y + rect.height * 0.5;
+    targets.push({
+      key,
+      rect,
+      groundZ: getTerrainHeight(cx, cy, state.currentLevelId),
+    });
+  };
+
+  if (state.currentLevelId === 'level-outside') {
+    if (state.throwers[0]) addTarget('outside:Sylvester', state.throwers[0]);
+    if (state.throwers[1]) addTarget('outside:Annelotte', state.throwers[1]);
+    addTarget('outside:Alex', state.levels['level-outside'].alexNpc);
+  } else if (state.currentLevelId === 'level-basement') {
+    const basement = state.levels['level-basement'];
+    addTarget('basement:Arjan', basement.windowNpc);
+    addTarget('basement:Olexa', basement.olexaNpc);
+    addTarget('basement:Hanneloes', basement.toiletNpc);
+  } else if (state.currentLevelId === 'level-upstairs') {
+    const upstairs = state.levels['level-upstairs'];
+    addTarget('upstairs:Albin', {
+      x: UPSTAIRS_ALBIN_X,
+      y: upstairs.albinY,
+      width: 12,
+      height: 12,
+    });
+    addTarget('upstairs:Henrik', upstairs.henrikNpc);
+    addTarget('upstairs:Tanja', upstairs.tanjaNpc);
+    addTarget('upstairs:Diana', upstairs.dianaNpc);
+    addTarget('upstairs:Simon', upstairs.simonNpc);
+    addTarget('upstairs:Anne-Marie', upstairs.anneMarieNpc);
+  } else if (state.currentLevelId === 'level-people') {
+    for (const npc of state.levels['level-people'].npcs) {
+      addTarget(`people:${npc.name}`, npc.bounds);
+    }
+  }
+  return targets;
+}
+
+function spawnNpcBlood(
+  state: GameState,
+  x: number,
+  y: number,
+  groundZ: number
+): void {
+  const count = 8;
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+    const speed = 16 + Math.random() * 24;
+    state.bloodParticles.push({
+      levelId: state.currentLevelId,
+      x,
+      y,
+      z: groundZ + 7 + Math.random() * 3,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      vz: -4 + Math.random() * 20,
+      groundZ,
+      age: 0,
+      spawnsPool: i < 3,
+    });
+  }
+}
+
+function checkPunchNpcHit(state: GameState): void {
+  const player = state.player;
+  const aimYaw =
+    typeof player.yaw === 'number'
+      ? player.yaw
+      : directionToYaw(player.facing);
+  const cx = player.x + player.width * 0.5 + Math.cos(aimYaw) * 6;
+  const cy = player.y + player.height * 0.5 + Math.sin(aimYaw) * 6;
+  const punchRect: Rect = {
+    x: cx - 12,
+    y: cy - 12,
+    width: 24,
+    height: 24,
+  };
+
+  for (const target of getLevelNpcTargets(state)) {
+    if (rectsIntersect(punchRect, target.rect)) {
+      const ncx = target.rect.x + target.rect.width * 0.5;
+      const ncy = target.rect.y + target.rect.height * 0.5;
+      spawnNpcBlood(state, ncx, ncy, target.groundZ);
+    }
+  }
+}
+
+function updateEffectTimers(state: GameState, dtSeconds: number): void {
+  if (dtSeconds <= 0) return;
+
+  for (let i = state.bulletHoles.length - 1; i >= 0; i--) {
+    state.bulletHoles[i].age += dtSeconds;
+    if (state.bulletHoles[i].age >= state.bulletHoles[i].maxAge) {
+      state.bulletHoles.splice(i, 1);
+    }
+  }
+
+  for (let i = state.bloodPools.length - 1; i >= 0; i--) {
+    state.bloodPools[i].age += dtSeconds;
+    if (state.bloodPools[i].age >= state.bloodPools[i].maxAge) {
+      state.bloodPools.splice(i, 1);
+    }
+  }
+
+  for (let i = state.bloodParticles.length - 1; i >= 0; i--) {
+    const pt = state.bloodParticles[i];
+    pt.age += dtSeconds;
+    pt.x += pt.vx * dtSeconds;
+    pt.y += pt.vy * dtSeconds;
+    pt.z += pt.vz * dtSeconds;
+    pt.vz -= 130 * dtSeconds;
+    if (pt.z <= pt.groundZ) {
+      if (pt.spawnsPool) {
+        state.bloodPools.push({
+          levelId: pt.levelId,
+          x: pt.x,
+          y: pt.y,
+          z: pt.groundZ,
+          age: 0,
+          maxAge: BLOOD_POOL_DURATION_SECONDS,
+        });
+      }
+      state.bloodParticles.splice(i, 1);
+    }
+  }
+}
+
 function updateProjectiles(state: GameState, dtSeconds: number): void {
   if (state.projectiles.length === 0 || dtSeconds <= 0) {
     return;
@@ -656,62 +861,128 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
   const mapHeight = state.map.rows * state.map.tileSize;
   const activeLevel = getActiveLevel(state);
   const obstacles = activeLevel.getSolidObstacles();
+  const npcTargets = getLevelNpcTargets(state);
 
   for (let i = state.projectiles.length - 1; i >= 0; i--) {
     const p = state.projectiles[i];
-    p.x += p.vx * dtSeconds;
-    p.y += p.vy * dtSeconds;
+    const stepSpeed = Math.hypot(p.vx, p.vy);
+    const totalStepDist = stepSpeed * dtSeconds;
+    const subSteps = Math.max(1, Math.ceil(totalStepDist / 4));
+    const subDt = dtSeconds / subSteps;
+    let removed = false;
 
-    if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
-      state.projectiles.splice(i, 1);
-      continue;
-    }
+    for (let s = 0; s < subSteps; s++) {
+      p.x += p.vx * subDt;
+      p.y += p.vy * subDt;
+      p.z += (p.vz ?? 0) * subDt;
+      p.distanceTraveled = (p.distanceTraveled ?? 0) + stepSpeed * subDt;
 
-    const projRect: Rect = {
-      x: p.x - 1.5,
-      y: p.y - 1.5,
-      width: 3,
-      height: 3,
-    };
+      if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
+        removed = true;
+        break;
+      }
 
-    if (p.fromRoof) {
-      const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
-      const hitTallTreeOrEdge = isRectCollidingWithMap(
+      if (typeof p.maxDistance === 'number' && p.distanceTraveled >= p.maxDistance) {
+        removed = true;
+        break;
+      }
+
+      const isFireball = p.kind === 'fireball';
+      const projRect: Rect = isFireball
+        ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 }
+        : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
+
+      // Check stairs wood stack burn in basement when hit by a fireball
+      if (isFireball && state.currentLevelId === 'level-basement') {
+        const basement = state.levels['level-basement'];
+        if (
+          !basement.stairsWoodBurned &&
+          rectsIntersect(projRect, BASEMENT_STAIRS_WOOD_BOUNDS)
+        ) {
+          if (basement.stairsWoodBurnTimer <= 0) {
+            basement.stairsWoodBurnTimer = STAIRS_WOOD_BURN_DURATION;
+          }
+          removed = true;
+          break;
+        }
+      }
+
+      // Check NPC hits (skip stairs wood burn, check human NPCs)
+      const hitNpc = npcTargets.find((t) => rectsIntersect(projRect, t.rect));
+      if (hitNpc) {
+        if (isFireball) {
+          state.burningNpcs.add(hitNpc.key);
+        } else {
+          spawnNpcBlood(state, p.x, p.y, hitNpc.groundZ);
+        }
+        removed = true;
+        break;
+      }
+
+      if (p.fromRoof) {
+        const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
+        const hitTallTreeOrEdge = isRectCollidingWithMap(
+          state.map,
+          projRect.x,
+          projRect.y,
+          projRect.width,
+          projRect.height,
+          true,
+          (c, r) =>
+            c >= 0 &&
+            r >= 0 &&
+            c < state.map.cols &&
+            r < state.map.rows &&
+            state.map.tiles[r][c] !== TileType.Tree
+        );
+        if (hitChimney || hitTallTreeOrEdge) {
+          if (!isFireball) {
+            state.bulletHoles.push({
+              levelId: state.currentLevelId,
+              x: p.x,
+              y: p.y,
+              z: Math.max(2, p.z),
+              age: 0,
+              maxAge: BULLET_HOLE_DURATION_SECONDS,
+            });
+          }
+          removed = true;
+          break;
+        }
+        continue;
+      }
+
+      const hitMap = isRectCollidingWithMap(
         state.map,
         projRect.x,
         projRect.y,
         projRect.width,
         projRect.height,
-        true,
-        (c, r) =>
-          c >= 0 &&
-          r >= 0 &&
-          c < state.map.cols &&
-          r < state.map.rows &&
-          state.map.tiles[r][c] !== TileType.Tree
+        true
       );
-      if (hitChimney || hitTallTreeOrEdge) {
-        state.projectiles.splice(i, 1);
+      const hitObstacle = obstacles.some((obs) => rectsIntersect(projRect, obs));
+      const hitOutsideDynamic =
+        state.currentLevelId === 'level-outside' &&
+        (rectsIntersect(projRect, state.dog) ||
+          rectsIntersect(projRect, state.motorcycle));
+
+      if (hitMap || hitObstacle || hitOutsideDynamic) {
+        if (!isFireball && (hitMap || hitObstacle)) {
+          state.bulletHoles.push({
+            levelId: state.currentLevelId,
+            x: p.x,
+            y: p.y,
+            z: Math.max(2, p.z),
+            age: 0,
+            maxAge: BULLET_HOLE_DURATION_SECONDS,
+          });
+        }
+        removed = true;
+        break;
       }
-      continue;
     }
 
-    const hitMap = isRectCollidingWithMap(
-      state.map,
-      projRect.x,
-      projRect.y,
-      projRect.width,
-      projRect.height,
-      true
-    );
-    const hitObstacle = obstacles.some((obs) => rectsIntersect(projRect, obs));
-    const hitOutsideDynamic =
-      state.currentLevelId === 'level-outside' &&
-      (rectsIntersect(projRect, state.dog) ||
-        rectsIntersect(projRect, state.motorcycle) ||
-        state.throwers.some((t) => rectsIntersect(projRect, t)));
-
-    if (hitMap || hitObstacle || hitOutsideDynamic) {
+    if (removed) {
       state.projectiles.splice(i, 1);
     }
   }
@@ -719,10 +990,15 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
 
 function fireUziProjectile(state: GameState): void {
   const player = state.player;
+  if (player.uziAmmo <= 0 || player.uziDepleted) {
+    return;
+  }
+
   const aimYaw =
     typeof player.yaw === 'number'
       ? player.yaw
       : directionToYaw(player.facing);
+  const rightAngle = aimYaw + Math.PI / 2;
   const cx = player.x + player.width * 0.5;
   const cy = player.y + player.height * 0.5;
   const onRoof = state.currentLevelId === 'level-outside' && state.isOnRoof;
@@ -730,15 +1006,87 @@ function fireUziProjectile(state: GameState): void {
     ? getMainHouseRoofElevation(cx, cy)
     : getTerrainHeight(cx, cy, state.currentLevelId);
 
+  const yawSpread = (Math.random() * 2 - 1) * ((10 * Math.PI) / 180);
+  const shotYaw = aimYaw + yawSpread;
+  const pitchSpread = (Math.random() * 2 - 1) * ((5 * Math.PI) / 180);
+
+  const spawnX =
+    cx + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
+  const spawnY =
+    cy + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
+  const spawnZ = groundZ + (player.jumpOffset ?? 0) + 10.0;
+
   state.projectiles.push({
-    x: cx + Math.cos(aimYaw) * 6,
-    y: cy + Math.sin(aimYaw) * 6,
-    z: groundZ + (player.jumpOffset ?? 0) + 8.5,
-    vx: Math.cos(aimYaw) * UZI_PROJECTILE_SPEED,
-    vy: Math.sin(aimYaw) * UZI_PROJECTILE_SPEED,
-    yaw: aimYaw,
+    kind: 'bullet',
+    x: spawnX,
+    y: spawnY,
+    z: spawnZ,
+    vx: Math.cos(shotYaw) * UZI_PROJECTILE_SPEED,
+    vy: Math.sin(shotYaw) * UZI_PROJECTILE_SPEED,
+    vz: UZI_PROJECTILE_SPEED * Math.tan(pitchSpread),
+    yaw: shotYaw,
+    distanceTraveled: 0,
     fromRoof: onRoof,
   });
+
+  player.weaponVibrationTimer = Math.max(
+    player.weaponVibrationTimer,
+    UZI_FIRE_INTERVAL_SECONDS + 0.05
+  );
+  player.uziAmmo = Math.max(0, player.uziAmmo - 1);
+
+  if (player.uziAmmo <= 0) {
+    player.uziDepleted = true;
+    player.uziDropTimer = UZI_DROP_DURATION_SECONDS;
+    player.equippedItem = 'empty';
+    state.droppedUzis.push({
+      levelId: state.currentLevelId,
+      x: cx + Math.cos(rightAngle) * 7,
+      y: cy + Math.sin(rightAngle) * 7,
+      z: groundZ,
+      yaw: aimYaw + 0.4,
+    });
+  }
+}
+
+function fireFlamethrowerProjectile(state: GameState): void {
+  const player = state.player;
+  const aimYaw =
+    typeof player.yaw === 'number'
+      ? player.yaw
+      : directionToYaw(player.facing);
+  const rightAngle = aimYaw + Math.PI / 2;
+  const cx = player.x + player.width * 0.5;
+  const cy = player.y + player.height * 0.5;
+  const onRoof = state.currentLevelId === 'level-outside' && state.isOnRoof;
+  const groundZ = onRoof
+    ? getMainHouseRoofElevation(cx, cy)
+    : getTerrainHeight(cx, cy, state.currentLevelId);
+
+  const spawnX =
+    cx + Math.cos(aimYaw) * 8.5 + Math.cos(rightAngle) * 3.5;
+  const spawnY =
+    cy + Math.sin(aimYaw) * 8.5 + Math.sin(rightAngle) * 3.5;
+  const spawnZ = groundZ + (player.jumpOffset ?? 0) + 9.5;
+
+  state.projectiles.push({
+    kind: 'fireball',
+    x: spawnX,
+    y: spawnY,
+    z: spawnZ,
+    vx: Math.cos(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+    vy: Math.sin(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+    vz: 0,
+    yaw: aimYaw,
+    distanceTraveled: 0,
+    maxDistance: FLAMETHROWER_MAX_DISTANCE,
+    fromRoof: onRoof,
+  });
+
+  player.weaponVibrationTimer = Math.max(
+    player.weaponVibrationTimer,
+    FLAMETHROWER_FIRE_INTERVAL_SECONDS + 0.05
+  );
 }
 
 export function updateGameState(
@@ -750,9 +1098,12 @@ export function updateGameState(
   state.elapsedTime += safeDt;
   dtSeconds = safeDt;
   const prevUziCooldown = state.player.uziFireCooldown;
+  const prevFlameCooldown = state.player.flamethrowerFireCooldown;
   updatePlayerHealthAndTimers(state.player, dtSeconds);
   const uziCooldownRemainder =
     prevUziCooldown > 0 ? Math.max(0, dtSeconds - prevUziCooldown) : 0;
+  const flameCooldownRemainder =
+    prevFlameCooldown > 0 ? Math.max(0, dtSeconds - prevFlameCooldown) : 0;
   const actionPressed = consumeActionPress(input);
   const attackPressed = consumeAttackPress(input);
   const slotPressed = consumeSlotPress(input);
@@ -778,9 +1129,17 @@ export function updateGameState(
         state.activeDialogue.currentIndex >= state.activeDialogue.lines.length
       ) {
         const onClose = state.activeDialogue.onClose;
+        const prevLevel = state.currentLevelId;
         state.activeDialogue = null;
         if (onClose) {
           onClose();
+        }
+        if (
+          state.currentLevelId !== prevLevel &&
+          typeof input.cameraYaw === 'number'
+        ) {
+          input.cameraYaw =
+            state.player.yaw ?? directionToYaw(state.player.facing);
         }
       }
     }
@@ -791,9 +1150,10 @@ export function updateGameState(
     selectPlayerEquipmentSlot(state.player, slotPressed);
   }
 
-  // Update 3D jump / fall arc, indoor door opening animations, and Uzi projectiles
+  // Update 3D jump / fall arc, indoor door opening animations, projectiles, bullet holes, and blood
   updatePlayerJump(state.player, dtSeconds);
   updateProjectiles(state, dtSeconds);
+  updateEffectTimers(state, dtSeconds);
   for (const door of state.levels['level-basement'].openedDoors) {
     door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
   }
@@ -802,7 +1162,13 @@ export function updateGameState(
   }
 
   const transitionCtx: LevelTransitionContext = {
-    loadLevel: (nextId: LevelId) => loadLevel(state, nextId),
+    loadLevel: (nextId: LevelId) => {
+      loadLevel(state, nextId);
+      if (typeof input.cameraYaw === 'number') {
+        input.cameraYaw =
+          state.player.yaw ?? directionToYaw(state.player.facing);
+      }
+    },
     openDialogue: (
       lines: string[],
       onClose?: () => void,
@@ -854,6 +1220,7 @@ export function updateGameState(
       basement.map,
       basement.getSolidObstacles()
     );
+    basement.updateHazardsAndItems(dtSeconds, state.player);
     basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
     if (state.activeDialogue) {
       refreshInteractables(state);
@@ -943,13 +1310,16 @@ export function updateGameState(
     return;
   }
 
-  if (state.player.equippedItem === 'unarmed') {
-    if (attackPressed) {
-      triggerPlayerPunch(state.player);
-    }
+  if (state.player.equippedItem === 'empty') {
     if (actionPressed && !state.nearbyInteractable) {
-      // No interactable Action available while unarmed: Space triggers a 3D half-tile jump animation
+      // No interactable Action available while empty-handed: Space triggers a 3D half-tile jump animation
       triggerPlayerJump(state.player);
+    }
+  } else if (state.player.equippedItem === 'unarmed') {
+    if (attackPressed || (!state.nearbyInteractable && actionPressed)) {
+      if (triggerPlayerPunch(state.player)) {
+        checkPunchNpcHit(state);
+      }
     }
   } else if (state.player.equippedItem === 'uzi') {
     const wantsToFire =
@@ -962,6 +1332,18 @@ export function updateGameState(
         UZI_FIRE_INTERVAL_SECONDS - uziCooldownRemainder
       );
       fireUziProjectile(state);
+    }
+  } else if (state.player.equippedItem === 'flamethrower') {
+    const wantsToFire =
+      attackPressed ||
+      Boolean(input.attack) ||
+      (!state.nearbyInteractable && (actionPressed || Boolean(input.action)));
+    if (wantsToFire && state.player.flamethrowerFireCooldown <= 1e-6) {
+      state.player.flamethrowerFireCooldown = Math.max(
+        0.01,
+        FLAMETHROWER_FIRE_INTERVAL_SECONDS - flameCooldownRemainder
+      );
+      fireFlamethrowerProjectile(state);
     }
   }
 }

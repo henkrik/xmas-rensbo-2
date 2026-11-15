@@ -47,9 +47,11 @@ import {
 } from '../src/rendering/math3d';
 import {
   buildDynamicSceneMeshes,
+  extractOutlineMesh,
   FLOATS_PER_VERTEX,
   getStaticLevelMesh,
 } from '../src/rendering/models3d';
+import { WebGL3DRenderer } from '../src/rendering/webglRenderer';
 import {
   ATLAS_HEIGHT,
   ATLAS_WIDTH,
@@ -2898,5 +2900,140 @@ Tanja -> Alex
       }
     }
     expect(hasStairwellBelowFloor).toBe(true);
+  });
+
+  it('guarantees outward CCW triangle winding, strips non-outlined static triangles, and renders via WebGL3DRenderer for iOS', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const staticMesh = getStaticLevelMesh('level-outside', state.map);
+    const outlineMesh = extractOutlineMesh(staticMesh);
+
+    // 1. Filtered outline mesh strips non-outlined terrain/floor triangles
+    expect(outlineMesh.vertexCount).toBeGreaterThan(0);
+    expect(outlineMesh.vertexCount).toBeLessThan(staticMesh.vertexCount);
+
+    // 2. Every triangle in static and dynamic meshes has outward CCW winding ((p1 - p0) x (p2 - p0)) . N >= 0
+    const verifyCCWWinding = (verts: Float32Array, vertexCount: number) => {
+      let invertedCount = 0;
+      for (let i = 0; i < vertexCount; i += 3) {
+        const b0 = i * FLOATS_PER_VERTEX;
+        const b1 = (i + 1) * FLOATS_PER_VERTEX;
+        const b2 = (i + 2) * FLOATS_PER_VERTEX;
+        const ux = verts[b1] - verts[b0];
+        const uy = verts[b1 + 1] - verts[b0 + 1];
+        const uz = verts[b1 + 2] - verts[b0 + 2];
+        const vx = verts[b2] - verts[b0];
+        const vy = verts[b2 + 1] - verts[b0 + 1];
+        const vz = verts[b2 + 2] - verts[b0 + 2];
+        const cx = uy * vz - uz * vy;
+        const cy = uz * vx - ux * vz;
+        const cz = ux * vy - uy * vx;
+        const nx = verts[b0 + 3] + verts[b1 + 3] + verts[b2 + 3];
+        const ny = verts[b0 + 4] + verts[b1 + 4] + verts[b2 + 4];
+        const nz = verts[b0 + 5] + verts[b1 + 5] + verts[b2 + 5];
+        if (cx * nx + cy * ny + cz * nz < -1e-5) {
+          invertedCount++;
+        }
+      }
+      return invertedCount;
+    };
+
+    const dynMeshes = buildDynamicSceneMeshes(state, 52);
+    expect(verifyCCWWinding(staticMesh.vertices, staticMesh.vertexCount)).toBe(0);
+    expect(verifyCCWWinding(dynMeshes.opaque.vertices, dynMeshes.opaque.vertexCount)).toBe(0);
+
+    // 3. WebGL3DRenderer initializes and executes 3-pass Wind Waker cel + outline + translucent rendering
+    const drawCalls: number[] = [];
+    const cullModes: number[] = [];
+    const mockGL: Record<string, unknown> = {
+      VERTEX_SHADER: 0x8b31,
+      FRAGMENT_SHADER: 0x8b30,
+      COMPILE_STATUS: 0x8b81,
+      LINK_STATUS: 0x8b82,
+      TEXTURE_2D: 0x0de1,
+      TEXTURE0: 0x84c0,
+      RGBA: 0x1908,
+      UNSIGNED_BYTE: 0x1401,
+      UNPACK_FLIP_Y_WEBGL: 0x9240,
+      TEXTURE_WRAP_S: 0x2802,
+      TEXTURE_WRAP_T: 0x2803,
+      TEXTURE_MIN_FILTER: 0x2801,
+      TEXTURE_MAG_FILTER: 0x2800,
+      CLAMP_TO_EDGE: 0x812f,
+      LINEAR: 0x2601,
+      ARRAY_BUFFER: 0x8892,
+      STATIC_DRAW: 0x88e4,
+      DYNAMIC_DRAW: 0x88e8,
+      FLOAT: 0x1406,
+      DEPTH_TEST: 0x0b71,
+      LEQUAL: 0x0203,
+      COLOR_BUFFER_BIT: 0x4000,
+      DEPTH_BUFFER_BIT: 0x0100,
+      BLEND: 0x0be2,
+      CULL_FACE: 0x0b44,
+      CCW: 0x0901,
+      FRONT: 0x0404,
+      SRC_ALPHA: 0x0302,
+      ONE_MINUS_SRC_ALPHA: 0x0303,
+      TRIANGLES: 0x0004,
+      createShader: () => ({}),
+      shaderSource: () => {},
+      compileShader: () => {},
+      getShaderParameter: () => true,
+      deleteShader: () => {},
+      createProgram: () => ({}),
+      attachShader: () => {},
+      linkProgram: () => {},
+      getProgramParameter: () => true,
+      deleteProgram: () => {},
+      getAttribLocation: () => 0,
+      getUniformLocation: () => ({}),
+      createTexture: () => ({}),
+      bindTexture: () => {},
+      pixelStorei: () => {},
+      texImage2D: () => {},
+      texParameteri: () => {},
+      createBuffer: () => ({}),
+      bindBuffer: () => {},
+      bufferData: () => {},
+      bufferSubData: () => {},
+      enableVertexAttribArray: () => {},
+      vertexAttribPointer: () => {},
+      viewport: () => {},
+      clearColor: () => {},
+      clearDepth: () => {},
+      enable: () => {},
+      disable: () => {},
+      depthFunc: () => {},
+      depthMask: () => {},
+      clear: () => {},
+      useProgram: () => {},
+      activeTexture: () => {},
+      uniform1i: () => {},
+      uniformMatrix4fv: () => {},
+      uniform4f: () => {},
+      frontFace: () => {},
+      cullFace: (mode: number) => {
+        cullModes.push(mode);
+      },
+      blendFunc: () => {},
+      drawArrays: (_mode: number, _first: number, count: number) => {
+        drawCalls.push(count);
+      },
+    };
+
+    const mockCanvas = {
+      width: 640,
+      height: 560,
+      getContext: (type: string) => (type === 'webgl2' ? mockGL : null),
+    } as unknown as HTMLCanvasElement;
+
+    const webglRenderer = WebGL3DRenderer.create(mockCanvas);
+    expect(webglRenderer).not.toBeNull();
+    const cam = createCamera3D();
+    updateCamera3D(cam, state, createEmptyInput(), 0.016);
+    const viewProj = webglRenderer!.render(state, cam);
+    expect(viewProj.length).toBe(16);
+    expect(drawCalls.length).toBe(5); // 2 opaque + 2 outline + 1 translucent
+    expect(cullModes).toContain(0x0404); // gl.FRONT culled in Pass 2
   });
 });

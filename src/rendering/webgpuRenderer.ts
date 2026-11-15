@@ -27,6 +27,7 @@ import {
 } from './textures3d';
 import {
   buildDynamicSceneMeshes,
+  extractOutlineMesh,
   FLOATS_PER_VERTEX,
   getStaticLevelMesh,
 } from './models3d';
@@ -86,7 +87,7 @@ fn vs_outline(in: VertexInput) -> VertexOutput {
   var out: VertexOutput;
   let outlineScale = in.texAndOutline.y;
   if (outlineScale <= 0.001) {
-    out.clipPos = vec4<f32>(0.0, 0.0, 2.0, 1.0);
+    out.clipPos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     out.worldPos = in.pos;
     out.worldNormal = in.normal;
     out.uv = in.uv;
@@ -252,7 +253,12 @@ export class WebGPURenderer {
 
   private staticBuffers = new Map<
     LevelId,
-    { buffer: GPUBuffer; vertexCount: number }
+    {
+      buffer: GPUBuffer;
+      vertexCount: number;
+      outlineBuffer: GPUBuffer;
+      outlineVertexCount: number;
+    }
   >();
   private dynamicOpaqueBuffer: GPUBuffer;
   private dynamicOpaqueCapacityBytes: number;
@@ -557,7 +563,12 @@ export class WebGPURenderer {
 
   private getOrUploadStaticLevelBuffer(
     state: GameState
-  ): { buffer: GPUBuffer; vertexCount: number } {
+  ): {
+    buffer: GPUBuffer;
+    vertexCount: number;
+    outlineBuffer: GPUBuffer;
+    outlineVertexCount: number;
+  } {
     const existing = this.staticBuffers.get(state.currentLevelId);
     if (existing) {
       return existing;
@@ -577,7 +588,29 @@ export class WebGPURenderer {
         mesh.vertices.byteLength
       );
     }
-    const entry = { buffer, vertexCount: mesh.vertexCount };
+
+    const outlineMesh = extractOutlineMesh(mesh);
+    const outlineByteLength = Math.max(64, outlineMesh.vertices.byteLength);
+    const outlineBuffer = this.device.createBuffer({
+      size: outlineByteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    if (outlineMesh.vertices.byteLength > 0) {
+      this.device.queue.writeBuffer(
+        outlineBuffer,
+        0,
+        outlineMesh.vertices.buffer,
+        outlineMesh.vertices.byteOffset,
+        outlineMesh.vertices.byteLength
+      );
+    }
+
+    const entry = {
+      buffer,
+      vertexCount: mesh.vertexCount,
+      outlineBuffer,
+      outlineVertexCount: outlineMesh.vertexCount,
+    };
     this.staticBuffers.set(state.currentLevelId, entry);
     return entry;
   }
@@ -714,14 +747,14 @@ export class WebGPURenderer {
             ? { r: 0, g: 0, b: 0, a: 1 }
             : { r: clearR, g: clearG, b: clearB, a: 1 },
           loadOp: 'clear',
-          storeOp: 'discard',
+          storeOp: 'store',
         },
       ],
       depthStencilAttachment: {
         view: depthView,
         depthClearValue: 1.0,
         depthLoadOp: 'clear',
-        depthStoreOp: 'discard',
+        depthStoreOp: 'store',
       },
     });
 
@@ -740,9 +773,9 @@ export class WebGPURenderer {
 
     // Pass 2: Wind Waker Silhouette Contours (Inverted-Hull with depth offset)
     pass.setPipeline(this.outlinePipeline);
-    if (staticEntry.vertexCount > 0) {
-      pass.setVertexBuffer(0, staticEntry.buffer);
-      pass.draw(staticEntry.vertexCount);
+    if (staticEntry.outlineVertexCount > 0) {
+      pass.setVertexBuffer(0, staticEntry.outlineBuffer);
+      pass.draw(staticEntry.outlineVertexCount);
     }
     if (dynamicScene.opaque.vertexCount > 0) {
       pass.setVertexBuffer(0, this.dynamicOpaqueBuffer);

@@ -2994,34 +2994,74 @@
   }
   var MeshBuilder = class {
     constructor() {
-      __publicField(this, "data", []);
+      __publicField(this, "buf", new Float32Array(4096 * FLOATS_PER_VERTEX));
+      __publicField(this, "floatCount", 0);
+      __publicField(this, "triVertexStep", 0);
     }
     get vertexCount() {
-      return this.data.length / FLOATS_PER_VERTEX;
+      return this.floatCount / FLOATS_PER_VERTEX;
+    }
+    ensureCapacity(extraFloats) {
+      const needed = this.floatCount + extraFloats;
+      if (needed <= this.buf.length) return;
+      let nextLen = this.buf.length * 2;
+      while (nextLen < needed) nextLen *= 2;
+      const next = new Float32Array(nextLen);
+      next.set(this.buf.subarray(0, this.floatCount));
+      this.buf = next;
     }
     scaleAlphaRange(startVertex, alphaScale) {
       const startFloat = startVertex * FLOATS_PER_VERTEX;
-      for (let i = startFloat + 11; i < this.data.length; i += FLOATS_PER_VERTEX) {
-        this.data[i] *= alphaScale;
+      const out = this.buf;
+      for (let i = startFloat + 11; i < this.floatCount; i += FLOATS_PER_VERTEX) {
+        out[i] *= alphaScale;
       }
     }
     pushVertex(x, y, z, nx, ny, nz, u, v, color, texId, outlineScale) {
-      this.data.push(
-        x,
-        y,
-        z,
-        nx,
-        ny,
-        nz,
-        u,
-        v,
-        color[0],
-        color[1],
-        color[2],
-        color[3],
-        texId,
-        outlineScale
-      );
+      this.ensureCapacity(FLOATS_PER_VERTEX);
+      const out = this.buf;
+      let idx = this.floatCount;
+      out[idx++] = x;
+      out[idx++] = y;
+      out[idx++] = z;
+      out[idx++] = nx;
+      out[idx++] = ny;
+      out[idx++] = nz;
+      out[idx++] = u;
+      out[idx++] = v;
+      out[idx++] = color[0];
+      out[idx++] = color[1];
+      out[idx++] = color[2];
+      out[idx++] = color[3];
+      out[idx++] = texId;
+      out[idx++] = outlineScale;
+      this.floatCount = idx;
+      this.triVertexStep++;
+      if (this.triVertexStep === 3) {
+        this.triVertexStep = 0;
+        const v0 = idx - 3 * FLOATS_PER_VERTEX;
+        const v1 = v0 + FLOATS_PER_VERTEX;
+        const v2 = v1 + FLOATS_PER_VERTEX;
+        const ux = out[v1] - out[v0];
+        const uy = out[v1 + 1] - out[v0 + 1];
+        const uz = out[v1 + 2] - out[v0 + 2];
+        const vx = out[v2] - out[v0];
+        const vy = out[v2 + 1] - out[v0 + 1];
+        const vz = out[v2 + 2] - out[v0 + 2];
+        const cx = uy * vz - uz * vy;
+        const cy = uz * vx - ux * vz;
+        const cz = ux * vy - uy * vx;
+        const anx = out[v0 + 3] + out[v1 + 3] + out[v2 + 3];
+        const any = out[v0 + 4] + out[v1 + 4] + out[v2 + 4];
+        const anz = out[v0 + 5] + out[v1 + 5] + out[v2 + 5];
+        if (cx * anx + cy * any + cz * anz < 0) {
+          for (let k = 0; k < FLOATS_PER_VERTEX; k++) {
+            const tmp = out[v1 + k];
+            out[v1 + k] = out[v2 + k];
+            out[v2 + k] = tmp;
+          }
+        }
+      }
     }
     addTriangle(p0, p1, p2, color, texId = TexId.SOLID, outlineScale = 0.65, customNormal) {
       let nx = 0;
@@ -3150,7 +3190,7 @@
       }
     }
     addCylinder(cx, baseY, cz, radiusBottom, radiusTop, height, segments, color, texId = TexId.SOLID, outlineScale = 0.65) {
-      const segs = Math.max(10, segments);
+      const segs = Math.max(5, segments);
       const topY = baseY + height;
       const slopeY = (radiusBottom - radiusTop) / (height || 1);
       for (let i = 0; i < segs; i++) {
@@ -3171,32 +3211,32 @@
         const u0 = i / segs;
         const u1 = (i + 1) / segs;
         this.pushVertex(b0[0], b0[1], b0[2], n0[0], n0[1], n0[2], u0, 1, color, texId, outlineScale);
+        this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
         this.pushVertex(b1[0], b1[1], b1[2], n1[0], n1[1], n1[2], u1, 1, color, texId, outlineScale);
-        this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
         this.pushVertex(b0[0], b0[1], b0[2], n0[0], n0[1], n0[2], u0, 1, color, texId, outlineScale);
-        this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
         this.pushVertex(t0[0], t0[1], t0[2], n0[0], n0[1], n0[2], u0, 0, color, texId, outlineScale);
-        if (radiusTop > 0.01) {
+        this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
+        if (radiusTop > 0.05) {
           this.pushVertex(cx, topY, cz, 0, 1, 0, 0.5, 0.5, color, texId, outlineScale);
-          this.pushVertex(t0[0], t0[1], t0[2], n0[0], 0.8, n0[2], 0.5 + c0 * 0.5, 0.5 + s0 * 0.5, color, texId, outlineScale);
           this.pushVertex(t1[0], t1[1], t1[2], n1[0], 0.8, n1[2], 0.5 + c1 * 0.5, 0.5 + s1 * 0.5, color, texId, outlineScale);
+          this.pushVertex(t0[0], t0[1], t0[2], n0[0], 0.8, n0[2], 0.5 + c0 * 0.5, 0.5 + s0 * 0.5, color, texId, outlineScale);
         }
-        if (radiusBottom > 0.01) {
+        if (radiusBottom > 0.05) {
           this.pushVertex(cx, baseY, cz, 0, -1, 0, 0.5, 0.5, color, texId, outlineScale);
-          this.pushVertex(b1[0], b1[1], b1[2], n1[0], -0.8, n1[2], 0.5 + c1 * 0.5, 0.5 + s1 * 0.5, color, texId, outlineScale);
           this.pushVertex(b0[0], b0[1], b0[2], n0[0], -0.8, n0[2], 0.5 + c0 * 0.5, 0.5 + s0 * 0.5, color, texId, outlineScale);
+          this.pushVertex(b1[0], b1[1], b1[2], n1[0], -0.8, n1[2], 0.5 + c1 * 0.5, 0.5 + s1 * 0.5, color, texId, outlineScale);
         }
       }
     }
     addCone(cx, baseY, cz, radius, height, segments, color, texId = TexId.SOLID, outlineScale = 0.65) {
-      this.addCylinder(cx, baseY, cz, radius, 0.02, height, Math.max(12, segments), color, texId, outlineScale);
+      this.addCylinder(cx, baseY, cz, radius, 0.02, height, Math.max(5, segments), color, texId, outlineScale);
     }
     /**
      * Adds a smooth high-segment ellipsoid / sphere centered at `(cx, cy, cz)`.
      */
     addSphere(cx, cy, cz, rx, ry, rz, latBands, lonBands, color, texId = TexId.SOLID, outlineScale = 0.65) {
-      const lats = Math.max(8, latBands);
-      const lons = Math.max(12, lonBands);
+      const lats = Math.max(4, latBands);
+      const lons = Math.max(6, lonBands);
       for (let lat = 0; lat < lats; lat++) {
         const theta0 = lat / lats * Math.PI;
         const theta1 = (lat + 1) / lats * Math.PI;
@@ -3273,11 +3313,11 @@
           const n11 = nm(cu1, su1, cv1, sv1);
           const n01 = nm(cu0, su0, cv1, sv1);
           this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], 0, 0, color, texId, outlineScale);
+          this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
           this.pushVertex(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], 1, 0, color, texId, outlineScale);
-          this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
           this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], 0, 0, color, texId, outlineScale);
-          this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
           this.pushVertex(p01[0], p01[1], p01[2], n01[0], n01[1], n01[2], 0, 1, color, texId, outlineScale);
+          this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
         }
       }
     }
@@ -3345,53 +3385,75 @@
       }
     }
     build() {
-      const arr = new Float32Array(this.data);
+      const arr = this.buf.slice(0, this.floatCount);
       return {
         vertices: arr,
-        vertexCount: arr.length / FLOATS_PER_VERTEX
+        vertexCount: this.floatCount / FLOATS_PER_VERTEX
       };
     }
   };
+  function extractOutlineMesh(mesh) {
+    const src = mesh.vertices;
+    const triStride = FLOATS_PER_VERTEX * 3;
+    let outlineFloats = 0;
+    for (let i = 0; i < src.length; i += triStride) {
+      if (src[i + 13] > 1e-3 || src[i + FLOATS_PER_VERTEX + 13] > 1e-3 || src[i + FLOATS_PER_VERTEX * 2 + 13] > 1e-3) {
+        outlineFloats += triStride;
+      }
+    }
+    const out = new Float32Array(outlineFloats);
+    let dstIdx = 0;
+    for (let i = 0; i < src.length; i += triStride) {
+      if (src[i + 13] > 1e-3 || src[i + FLOATS_PER_VERTEX + 13] > 1e-3 || src[i + FLOATS_PER_VERTEX * 2 + 13] > 1e-3) {
+        out.set(src.subarray(i, i + triStride), dstIdx);
+        dstIdx += triStride;
+      }
+    }
+    return {
+      vertices: out,
+      vertexCount: outlineFloats / FLOATS_PER_VERTEX
+    };
+  }
   function addPineTree3D(mb, cx, baseY, cz, variant, scale = 1) {
-    mb.addSphere(cx, baseY + 0.4, cz, 4.2 * scale, 1.4 * scale, 4.2 * scale, 6, 10, rgb(242, 248, 255), TexId.SNOW, 0.35);
+    mb.addSphere(cx, baseY + 0.4, cz, 4.2 * scale, 1.4 * scale, 4.2 * scale, 5, 8, rgb(242, 248, 255), TexId.SNOW, 0.35);
     if (variant === 0) {
-      mb.addCylinder(cx, baseY, cz, 2.5 * scale, 1.5 * scale, 9.5 * scale, 12, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.6);
-      mb.addCone(cx, baseY + 4.5 * scale, cz, 9.4 * scale, 9.5 * scale, 14, rgb(26, 88, 48), TexId.PINE_FOLIAGE, 0.7);
-      mb.addCone(cx, baseY + 9.8 * scale, cz, 7.8 * scale, 9 * scale, 14, rgb(34, 108, 58), TexId.PINE_FOLIAGE, 0.7);
-      mb.addCone(cx, baseY + 15 * scale, cz, 6 * scale, 8.2 * scale, 14, rgb(44, 126, 68), TexId.PINE_FOLIAGE, 0.7);
-      mb.addCone(cx, baseY + 19.8 * scale, cz, 4.2 * scale, 7.2 * scale, 14, rgb(56, 142, 80), TexId.PINE_FOLIAGE, 0.7);
-      mb.addCone(cx, baseY + 23 * scale, cz, 2.8 * scale, 4.8 * scale, 14, rgb(246, 250, 255), TexId.SNOW, 0.55);
+      mb.addCylinder(cx, baseY, cz, 2.5 * scale, 1.5 * scale, 9.5 * scale, 8, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.6);
+      mb.addCone(cx, baseY + 4.5 * scale, cz, 9.4 * scale, 9.5 * scale, 9, rgb(26, 88, 48), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 9.8 * scale, cz, 7.8 * scale, 9 * scale, 9, rgb(34, 108, 58), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 15 * scale, cz, 6 * scale, 8.2 * scale, 8, rgb(44, 126, 68), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 19.8 * scale, cz, 4.2 * scale, 7.2 * scale, 8, rgb(56, 142, 80), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 23 * scale, cz, 2.8 * scale, 4.8 * scale, 8, rgb(246, 250, 255), TexId.SNOW, 0.55);
     } else if (variant === 1) {
       addPineTree3D(mb, cx - 3.4 * scale, baseY, cz + 1.5 * scale, 0, 0.74 * scale);
       addPineTree3D(mb, cx + 3.2 * scale, baseY, cz - 1.2 * scale, 2, 0.88 * scale);
     } else if (variant === 2) {
-      mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.3 * scale, 7.5 * scale, 12, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.6);
-      mb.addCone(cx, baseY + 3.8 * scale, cz, 8 * scale, 11.5 * scale, 14, rgb(32, 102, 74), TexId.PINE_FOLIAGE, 0.7);
-      mb.addCone(cx, baseY + 9.8 * scale, cz, 6.2 * scale, 10.5 * scale, 14, rgb(46, 124, 92), TexId.PINE_FOLIAGE, 0.7);
-      mb.addCone(cx, baseY + 15.5 * scale, cz, 4.4 * scale, 9 * scale, 14, rgb(60, 144, 108), TexId.PINE_FOLIAGE, 0.7);
-      mb.addCone(cx, baseY + 20.2 * scale, cz, 2.8 * scale, 5.2 * scale, 14, rgb(244, 250, 255), TexId.SNOW, 0.55);
+      mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.3 * scale, 7.5 * scale, 8, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.6);
+      mb.addCone(cx, baseY + 3.8 * scale, cz, 8 * scale, 11.5 * scale, 9, rgb(32, 102, 74), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 9.8 * scale, cz, 6.2 * scale, 10.5 * scale, 9, rgb(46, 124, 92), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 15.5 * scale, cz, 4.4 * scale, 9 * scale, 8, rgb(60, 144, 108), TexId.PINE_FOLIAGE, 0.7);
+      mb.addCone(cx, baseY + 20.2 * scale, cz, 2.8 * scale, 5.2 * scale, 8, rgb(244, 250, 255), TexId.SNOW, 0.55);
     } else if (variant === 3) {
-      mb.addCylinder(cx, baseY, cz, 2.3 * scale, 1.8 * scale, 9 * scale, 12, rgb(132, 70, 38), TexId.WOOD_GRAIN, 0.65);
+      mb.addCylinder(cx, baseY, cz, 2.3 * scale, 1.8 * scale, 9 * scale, 8, rgb(132, 70, 38), TexId.WOOD_GRAIN, 0.65);
       mb.addOrientedBox(cx + 0.6 * scale, baseY + 13.5 * scale, cz, 2.8 * scale, 11 * scale, 2.8 * scale, 0.2, 0.14, rgb(156, 84, 44), TexId.WOOD_GRAIN, 0.6);
-      mb.addSphere(cx - 2.4 * scale, baseY + 18.5 * scale, cz + 0.8 * scale, 6.4 * scale, 3.8 * scale, 6.4 * scale, 8, 12, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.7);
-      mb.addSphere(cx + 2.8 * scale, baseY + 20.5 * scale, cz - 1 * scale, 6 * scale, 3.6 * scale, 6 * scale, 8, 12, rgb(46, 118, 64), TexId.PINE_FOLIAGE, 0.7);
-      mb.addSphere(cx + 0.2 * scale, baseY + 22.8 * scale, cz, 5.6 * scale, 2.5 * scale, 5.6 * scale, 8, 12, rgb(246, 250, 255), TexId.SNOW, 0.55);
+      mb.addSphere(cx - 2.4 * scale, baseY + 18.5 * scale, cz + 0.8 * scale, 6.4 * scale, 3.8 * scale, 6.4 * scale, 6, 9, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.7);
+      mb.addSphere(cx + 2.8 * scale, baseY + 20.5 * scale, cz - 1 * scale, 6 * scale, 3.6 * scale, 6 * scale, 6, 9, rgb(46, 118, 64), TexId.PINE_FOLIAGE, 0.7);
+      mb.addSphere(cx + 0.2 * scale, baseY + 22.8 * scale, cz, 5.6 * scale, 2.5 * scale, 5.6 * scale, 6, 9, rgb(246, 250, 255), TexId.SNOW, 0.55);
     } else {
-      mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.2 * scale, 16 * scale, 12, rgb(244, 242, 238), TexId.BIRCH_BARK, 0.65);
+      mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.2 * scale, 16 * scale, 8, rgb(244, 242, 238), TexId.BIRCH_BARK, 0.65);
       mb.addOrientedBox(cx - 2.6 * scale, baseY + 13.5 * scale, cz + 0.6 * scale, 1.1 * scale, 7.5 * scale, 1.1 * scale, 0.3, 0.52, rgb(238, 235, 230), TexId.BIRCH_BARK, 0.5);
       mb.addOrientedBox(cx + 2.6 * scale, baseY + 14.2 * scale, cz - 0.6 * scale, 1.1 * scale, 7 * scale, 1.1 * scale, -0.4, -0.48, rgb(238, 235, 230), TexId.BIRCH_BARK, 0.5);
-      mb.addSphere(cx - 2.2 * scale, baseY + 17.2 * scale, cz + 0.6 * scale, 4.4 * scale, 3.2 * scale, 4.4 * scale, 8, 12, rgb(232, 242, 252), TexId.SNOW, 0.6);
-      mb.addSphere(cx + 2.2 * scale, baseY + 18 * scale, cz - 0.6 * scale, 4.2 * scale, 3 * scale, 4.2 * scale, 8, 12, rgb(236, 245, 255), TexId.SNOW, 0.6);
-      mb.addSphere(cx, baseY + 19.6 * scale, cz, 4.8 * scale, 3.4 * scale, 4.8 * scale, 8, 12, rgb(246, 250, 255), TexId.SNOW, 0.6);
+      mb.addSphere(cx - 2.2 * scale, baseY + 17.2 * scale, cz + 0.6 * scale, 4.4 * scale, 3.2 * scale, 4.4 * scale, 6, 9, rgb(232, 242, 252), TexId.SNOW, 0.6);
+      mb.addSphere(cx + 2.2 * scale, baseY + 18 * scale, cz - 0.6 * scale, 4.2 * scale, 3 * scale, 4.2 * scale, 6, 9, rgb(236, 245, 255), TexId.SNOW, 0.6);
+      mb.addSphere(cx, baseY + 19.6 * scale, cz, 4.8 * scale, 3.4 * scale, 4.8 * scale, 6, 9, rgb(246, 250, 255), TexId.SNOW, 0.6);
     }
   }
   function addThujaTree3D(mb, cx, baseY, cz) {
-    mb.addSphere(cx, baseY + 0.3, cz, 3.2, 1, 3.2, 6, 10, rgb(242, 248, 255), TexId.SNOW, 0.3);
-    mb.addCylinder(cx, baseY, cz, 1.5, 1, 4.5, 10, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.55);
-    mb.addCone(cx, baseY + 3, cz, 5.4, 9.5, 12, rgb(36, 114, 60), TexId.PINE_FOLIAGE, 0.65);
-    mb.addCone(cx, baseY + 8.5, cz, 4.4, 9, 12, rgb(44, 130, 70), TexId.PINE_FOLIAGE, 0.65);
-    mb.addCone(cx, baseY + 14, cz, 3.1, 7.2, 12, rgb(54, 144, 80), TexId.PINE_FOLIAGE, 0.65);
-    mb.addCone(cx, baseY + 17.5, cz, 2, 4.5, 12, rgb(244, 250, 255), TexId.SNOW, 0.5);
+    mb.addSphere(cx, baseY + 0.3, cz, 3.2, 1, 3.2, 5, 8, rgb(242, 248, 255), TexId.SNOW, 0.3);
+    mb.addCylinder(cx, baseY, cz, 1.5, 1, 4.5, 8, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.55);
+    mb.addCone(cx, baseY + 3, cz, 5.4, 9.5, 9, rgb(36, 114, 60), TexId.PINE_FOLIAGE, 0.65);
+    mb.addCone(cx, baseY + 8.5, cz, 4.4, 9, 9, rgb(44, 130, 70), TexId.PINE_FOLIAGE, 0.65);
+    mb.addCone(cx, baseY + 14, cz, 3.1, 7.2, 8, rgb(54, 144, 80), TexId.PINE_FOLIAGE, 0.65);
+    mb.addCone(cx, baseY + 17.5, cz, 2, 4.5, 8, rgb(244, 250, 255), TexId.SNOW, 0.5);
   }
   function addHedgeTile3D(mb, cx, baseY, cz) {
     mb.addBeveledBox(cx, baseY, cz, 15.6, 8.8, 15.6, 1.8, rgb(38, 114, 58), TexId.PINE_FOLIAGE, 0.65);
@@ -5954,7 +6016,7 @@
     const sy = sunY / sunLen;
     const sz = sunZ / sunLen;
     const tris = [];
-    const collectMesh = (verts, count) => {
+    const collectMesh = (verts, count, cullBackfaces) => {
       for (let i = 0; i < count; i += 3) {
         const b0 = i * FLOATS_PER_VERTEX;
         const b1 = (i + 1) * FLOATS_PER_VERTEX;
@@ -5979,6 +6041,10 @@
         );
         if (!p0.visible && !p1.visible && !p2.visible) continue;
         if (p0.w <= 1 || p1.w <= 1 || p2.w <= 1) continue;
+        if (cullBackfaces) {
+          const cross2d = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+          if (cross2d > 0) continue;
+        }
         const nx = verts[b0 + 3];
         const ny = verts[b0 + 4];
         const nz = verts[b0 + 5];
@@ -5988,7 +6054,6 @@
         const g2 = Math.min(255, Math.round(verts[b0 + 9] * 255 * toon));
         const b = Math.min(255, Math.round(verts[b0 + 10] * 255 * toon));
         const a = verts[b0 + 11];
-        const outlineScale = verts[b0 + 13];
         tris.push({
           x0: p0.x,
           y0: p0.y,
@@ -5997,19 +6062,15 @@
           x2: p2.x,
           y2: p2.y,
           depth: (p0.w + p1.w + p2.w) / 3,
-          fill: a < 0.99 ? `rgba(${r},${g2},${b},${a.toFixed(2)})` : `rgb(${r},${g2},${b})`,
-          outline: outlineScale > 0.5
+          fill: a < 0.99 ? `rgba(${r},${g2},${b},${a.toFixed(2)})` : `rgb(${r},${g2},${b})`
         });
       }
     };
-    collectMesh(staticMesh.vertices, staticMesh.vertexCount);
-    collectMesh(dynamicMeshes.opaque.vertices, dynamicMeshes.opaque.vertexCount);
-    collectMesh(dynamicMeshes.translucent.vertices, dynamicMeshes.translucent.vertexCount);
+    collectMesh(staticMesh.vertices, staticMesh.vertexCount, true);
+    collectMesh(dynamicMeshes.opaque.vertices, dynamicMeshes.opaque.vertexCount, true);
+    collectMesh(dynamicMeshes.translucent.vertices, dynamicMeshes.translucent.vertexCount, false);
     tris.sort((a, b) => b.depth - a.depth);
     ctx.save();
-    ctx.lineJoin = "round";
-    ctx.lineWidth = 1.1;
-    ctx.strokeStyle = "#101422";
     for (const t of tris) {
       ctx.beginPath();
       ctx.moveTo(t.x0, t.y0);
@@ -6018,9 +6079,6 @@
       ctx.closePath();
       ctx.fillStyle = t.fill;
       ctx.fill();
-      if (t.outline) {
-        ctx.stroke();
-      }
     }
     ctx.restore();
   }
@@ -6472,8 +6530,638 @@
     }
   }
 
-  // src/rendering/webgpuRenderer.ts
+  // src/rendering/webglRenderer.ts
   var VERTEX_STRIDE_BYTES = FLOATS_PER_VERTEX * 4;
+  var VERTEX_SHADER_CEL = `
+precision highp float;
+
+attribute vec3 a_position;
+attribute vec3 a_normal;
+attribute vec2 a_uv;
+attribute vec4 a_color;
+attribute float a_texId;
+attribute float a_outlineScale;
+
+uniform mat4 u_viewProj;
+
+varying vec3 v_worldPos;
+varying vec3 v_normal;
+varying vec2 v_uv;
+varying vec4 v_color;
+varying float v_texId;
+
+void main() {
+  vec4 clipPos = u_viewProj * vec4(a_position, 1.0);
+  gl_Position = vec4(clipPos.xy, clipPos.z * 2.0 - clipPos.w, clipPos.w);
+  v_worldPos = a_position;
+  v_normal = a_normal;
+  v_uv = a_uv;
+  v_color = a_color;
+  v_texId = a_texId;
+}
+`;
+  var FRAGMENT_SHADER_CEL = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+varying vec3 v_worldPos;
+varying vec3 v_normal;
+varying vec2 v_uv;
+varying vec4 v_color;
+varying float v_texId;
+
+uniform sampler2D u_atlas;
+uniform vec4 u_cameraPosAndTime;
+uniform vec4 u_sunDirAndAmbient;
+uniform vec4 u_fogColorAndStart;
+uniform vec4 u_fogEndAndFlags;
+uniform vec4 u_light0PosRad;
+uniform vec4 u_light0ColorInt;
+uniform vec4 u_light1PosRad;
+uniform vec4 u_light1ColorInt;
+
+vec4 sampleAtlas(float texIdFloat, vec2 rawUv) {
+  float tid = clamp(floor(texIdFloat + 0.5), 0.0, 19.0);
+  float col = mod(tid, ${ATLAS_COLS}.0);
+  float row = floor(tid / ${ATLAS_COLS}.0);
+  vec2 wrappedUv = clamp(fract(rawUv * 0.9999), vec2(0.03), vec2(0.97));
+  vec2 atlasUv = vec2(
+    (col + wrappedUv.x) / ${ATLAS_COLS}.0,
+    (row + wrappedUv.y) / ${ATLAS_ROWS}.0
+  );
+  return texture2D(u_atlas, atlasUv);
+}
+
+vec3 computePointLightToon(
+  vec3 worldPos,
+  vec3 N,
+  vec4 lightPosRad,
+  vec4 lightColorInt
+) {
+  float radius = lightPosRad.w;
+  float intensity = lightColorInt.w;
+  if (radius <= 0.01 || intensity <= 0.001) {
+    return vec3(0.0);
+  }
+  vec3 toLight = lightPosRad.xyz - worldPos;
+  float dist = length(toLight);
+  if (dist >= radius) {
+    return vec3(0.0);
+  }
+  vec3 L = toLight / max(0.001, dist);
+  float ndl = max(0.28, dot(N, L));
+  float normDist = 1.0 - (dist / radius);
+  float outerRing = smoothstep(0.20, 0.28, normDist) * 0.48;
+  float innerRing = smoothstep(0.58, 0.66, normDist) * 0.56;
+  float ring = outerRing + innerRing;
+  return lightColorInt.rgb * (ring * intensity * ndl);
+}
+
+void main() {
+  float fadeBlack = u_fogEndAndFlags.w;
+  if (fadeBlack >= 0.999) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
+  vec4 texSample = sampleAtlas(v_texId, v_uv);
+  vec3 baseAlbedo = v_color.rgb * texSample.rgb;
+
+  vec3 N = normalize(v_normal);
+  vec3 sunDir = normalize(u_sunDirAndAmbient.xyz);
+  float ambientBoost = u_sunDirAndAmbient.w;
+  float ndl = dot(N, sunDir);
+
+  float hemiFactor = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+  vec3 shadowTone = mix(vec3(0.50, 0.55, 0.68), vec3(0.62, 0.68, 0.80), hemiFactor);
+  vec3 midTone = vec3(0.84, 0.87, 0.94);
+  vec3 litTone = vec3(1.10, 1.07, 1.01);
+
+  float band1 = smoothstep(-0.16, -0.09, ndl);
+  float band2 = smoothstep(0.32, 0.39, ndl);
+  vec3 toonBand = mix(shadowTone, midTone, band1);
+  toonBand = mix(toonBand, litTone, band2) + vec3(ambientBoost);
+
+  vec3 pl0 = computePointLightToon(v_worldPos, N, u_light0PosRad, u_light0ColorInt);
+  vec3 pl1 = computePointLightToon(v_worldPos, N, u_light1PosRad, u_light1ColorInt);
+
+  vec3 V = normalize(u_cameraPosAndTime.xyz - v_worldPos);
+  vec3 H = normalize(sunDir + V);
+  float ndh = max(0.0, dot(N, H));
+  float spec = smoothstep(0.89, 0.93, ndh) * step(0.15, ndl) * 0.16;
+
+  float rimDot = 1.0 - max(0.0, dot(N, V));
+  float rim = smoothstep(0.68, 0.78, rimDot) * smoothstep(-0.20, 0.15, ndl) * 0.18;
+
+  vec3 litColor = baseAlbedo * (toonBand + pl0 + pl1) + vec3(spec + rim);
+
+  float camDist = length(v_worldPos - u_cameraPosAndTime.xyz);
+  float fogStart = u_fogColorAndStart.w;
+  float fogEnd = u_fogEndAndFlags.x;
+  float fogFactor = clamp((camDist - fogStart) / max(1.0, fogEnd - fogStart), 0.0, 0.78);
+  litColor = mix(litColor, u_fogColorAndStart.rgb, fogFactor);
+  litColor = litColor * (1.0 - fadeBlack);
+
+  gl_FragColor = vec4(clamp(litColor, vec3(0.0), vec3(1.0)), v_color.a);
+}
+`;
+  var FRAGMENT_SHADER_TRANSLUCENT = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+varying vec3 v_worldPos;
+varying vec3 v_normal;
+varying vec2 v_uv;
+varying vec4 v_color;
+varying float v_texId;
+
+uniform sampler2D u_atlas;
+uniform vec4 u_fogEndAndFlags;
+
+vec4 sampleAtlas(float texIdFloat, vec2 rawUv) {
+  float tid = clamp(floor(texIdFloat + 0.5), 0.0, 19.0);
+  float col = mod(tid, ${ATLAS_COLS}.0);
+  float row = floor(tid / ${ATLAS_COLS}.0);
+  vec2 wrappedUv = clamp(fract(rawUv * 0.9999), vec2(0.03), vec2(0.97));
+  vec2 atlasUv = vec2(
+    (col + wrappedUv.x) / ${ATLAS_COLS}.0,
+    (row + wrappedUv.y) / ${ATLAS_ROWS}.0
+  );
+  return texture2D(u_atlas, atlasUv);
+}
+
+void main() {
+  float fadeBlack = u_fogEndAndFlags.w;
+  if (fadeBlack >= 0.999) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+  vec4 texSample = sampleAtlas(v_texId, v_uv);
+  vec3 color = v_color.rgb * texSample.rgb * (1.0 - fadeBlack);
+  gl_FragColor = vec4(color, v_color.a);
+}
+`;
+  var VERTEX_SHADER_OUTLINE = `
+precision highp float;
+
+attribute vec3 a_position;
+attribute vec3 a_normal;
+attribute vec4 a_color;
+attribute float a_outlineScale;
+
+uniform mat4 u_viewProj;
+
+varying vec3 v_worldPos;
+varying vec4 v_color;
+
+void main() {
+  if (a_outlineScale <= 0.001) {
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+    v_worldPos = a_position;
+    v_color = vec4(0.0);
+    return;
+  }
+  float nLen = max(0.0001, length(a_normal));
+  vec3 norm = a_normal / nLen;
+  vec3 extrudedPos = a_position + norm * a_outlineScale;
+  vec4 clip = u_viewProj * vec4(extrudedPos, 1.0);
+  clip.z = min(clip.w * 0.9999, clip.z + 0.0020 * clip.w);
+  gl_Position = vec4(clip.xy, clip.z * 2.0 - clip.w, clip.w);
+  v_worldPos = extrudedPos;
+  v_color = a_color;
+}
+`;
+  var FRAGMENT_SHADER_OUTLINE = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+varying vec3 v_worldPos;
+varying vec4 v_color;
+
+uniform vec4 u_cameraPosAndTime;
+uniform vec4 u_fogColorAndStart;
+uniform vec4 u_fogEndAndFlags;
+
+void main() {
+  float fadeBlack = u_fogEndAndFlags.w;
+  if (fadeBlack >= 0.999) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+  vec3 ink = mix(vec3(0.05, 0.06, 0.11), v_color.rgb * 0.22, 0.35);
+  float camDist = length(v_worldPos - u_cameraPosAndTime.xyz);
+  float fogStart = u_fogColorAndStart.w;
+  float fogEnd = u_fogEndAndFlags.x;
+  float fogFactor = clamp((camDist - fogStart) / max(1.0, fogEnd - fogStart), 0.0, 0.78);
+  vec3 finalInk = mix(ink, u_fogColorAndStart.rgb, fogFactor) * (1.0 - fadeBlack);
+  gl_FragColor = vec4(finalInk, 1.0);
+}
+`;
+  function compileShader(gl, type, source) {
+    const shader = gl.createShader(type);
+    if (!shader) return null;
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+  function createProgram(gl, vsSource, fsSource) {
+    const vs = compileShader(gl, gl.VERTEX_SHADER, vsSource);
+    const fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSource);
+    if (!vs || !fs) return null;
+    const program = gl.createProgram();
+    if (!program) return null;
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      gl.deleteProgram(program);
+      return null;
+    }
+    return program;
+  }
+  var WebGL3DRenderer = class _WebGL3DRenderer {
+    constructor(gl, canvas, celInfo, translucentInfo, outlineInfo, atlasTexture, dynamicOpaqueBuffer, dynamicTranslucentBuffer) {
+      __publicField(this, "gl");
+      __publicField(this, "canvas");
+      __publicField(this, "celInfo");
+      __publicField(this, "translucentInfo");
+      __publicField(this, "outlineInfo");
+      __publicField(this, "atlasTexture");
+      __publicField(this, "staticLevelBuffers", /* @__PURE__ */ new Map());
+      __publicField(this, "dynamicOpaqueBuffer");
+      __publicField(this, "dynamicOpaqueCapacity", 0);
+      __publicField(this, "dynamicTranslucentBuffer");
+      __publicField(this, "dynamicTranslucentCapacity", 0);
+      this.gl = gl;
+      this.canvas = canvas;
+      this.celInfo = celInfo;
+      this.translucentInfo = translucentInfo;
+      this.outlineInfo = outlineInfo;
+      this.atlasTexture = atlasTexture;
+      this.dynamicOpaqueBuffer = dynamicOpaqueBuffer;
+      this.dynamicTranslucentBuffer = dynamicTranslucentBuffer;
+    }
+    static create(canvas) {
+      try {
+        const contextAttrs = {
+          alpha: false,
+          depth: true,
+          stencil: false,
+          antialias: true,
+          premultipliedAlpha: false,
+          preserveDrawingBuffer: false,
+          powerPreference: "high-performance"
+        };
+        const gl = canvas.getContext("webgl2", contextAttrs) || canvas.getContext("webgl", contextAttrs) || canvas.getContext("experimental-webgl", contextAttrs);
+        if (!gl) {
+          return null;
+        }
+        const celProgram = createProgram(gl, VERTEX_SHADER_CEL, FRAGMENT_SHADER_CEL);
+        const translucentProgram = createProgram(gl, VERTEX_SHADER_CEL, FRAGMENT_SHADER_TRANSLUCENT);
+        const outlineProgram = createProgram(gl, VERTEX_SHADER_OUTLINE, FRAGMENT_SHADER_OUTLINE);
+        if (!celProgram || !translucentProgram || !outlineProgram) {
+          return null;
+        }
+        const celInfo = {
+          program: celProgram,
+          a_position: gl.getAttribLocation(celProgram, "a_position"),
+          a_normal: gl.getAttribLocation(celProgram, "a_normal"),
+          a_uv: gl.getAttribLocation(celProgram, "a_uv"),
+          a_color: gl.getAttribLocation(celProgram, "a_color"),
+          a_texId: gl.getAttribLocation(celProgram, "a_texId"),
+          a_outlineScale: gl.getAttribLocation(celProgram, "a_outlineScale"),
+          u_viewProj: gl.getUniformLocation(celProgram, "u_viewProj"),
+          u_atlas: gl.getUniformLocation(celProgram, "u_atlas"),
+          u_cameraPosAndTime: gl.getUniformLocation(celProgram, "u_cameraPosAndTime"),
+          u_sunDirAndAmbient: gl.getUniformLocation(celProgram, "u_sunDirAndAmbient"),
+          u_fogColorAndStart: gl.getUniformLocation(celProgram, "u_fogColorAndStart"),
+          u_fogEndAndFlags: gl.getUniformLocation(celProgram, "u_fogEndAndFlags"),
+          u_light0PosRad: gl.getUniformLocation(celProgram, "u_light0PosRad"),
+          u_light0ColorInt: gl.getUniformLocation(celProgram, "u_light0ColorInt"),
+          u_light1PosRad: gl.getUniformLocation(celProgram, "u_light1PosRad"),
+          u_light1ColorInt: gl.getUniformLocation(celProgram, "u_light1ColorInt")
+        };
+        const translucentInfo = {
+          program: translucentProgram,
+          a_position: gl.getAttribLocation(translucentProgram, "a_position"),
+          a_normal: gl.getAttribLocation(translucentProgram, "a_normal"),
+          a_uv: gl.getAttribLocation(translucentProgram, "a_uv"),
+          a_color: gl.getAttribLocation(translucentProgram, "a_color"),
+          a_texId: gl.getAttribLocation(translucentProgram, "a_texId"),
+          a_outlineScale: gl.getAttribLocation(translucentProgram, "a_outlineScale"),
+          u_viewProj: gl.getUniformLocation(translucentProgram, "u_viewProj"),
+          u_atlas: gl.getUniformLocation(translucentProgram, "u_atlas"),
+          u_fogEndAndFlags: gl.getUniformLocation(translucentProgram, "u_fogEndAndFlags")
+        };
+        const outlineInfo = {
+          program: outlineProgram,
+          a_position: gl.getAttribLocation(outlineProgram, "a_position"),
+          a_normal: gl.getAttribLocation(outlineProgram, "a_normal"),
+          a_color: gl.getAttribLocation(outlineProgram, "a_color"),
+          a_outlineScale: gl.getAttribLocation(outlineProgram, "a_outlineScale"),
+          u_viewProj: gl.getUniformLocation(outlineProgram, "u_viewProj"),
+          u_cameraPosAndTime: gl.getUniformLocation(outlineProgram, "u_cameraPosAndTime"),
+          u_fogColorAndStart: gl.getUniformLocation(outlineProgram, "u_fogColorAndStart"),
+          u_fogEndAndFlags: gl.getUniformLocation(outlineProgram, "u_fogEndAndFlags")
+        };
+        const atlas = getProceduralTextureAtlas();
+        const atlasTexture = gl.createTexture();
+        const dynamicOpaqueBuffer = gl.createBuffer();
+        const dynamicTranslucentBuffer = gl.createBuffer();
+        if (!atlasTexture || !dynamicOpaqueBuffer || !dynamicTranslucentBuffer) {
+          return null;
+        }
+        gl.bindTexture(gl.TEXTURE_2D, atlasTexture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA,
+          atlas.width,
+          atlas.height,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          atlas.data
+        );
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        const dynamicOpaqueCapacity = 2 * 1024 * 1024;
+        gl.bindBuffer(gl.ARRAY_BUFFER, dynamicOpaqueBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, dynamicOpaqueCapacity, gl.DYNAMIC_DRAW);
+        const dynamicTranslucentCapacity = 512 * 1024;
+        gl.bindBuffer(gl.ARRAY_BUFFER, dynamicTranslucentBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, dynamicTranslucentCapacity, gl.DYNAMIC_DRAW);
+        const renderer = new _WebGL3DRenderer(
+          gl,
+          canvas,
+          celInfo,
+          translucentInfo,
+          outlineInfo,
+          atlasTexture,
+          dynamicOpaqueBuffer,
+          dynamicTranslucentBuffer
+        );
+        renderer.dynamicOpaqueCapacity = dynamicOpaqueCapacity;
+        renderer.dynamicTranslucentCapacity = dynamicTranslucentCapacity;
+        debugLog("WebGL 3D Wind Waker HD renderer initialized");
+        return renderer;
+      } catch (err) {
+        debugLog(`WebGL init failed: ${String(err)}`);
+        return null;
+      }
+    }
+    getOrCreateStaticLevelBuffers(state) {
+      const existing = this.staticLevelBuffers.get(state.currentLevelId);
+      if (existing) return existing;
+      const gl = this.gl;
+      const mesh = getStaticLevelMesh(state.currentLevelId, state.map);
+      const outlineMesh = extractOutlineMesh(mesh);
+      const opaqueBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, opaqueBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
+      const outlineBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, outlineBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, outlineMesh.vertices, gl.STATIC_DRAW);
+      const entry = {
+        opaqueBuffer,
+        opaqueVertexCount: mesh.vertexCount,
+        outlineBuffer,
+        outlineVertexCount: outlineMesh.vertexCount
+      };
+      this.staticLevelBuffers.set(state.currentLevelId, entry);
+      return entry;
+    }
+    uploadDynamicBuffer(mesh, target) {
+      const gl = this.gl;
+      const byteLength = mesh.vertices.byteLength;
+      if (target === "opaque") {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.dynamicOpaqueBuffer);
+        if (byteLength > this.dynamicOpaqueCapacity) {
+          this.dynamicOpaqueCapacity = Math.max(byteLength * 2, 65536);
+          gl.bufferData(gl.ARRAY_BUFFER, this.dynamicOpaqueCapacity, gl.DYNAMIC_DRAW);
+        }
+        if (byteLength > 0) {
+          gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh.vertices);
+        }
+        return { buffer: this.dynamicOpaqueBuffer, vertexCount: mesh.vertexCount };
+      } else {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.dynamicTranslucentBuffer);
+        if (byteLength > this.dynamicTranslucentCapacity) {
+          this.dynamicTranslucentCapacity = Math.max(byteLength * 2, 32768);
+          gl.bufferData(gl.ARRAY_BUFFER, this.dynamicTranslucentCapacity, gl.DYNAMIC_DRAW);
+        }
+        if (byteLength > 0) {
+          gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh.vertices);
+        }
+        return { buffer: this.dynamicTranslucentBuffer, vertexCount: mesh.vertexCount };
+      }
+    }
+    bindCelAttributes(buffer, info) {
+      const gl = this.gl;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      if (info.a_position >= 0) {
+        gl.enableVertexAttribArray(info.a_position);
+        gl.vertexAttribPointer(info.a_position, 3, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 0);
+      }
+      if (info.a_normal >= 0) {
+        gl.enableVertexAttribArray(info.a_normal);
+        gl.vertexAttribPointer(info.a_normal, 3, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 12);
+      }
+      if (info.a_uv >= 0) {
+        gl.enableVertexAttribArray(info.a_uv);
+        gl.vertexAttribPointer(info.a_uv, 2, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 24);
+      }
+      if (info.a_color >= 0) {
+        gl.enableVertexAttribArray(info.a_color);
+        gl.vertexAttribPointer(info.a_color, 4, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 32);
+      }
+      if (info.a_texId >= 0) {
+        gl.enableVertexAttribArray(info.a_texId);
+        gl.vertexAttribPointer(info.a_texId, 1, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 48);
+      }
+      if (info.a_outlineScale >= 0) {
+        gl.enableVertexAttribArray(info.a_outlineScale);
+        gl.vertexAttribPointer(info.a_outlineScale, 1, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 52);
+      }
+    }
+    bindOutlineAttributes(buffer) {
+      const gl = this.gl;
+      const info = this.outlineInfo;
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      if (info.a_position >= 0) {
+        gl.enableVertexAttribArray(info.a_position);
+        gl.vertexAttribPointer(info.a_position, 3, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 0);
+      }
+      if (info.a_normal >= 0) {
+        gl.enableVertexAttribArray(info.a_normal);
+        gl.vertexAttribPointer(info.a_normal, 3, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 12);
+      }
+      if (info.a_color >= 0) {
+        gl.enableVertexAttribArray(info.a_color);
+        gl.vertexAttribPointer(info.a_color, 4, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 32);
+      }
+      if (info.a_outlineScale >= 0) {
+        gl.enableVertexAttribArray(info.a_outlineScale);
+        gl.vertexAttribPointer(info.a_outlineScale, 1, gl.FLOAT, false, VERTEX_STRIDE_BYTES, 52);
+      }
+    }
+    render(state, camera) {
+      const gl = this.gl;
+      const w = Math.max(1, this.canvas.width);
+      const h = Math.max(1, this.canvas.height);
+      gl.viewport(0, 0, w, h);
+      const aspect = w / h;
+      const proj = mat4Perspective(camera.fovY, aspect, camera.near, camera.far);
+      const view = mat4LookAt(camera.eye, camera.target, camera.up);
+      const viewProj = mat4Multiply(proj, view);
+      const staticBuffers = this.getOrCreateStaticLevelBuffers(state);
+      const dynamicScene = buildDynamicSceneMeshes(state, camera.distance);
+      const dynOpaque = this.uploadDynamicBuffer(dynamicScene.opaque, "opaque");
+      const dynTrans = this.uploadDynamicBuffer(dynamicScene.translucent, "translucent");
+      const isOutside = state.currentLevelId === "level-outside";
+      const clearR = isOutside ? 0.09 : 0.08;
+      const clearG = isOutside ? 0.15 : 0.07;
+      const clearB = isOutside ? 0.28 : 0.11;
+      const fogStart = isOutside ? 170 : 190;
+      const fogEnd = isOutside ? 420 : 380;
+      const fadeBlack = state.worldFadedToBlack ? 1 : 0;
+      const l0 = dynamicScene.pointLights[0];
+      const l1 = dynamicScene.pointLights[1];
+      if (state.worldFadedToBlack) {
+        gl.clearColor(0, 0, 0, 1);
+      } else {
+        gl.clearColor(clearR, clearG, clearB, 1);
+      }
+      gl.clearDepth(1);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.depthMask(true);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.CULL_FACE);
+      gl.useProgram(this.celInfo.program);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
+      gl.uniform1i(this.celInfo.u_atlas, 0);
+      gl.uniformMatrix4fv(this.celInfo.u_viewProj, false, viewProj);
+      gl.uniform4f(
+        this.celInfo.u_cameraPosAndTime,
+        camera.eye.x,
+        camera.eye.y,
+        camera.eye.z,
+        state.elapsedTime
+      );
+      gl.uniform4f(
+        this.celInfo.u_sunDirAndAmbient,
+        0.42,
+        0.78,
+        0.46,
+        isOutside ? 0.04 : 0.12
+      );
+      gl.uniform4f(this.celInfo.u_fogColorAndStart, clearR, clearG, clearB, fogStart);
+      gl.uniform4f(
+        this.celInfo.u_fogEndAndFlags,
+        fogEnd,
+        dynamicScene.pointLights.length,
+        isOutside ? 0 : 1,
+        fadeBlack
+      );
+      if (l0) {
+        gl.uniform4f(this.celInfo.u_light0PosRad, l0.x, l0.y, l0.z, l0.radius);
+        gl.uniform4f(this.celInfo.u_light0ColorInt, l0.r, l0.g, l0.b, l0.intensity);
+      } else {
+        gl.uniform4f(this.celInfo.u_light0PosRad, 0, 0, 0, 0);
+        gl.uniform4f(this.celInfo.u_light0ColorInt, 0, 0, 0, 0);
+      }
+      if (l1) {
+        gl.uniform4f(this.celInfo.u_light1PosRad, l1.x, l1.y, l1.z, l1.radius);
+        gl.uniform4f(this.celInfo.u_light1ColorInt, l1.r, l1.g, l1.b, l1.intensity);
+      } else {
+        gl.uniform4f(this.celInfo.u_light1PosRad, 0, 0, 0, 0);
+        gl.uniform4f(this.celInfo.u_light1ColorInt, 0, 0, 0, 0);
+      }
+      if (staticBuffers.opaqueVertexCount > 0) {
+        this.bindCelAttributes(staticBuffers.opaqueBuffer, this.celInfo);
+        gl.drawArrays(gl.TRIANGLES, 0, staticBuffers.opaqueVertexCount);
+      }
+      if (dynOpaque.vertexCount > 0) {
+        this.bindCelAttributes(dynOpaque.buffer, this.celInfo);
+        gl.drawArrays(gl.TRIANGLES, 0, dynOpaque.vertexCount);
+      }
+      gl.enable(gl.CULL_FACE);
+      gl.frontFace(gl.CCW);
+      gl.cullFace(gl.FRONT);
+      gl.useProgram(this.outlineInfo.program);
+      gl.uniformMatrix4fv(this.outlineInfo.u_viewProj, false, viewProj);
+      gl.uniform4f(
+        this.outlineInfo.u_cameraPosAndTime,
+        camera.eye.x,
+        camera.eye.y,
+        camera.eye.z,
+        state.elapsedTime
+      );
+      gl.uniform4f(this.outlineInfo.u_fogColorAndStart, clearR, clearG, clearB, fogStart);
+      gl.uniform4f(
+        this.outlineInfo.u_fogEndAndFlags,
+        fogEnd,
+        dynamicScene.pointLights.length,
+        isOutside ? 0 : 1,
+        fadeBlack
+      );
+      if (staticBuffers.outlineVertexCount > 0) {
+        this.bindOutlineAttributes(staticBuffers.outlineBuffer);
+        gl.drawArrays(gl.TRIANGLES, 0, staticBuffers.outlineVertexCount);
+      }
+      if (dynOpaque.vertexCount > 0) {
+        this.bindOutlineAttributes(dynOpaque.buffer);
+        gl.drawArrays(gl.TRIANGLES, 0, dynOpaque.vertexCount);
+      }
+      gl.disable(gl.CULL_FACE);
+      if (dynTrans.vertexCount > 0) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        gl.useProgram(this.translucentInfo.program);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
+        gl.uniform1i(this.translucentInfo.u_atlas, 0);
+        gl.uniformMatrix4fv(this.translucentInfo.u_viewProj, false, viewProj);
+        gl.uniform4f(
+          this.translucentInfo.u_fogEndAndFlags,
+          fogEnd,
+          dynamicScene.pointLights.length,
+          isOutside ? 0 : 1,
+          fadeBlack
+        );
+        this.bindCelAttributes(dynTrans.buffer, this.translucentInfo);
+        gl.drawArrays(gl.TRIANGLES, 0, dynTrans.vertexCount);
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
+      }
+      return viewProj;
+    }
+  };
+
+  // src/rendering/webgpuRenderer.ts
+  var VERTEX_STRIDE_BYTES2 = FLOATS_PER_VERTEX * 4;
   var UNIFORM_BUFFER_SIZE = 256;
   var MSAA_SAMPLE_COUNT = 4;
   var WGSL_SHADER_SOURCE = (
@@ -6529,7 +7217,7 @@ fn vs_outline(in: VertexInput) -> VertexOutput {
   var out: VertexOutput;
   let outlineScale = in.texAndOutline.y;
   if (outlineScale <= 0.001) {
-    out.clipPos = vec4<f32>(0.0, 0.0, 2.0, 1.0);
+    out.clipPos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     out.worldPos = in.pos;
     out.worldNormal = in.normal;
     out.uv = in.uv;
@@ -6745,7 +7433,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           code: WGSL_SHADER_SOURCE
         });
         const vertexBufferLayout = {
-          arrayStride: VERTEX_STRIDE_BYTES,
+          arrayStride: VERTEX_STRIDE_BYTES2,
           stepMode: "vertex",
           attributes: [
             { shaderLocation: 0, offset: 0, format: "float32x3" },
@@ -6970,7 +7658,27 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           mesh.vertices.byteLength
         );
       }
-      const entry = { buffer, vertexCount: mesh.vertexCount };
+      const outlineMesh = extractOutlineMesh(mesh);
+      const outlineByteLength = Math.max(64, outlineMesh.vertices.byteLength);
+      const outlineBuffer = this.device.createBuffer({
+        size: outlineByteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      });
+      if (outlineMesh.vertices.byteLength > 0) {
+        this.device.queue.writeBuffer(
+          outlineBuffer,
+          0,
+          outlineMesh.vertices.buffer,
+          outlineMesh.vertices.byteOffset,
+          outlineMesh.vertices.byteLength
+        );
+      }
+      const entry = {
+        buffer,
+        vertexCount: mesh.vertexCount,
+        outlineBuffer,
+        outlineVertexCount: outlineMesh.vertexCount
+      };
       this.staticBuffers.set(state.currentLevelId, entry);
       return entry;
     }
@@ -7082,14 +7790,14 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
             resolveTarget: colorView,
             clearValue: state.worldFadedToBlack ? { r: 0, g: 0, b: 0, a: 1 } : { r: clearR, g: clearG, b: clearB, a: 1 },
             loadOp: "clear",
-            storeOp: "discard"
+            storeOp: "store"
           }
         ],
         depthStencilAttachment: {
           view: depthView,
           depthClearValue: 1,
           depthLoadOp: "clear",
-          depthStoreOp: "discard"
+          depthStoreOp: "store"
         }
       });
       pass.setBindGroup(0, this.bindGroup);
@@ -7103,9 +7811,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         pass.draw(dynamicScene.opaque.vertexCount);
       }
       pass.setPipeline(this.outlinePipeline);
-      if (staticEntry.vertexCount > 0) {
-        pass.setVertexBuffer(0, staticEntry.buffer);
-        pass.draw(staticEntry.vertexCount);
+      if (staticEntry.outlineVertexCount > 0) {
+        pass.setVertexBuffer(0, staticEntry.outlineBuffer);
+        pass.draw(staticEntry.outlineVertexCount);
       }
       if (dynamicScene.opaque.vertexCount > 0) {
         pass.setVertexBuffer(0, this.dynamicOpaqueBuffer);
@@ -8622,14 +9330,49 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     if (!ctx) {
       throw new Error("Could not get 2D rendering context");
     }
-    const webgpuRenderer = webgpuCanvas ? await WebGPURenderer.create(webgpuCanvas) : null;
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+    const isIOSDevice = /iPhone|iPad|iPod/i.test(ua) || typeof navigator !== "undefined" && navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+    const isMobileDevice = isIOSDevice || typeof window !== "undefined" && ("ontouchstart" in window || navigator.maxTouchPoints > 0 || window.matchMedia("(pointer: coarse)").matches);
+    const replace3DCanvas = () => {
+      if (!webgpuCanvas || !webgpuCanvas.parentElement) return webgpuCanvas;
+      const fresh = document.createElement("canvas");
+      fresh.id = "webgpu-canvas";
+      fresh.width = webgpuCanvas.width;
+      fresh.height = webgpuCanvas.height;
+      fresh.style.width = webgpuCanvas.style.width;
+      fresh.style.height = webgpuCanvas.style.height;
+      webgpuCanvas.parentElement.replaceChild(fresh, webgpuCanvas);
+      webgpuCanvas = fresh;
+      return webgpuCanvas;
+    };
+    const rendererParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("renderer")?.toLowerCase() : null;
+    const preferWebGL = rendererParam === "webgl" || rendererParam !== "webgpu" && isIOSDevice;
+    let webgpuRenderer = null;
+    if (webgpuCanvas) {
+      if (preferWebGL) {
+        webgpuRenderer = WebGL3DRenderer.create(webgpuCanvas);
+        if (!webgpuRenderer) {
+          const fresh = replace3DCanvas();
+          if (fresh) {
+            webgpuRenderer = await WebGPURenderer.create(fresh);
+          }
+        }
+      } else {
+        webgpuRenderer = await WebGPURenderer.create(webgpuCanvas);
+        if (!webgpuRenderer) {
+          const fresh = replace3DCanvas();
+          if (fresh) {
+            webgpuRenderer = WebGL3DRenderer.create(fresh);
+          }
+        }
+      }
+    }
     const camera3d = createCamera3D();
     const joystickContainer = document.getElementById("virtual-joystick-container");
     const joystickStick = document.getElementById("virtual-joystick-stick");
     const mobileActionBtn = document.getElementById("mobile-action-btn");
     const assets = await loadAllAssets();
     const input = createEmptyInput();
-    const isMobileDevice = typeof window !== "undefined" && ("ontouchstart" in window || navigator.maxTouchPoints > 0 || window.matchMedia("(pointer: coarse)").matches);
     let joystick = null;
     if (joystickContainer && joystickStick) {
       joystick = createVirtualJoystick({
@@ -8675,9 +9418,13 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       if (webgpuCanvas) {
         webgpuCanvas.style.width = `${layout.canvasWidth}px`;
         webgpuCanvas.style.height = `${layout.canvasHeight}px`;
-        const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1.5));
-        const targetW = Math.max(1024, Math.min(2048, Math.round(layout.canvasWidth * dpr)));
-        const targetH = Math.max(896, Math.min(1792, Math.round(layout.canvasHeight * dpr)));
+        const dpr = isMobileDevice ? Math.min(1.5, Math.max(1, window.devicePixelRatio || 1)) : Math.min(2, Math.max(1, window.devicePixelRatio || 1.5));
+        const minW = isMobileDevice ? 512 : 1024;
+        const maxW = isMobileDevice ? 1024 : 2048;
+        const minH = isMobileDevice ? 448 : 896;
+        const maxH = isMobileDevice ? 896 : 1792;
+        const targetW = Math.max(minW, Math.min(maxW, Math.round(layout.canvasWidth * dpr)));
+        const targetH = Math.max(minH, Math.min(maxH, Math.round(layout.canvasHeight * dpr)));
         if (webgpuCanvas.width !== targetW || webgpuCanvas.height !== targetH) {
           webgpuCanvas.width = targetW;
           webgpuCanvas.height = targetH;

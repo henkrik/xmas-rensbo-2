@@ -35,10 +35,10 @@ import {
   FLOATS_PER_VERTEX,
   getStaticLevelMesh,
 } from './models3d';
-import { WebGPURenderer } from './webgpuRenderer';
+import { Hardware3DRenderer } from './webglRenderer';
 
 export interface Render3DOptions {
-  webgpuRenderer?: WebGPURenderer | null;
+  webgpuRenderer?: Hardware3DRenderer | null;
   camera3d?: Camera3D;
 }
 
@@ -1105,11 +1105,10 @@ export function renderSoftware3DScene(
     y2: number;
     depth: number;
     fill: string;
-    outline: boolean;
   }
 
   const tris: ProjectedTri[] = [];
-  const collectMesh = (verts: Float32Array, count: number) => {
+  const collectMesh = (verts: Float32Array, count: number, cullBackfaces: boolean) => {
     for (let i = 0; i < count; i += 3) {
       const b0 = i * FLOATS_PER_VERTEX;
       const b1 = (i + 1) * FLOATS_PER_VERTEX;
@@ -1137,6 +1136,11 @@ export function renderSoftware3DScene(
       if (!p0.visible && !p1.visible && !p2.visible) continue;
       if (p0.w <= 1 || p1.w <= 1 || p2.w <= 1) continue;
 
+      if (cullBackfaces) {
+        const cross2d = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+        if (cross2d > 0) continue;
+      }
+
       const nx = verts[b0 + 3];
       const ny = verts[b0 + 4];
       const nz = verts[b0 + 5];
@@ -1147,7 +1151,6 @@ export function renderSoftware3DScene(
       const g = Math.min(255, Math.round(verts[b0 + 9] * 255 * toon));
       const b = Math.min(255, Math.round(verts[b0 + 10] * 255 * toon));
       const a = verts[b0 + 11];
-      const outlineScale = verts[b0 + 13];
 
       tris.push({
         x0: p0.x,
@@ -1158,22 +1161,17 @@ export function renderSoftware3DScene(
         y2: p2.y,
         depth: (p0.w + p1.w + p2.w) / 3,
         fill: a < 0.99 ? `rgba(${r},${g},${b},${a.toFixed(2)})` : `rgb(${r},${g},${b})`,
-        outline: outlineScale > 0.5,
       });
     }
   };
 
-  collectMesh(staticMesh.vertices, staticMesh.vertexCount);
-  collectMesh(dynamicMeshes.opaque.vertices, dynamicMeshes.opaque.vertexCount);
-  collectMesh(dynamicMeshes.translucent.vertices, dynamicMeshes.translucent.vertexCount);
+  collectMesh(staticMesh.vertices, staticMesh.vertexCount, true);
+  collectMesh(dynamicMeshes.opaque.vertices, dynamicMeshes.opaque.vertexCount, true);
+  collectMesh(dynamicMeshes.translucent.vertices, dynamicMeshes.translucent.vertexCount, false);
 
   tris.sort((a, b) => b.depth - a.depth);
 
   ctx.save();
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 1.1;
-  ctx.strokeStyle = '#101422';
-
   for (const t of tris) {
     ctx.beginPath();
     ctx.moveTo(t.x0, t.y0);
@@ -1182,9 +1180,6 @@ export function renderSoftware3DScene(
     ctx.closePath();
     ctx.fillStyle = t.fill;
     ctx.fill();
-    if (t.outline) {
-      ctx.stroke();
-    }
   }
   ctx.restore();
 }

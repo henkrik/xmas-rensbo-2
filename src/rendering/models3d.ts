@@ -104,17 +104,30 @@ export function lightenColor(c: Color4, boost: number): Color4 {
   ];
 }
 
-export class MeshBuilder {
-  private data: number[] = [];
+class MeshBuilder {
+  private buf: Float32Array = new Float32Array(4096 * FLOATS_PER_VERTEX);
+  private floatCount = 0;
+  private triVertexStep = 0;
 
   get vertexCount(): number {
-    return this.data.length / FLOATS_PER_VERTEX;
+    return this.floatCount / FLOATS_PER_VERTEX;
+  }
+
+  private ensureCapacity(extraFloats: number): void {
+    const needed = this.floatCount + extraFloats;
+    if (needed <= this.buf.length) return;
+    let nextLen = this.buf.length * 2;
+    while (nextLen < needed) nextLen *= 2;
+    const next = new Float32Array(nextLen);
+    next.set(this.buf.subarray(0, this.floatCount));
+    this.buf = next;
   }
 
   scaleAlphaRange(startVertex: number, alphaScale: number): void {
     const startFloat = startVertex * FLOATS_PER_VERTEX;
-    for (let i = startFloat + 11; i < this.data.length; i += FLOATS_PER_VERTEX) {
-      this.data[i] *= alphaScale;
+    const out = this.buf;
+    for (let i = startFloat + 11; i < this.floatCount; i += FLOATS_PER_VERTEX) {
+      out[i] *= alphaScale;
     }
   }
 
@@ -131,22 +144,51 @@ export class MeshBuilder {
     texId: number,
     outlineScale: number
   ): void {
-    this.data.push(
-      x,
-      y,
-      z,
-      nx,
-      ny,
-      nz,
-      u,
-      v,
-      color[0],
-      color[1],
-      color[2],
-      color[3],
-      texId,
-      outlineScale
-    );
+    this.ensureCapacity(FLOATS_PER_VERTEX);
+    const out = this.buf;
+    let idx = this.floatCount;
+    out[idx++] = x;
+    out[idx++] = y;
+    out[idx++] = z;
+    out[idx++] = nx;
+    out[idx++] = ny;
+    out[idx++] = nz;
+    out[idx++] = u;
+    out[idx++] = v;
+    out[idx++] = color[0];
+    out[idx++] = color[1];
+    out[idx++] = color[2];
+    out[idx++] = color[3];
+    out[idx++] = texId;
+    out[idx++] = outlineScale;
+    this.floatCount = idx;
+
+    this.triVertexStep++;
+    if (this.triVertexStep === 3) {
+      this.triVertexStep = 0;
+      const v0 = idx - 3 * FLOATS_PER_VERTEX;
+      const v1 = v0 + FLOATS_PER_VERTEX;
+      const v2 = v1 + FLOATS_PER_VERTEX;
+      const ux = out[v1] - out[v0];
+      const uy = out[v1 + 1] - out[v0 + 1];
+      const uz = out[v1 + 2] - out[v0 + 2];
+      const vx = out[v2] - out[v0];
+      const vy = out[v2 + 1] - out[v0 + 1];
+      const vz = out[v2 + 2] - out[v0 + 2];
+      const cx = uy * vz - uz * vy;
+      const cy = uz * vx - ux * vz;
+      const cz = ux * vy - uy * vx;
+      const anx = out[v0 + 3] + out[v1 + 3] + out[v2 + 3];
+      const any = out[v0 + 4] + out[v1 + 4] + out[v2 + 4];
+      const anz = out[v0 + 5] + out[v1 + 5] + out[v2 + 5];
+      if (cx * anx + cy * any + cz * anz < 0) {
+        for (let k = 0; k < FLOATS_PER_VERTEX; k++) {
+          const tmp = out[v1 + k];
+          out[v1 + k] = out[v2 + k];
+          out[v2 + k] = tmp;
+        }
+      }
+    }
   }
 
   addTriangle(
@@ -365,7 +407,7 @@ export class MeshBuilder {
     texId: number = TexId.SOLID,
     outlineScale = 0.65
   ): void {
-    const segs = Math.max(10, segments);
+    const segs = Math.max(5, segments);
     const topY = baseY + height;
     const slopeY = (radiusBottom - radiusTop) / (height || 1);
 
@@ -391,22 +433,22 @@ export class MeshBuilder {
       const u1 = (i + 1) / segs;
 
       this.pushVertex(b0[0], b0[1], b0[2], n0[0], n0[1], n0[2], u0, 1, color, texId, outlineScale);
-      this.pushVertex(b1[0], b1[1], b1[2], n1[0], n1[1], n1[2], u1, 1, color, texId, outlineScale);
       this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
+      this.pushVertex(b1[0], b1[1], b1[2], n1[0], n1[1], n1[2], u1, 1, color, texId, outlineScale);
 
       this.pushVertex(b0[0], b0[1], b0[2], n0[0], n0[1], n0[2], u0, 1, color, texId, outlineScale);
-      this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
       this.pushVertex(t0[0], t0[1], t0[2], n0[0], n0[1], n0[2], u0, 0, color, texId, outlineScale);
+      this.pushVertex(t1[0], t1[1], t1[2], n1[0], n1[1], n1[2], u1, 0, color, texId, outlineScale);
 
-      if (radiusTop > 0.01) {
+      if (radiusTop > 0.05) {
         this.pushVertex(cx, topY, cz, 0, 1, 0, 0.5, 0.5, color, texId, outlineScale);
-        this.pushVertex(t0[0], t0[1], t0[2], n0[0], 0.8, n0[2], 0.5 + c0 * 0.5, 0.5 + s0 * 0.5, color, texId, outlineScale);
         this.pushVertex(t1[0], t1[1], t1[2], n1[0], 0.8, n1[2], 0.5 + c1 * 0.5, 0.5 + s1 * 0.5, color, texId, outlineScale);
+        this.pushVertex(t0[0], t0[1], t0[2], n0[0], 0.8, n0[2], 0.5 + c0 * 0.5, 0.5 + s0 * 0.5, color, texId, outlineScale);
       }
-      if (radiusBottom > 0.01) {
+      if (radiusBottom > 0.05) {
         this.pushVertex(cx, baseY, cz, 0, -1, 0, 0.5, 0.5, color, texId, outlineScale);
-        this.pushVertex(b1[0], b1[1], b1[2], n1[0], -0.8, n1[2], 0.5 + c1 * 0.5, 0.5 + s1 * 0.5, color, texId, outlineScale);
         this.pushVertex(b0[0], b0[1], b0[2], n0[0], -0.8, n0[2], 0.5 + c0 * 0.5, 0.5 + s0 * 0.5, color, texId, outlineScale);
+        this.pushVertex(b1[0], b1[1], b1[2], n1[0], -0.8, n1[2], 0.5 + c1 * 0.5, 0.5 + s1 * 0.5, color, texId, outlineScale);
       }
     }
   }
@@ -422,7 +464,7 @@ export class MeshBuilder {
     texId: number = TexId.SOLID,
     outlineScale = 0.65
   ): void {
-    this.addCylinder(cx, baseY, cz, radius, 0.02, height, Math.max(12, segments), color, texId, outlineScale);
+    this.addCylinder(cx, baseY, cz, radius, 0.02, height, Math.max(5, segments), color, texId, outlineScale);
   }
 
   /**
@@ -441,8 +483,8 @@ export class MeshBuilder {
     texId: number = TexId.SOLID,
     outlineScale = 0.65
   ): void {
-    const lats = Math.max(8, latBands);
-    const lons = Math.max(12, lonBands);
+    const lats = Math.max(4, latBands);
+    const lons = Math.max(6, lonBands);
     for (let lat = 0; lat < lats; lat++) {
       const theta0 = (lat / lats) * Math.PI;
       const theta1 = ((lat + 1) / lats) * Math.PI;
@@ -545,12 +587,12 @@ export class MeshBuilder {
         const n01 = nm(cu0, su0, cv1, sv1);
 
         this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], 0, 0, color, texId, outlineScale);
-        this.pushVertex(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], 1, 0, color, texId, outlineScale);
         this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
+        this.pushVertex(p10[0], p10[1], p10[2], n10[0], n10[1], n10[2], 1, 0, color, texId, outlineScale);
 
         this.pushVertex(p00[0], p00[1], p00[2], n00[0], n00[1], n00[2], 0, 0, color, texId, outlineScale);
-        this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
         this.pushVertex(p01[0], p01[1], p01[2], n01[0], n01[1], n01[2], 0, 1, color, texId, outlineScale);
+        this.pushVertex(p11[0], p11[1], p11[2], n11[0], n11[1], n11[2], 1, 1, color, texId, outlineScale);
       }
     }
   }
@@ -646,12 +688,39 @@ export class MeshBuilder {
   }
 
   build(): MeshData {
-    const arr = new Float32Array(this.data);
+    const arr = this.buf.slice(0, this.floatCount);
     return {
       vertices: arr,
-      vertexCount: arr.length / FLOATS_PER_VERTEX,
+      vertexCount: this.floatCount / FLOATS_PER_VERTEX,
     };
   }
+}
+
+/**
+ * Extracts only triangles that have `outlineScale > 0.001` so Pass 2 (inverted-hull
+ * contour pass) skips all non-outlined floor, ground, and ceiling geometry.
+ */
+export function extractOutlineMesh(mesh: MeshData): MeshData {
+  const src = mesh.vertices;
+  const triStride = FLOATS_PER_VERTEX * 3;
+  let outlineFloats = 0;
+  for (let i = 0; i < src.length; i += triStride) {
+    if (src[i + 13] > 0.001 || src[i + FLOATS_PER_VERTEX + 13] > 0.001 || src[i + FLOATS_PER_VERTEX * 2 + 13] > 0.001) {
+      outlineFloats += triStride;
+    }
+  }
+  const out = new Float32Array(outlineFloats);
+  let dstIdx = 0;
+  for (let i = 0; i < src.length; i += triStride) {
+    if (src[i + 13] > 0.001 || src[i + FLOATS_PER_VERTEX + 13] > 0.001 || src[i + FLOATS_PER_VERTEX * 2 + 13] > 0.001) {
+      out.set(src.subarray(i, i + triStride), dstIdx);
+      dstIdx += triStride;
+    }
+  }
+  return {
+    vertices: out,
+    vertexCount: outlineFloats / FLOATS_PER_VERTEX,
+  };
 }
 
 // ============================================================================
@@ -667,53 +736,53 @@ function addPineTree3D(
   scale = 1.0
 ): void {
   // Snow mound at base of trunk
-  mb.addSphere(cx, baseY + 0.4, cz, 4.2 * scale, 1.4 * scale, 4.2 * scale, 6, 10, rgb(242, 248, 255), TexId.SNOW, 0.35);
+  mb.addSphere(cx, baseY + 0.4, cz, 4.2 * scale, 1.4 * scale, 4.2 * scale, 5, 8, rgb(242, 248, 255), TexId.SNOW, 0.35);
 
   if (variant === 0) {
     // Variant 0: Lush 4-tier Norway spruce with snow pillows on boughs
-    mb.addCylinder(cx, baseY, cz, 2.5 * scale, 1.5 * scale, 9.5 * scale, 12, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.6);
-    mb.addCone(cx, baseY + 4.5 * scale, cz, 9.4 * scale, 9.5 * scale, 14, rgb(26, 88, 48), TexId.PINE_FOLIAGE, 0.7);
-    mb.addCone(cx, baseY + 9.8 * scale, cz, 7.8 * scale, 9.0 * scale, 14, rgb(34, 108, 58), TexId.PINE_FOLIAGE, 0.7);
-    mb.addCone(cx, baseY + 15.0 * scale, cz, 6.0 * scale, 8.2 * scale, 14, rgb(44, 126, 68), TexId.PINE_FOLIAGE, 0.7);
-    mb.addCone(cx, baseY + 19.8 * scale, cz, 4.2 * scale, 7.2 * scale, 14, rgb(56, 142, 80), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCylinder(cx, baseY, cz, 2.5 * scale, 1.5 * scale, 9.5 * scale, 8, rgb(92, 58, 33), TexId.WOOD_GRAIN, 0.6);
+    mb.addCone(cx, baseY + 4.5 * scale, cz, 9.4 * scale, 9.5 * scale, 9, rgb(26, 88, 48), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 9.8 * scale, cz, 7.8 * scale, 9.0 * scale, 9, rgb(34, 108, 58), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 15.0 * scale, cz, 6.0 * scale, 8.2 * scale, 8, rgb(44, 126, 68), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 19.8 * scale, cz, 4.2 * scale, 7.2 * scale, 8, rgb(56, 142, 80), TexId.PINE_FOLIAGE, 0.7);
     // Fluffy snow crown
-    mb.addCone(cx, baseY + 23.0 * scale, cz, 2.8 * scale, 4.8 * scale, 14, rgb(246, 250, 255), TexId.SNOW, 0.55);
+    mb.addCone(cx, baseY + 23.0 * scale, cz, 2.8 * scale, 4.8 * scale, 8, rgb(246, 250, 255), TexId.SNOW, 0.55);
   } else if (variant === 1) {
     // Variant 1: Twin sister alpine pines
     addPineTree3D(mb, cx - 3.4 * scale, baseY, cz + 1.5 * scale, 0, 0.74 * scale);
     addPineTree3D(mb, cx + 3.2 * scale, baseY, cz - 1.2 * scale, 2, 0.88 * scale);
   } else if (variant === 2) {
     // Variant 2: Frosty blue-teal conical spruce
-    mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.3 * scale, 7.5 * scale, 12, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.6);
-    mb.addCone(cx, baseY + 3.8 * scale, cz, 8.0 * scale, 11.5 * scale, 14, rgb(32, 102, 74), TexId.PINE_FOLIAGE, 0.7);
-    mb.addCone(cx, baseY + 9.8 * scale, cz, 6.2 * scale, 10.5 * scale, 14, rgb(46, 124, 92), TexId.PINE_FOLIAGE, 0.7);
-    mb.addCone(cx, baseY + 15.5 * scale, cz, 4.4 * scale, 9.0 * scale, 14, rgb(60, 144, 108), TexId.PINE_FOLIAGE, 0.7);
-    mb.addCone(cx, baseY + 20.2 * scale, cz, 2.8 * scale, 5.2 * scale, 14, rgb(244, 250, 255), TexId.SNOW, 0.55);
+    mb.addCylinder(cx, baseY, cz, 2.1 * scale, 1.3 * scale, 7.5 * scale, 8, rgb(84, 52, 30), TexId.WOOD_GRAIN, 0.6);
+    mb.addCone(cx, baseY + 3.8 * scale, cz, 8.0 * scale, 11.5 * scale, 9, rgb(32, 102, 74), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 9.8 * scale, cz, 6.2 * scale, 10.5 * scale, 9, rgb(46, 124, 92), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 15.5 * scale, cz, 4.4 * scale, 9.0 * scale, 8, rgb(60, 144, 108), TexId.PINE_FOLIAGE, 0.7);
+    mb.addCone(cx, baseY + 20.2 * scale, cz, 2.8 * scale, 5.2 * scale, 8, rgb(244, 250, 255), TexId.SNOW, 0.55);
   } else if (variant === 3) {
     // Variant 3: Sculpted Nordic Scots pine (curved reddish bark trunk + multi-lobe canopy)
-    mb.addCylinder(cx, baseY, cz, 2.3 * scale, 1.8 * scale, 9 * scale, 12, rgb(132, 70, 38), TexId.WOOD_GRAIN, 0.65);
+    mb.addCylinder(cx, baseY, cz, 2.3 * scale, 1.8 * scale, 9 * scale, 8, rgb(132, 70, 38), TexId.WOOD_GRAIN, 0.65);
     mb.addOrientedBox(cx + 0.6 * scale, baseY + 13.5 * scale, cz, 2.8 * scale, 11 * scale, 2.8 * scale, 0.2, 0.14, rgb(156, 84, 44), TexId.WOOD_GRAIN, 0.6);
-    mb.addSphere(cx - 2.4 * scale, baseY + 18.5 * scale, cz + 0.8 * scale, 6.4 * scale, 3.8 * scale, 6.4 * scale, 8, 12, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.7);
-    mb.addSphere(cx + 2.8 * scale, baseY + 20.5 * scale, cz - 1.0 * scale, 6.0 * scale, 3.6 * scale, 6.0 * scale, 8, 12, rgb(46, 118, 64), TexId.PINE_FOLIAGE, 0.7);
-    mb.addSphere(cx + 0.2 * scale, baseY + 22.8 * scale, cz, 5.6 * scale, 2.5 * scale, 5.6 * scale, 8, 12, rgb(246, 250, 255), TexId.SNOW, 0.55);
+    mb.addSphere(cx - 2.4 * scale, baseY + 18.5 * scale, cz + 0.8 * scale, 6.4 * scale, 3.8 * scale, 6.4 * scale, 6, 9, rgb(34, 98, 52), TexId.PINE_FOLIAGE, 0.7);
+    mb.addSphere(cx + 2.8 * scale, baseY + 20.5 * scale, cz - 1.0 * scale, 6.0 * scale, 3.6 * scale, 6.0 * scale, 6, 9, rgb(46, 118, 64), TexId.PINE_FOLIAGE, 0.7);
+    mb.addSphere(cx + 0.2 * scale, baseY + 22.8 * scale, cz, 5.6 * scale, 2.5 * scale, 5.6 * scale, 6, 9, rgb(246, 250, 255), TexId.SNOW, 0.55);
   } else {
     // Variant 4: High-Fi Winter Silver Birch with multi-limbed crown & snow pillows
-    mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.2 * scale, 16 * scale, 12, rgb(244, 242, 238), TexId.BIRCH_BARK, 0.65);
+    mb.addCylinder(cx, baseY, cz, 1.9 * scale, 1.2 * scale, 16 * scale, 8, rgb(244, 242, 238), TexId.BIRCH_BARK, 0.65);
     mb.addOrientedBox(cx - 2.6 * scale, baseY + 13.5 * scale, cz + 0.6 * scale, 1.1 * scale, 7.5 * scale, 1.1 * scale, 0.3, 0.52, rgb(238, 235, 230), TexId.BIRCH_BARK, 0.5);
     mb.addOrientedBox(cx + 2.6 * scale, baseY + 14.2 * scale, cz - 0.6 * scale, 1.1 * scale, 7.0 * scale, 1.1 * scale, -0.4, -0.48, rgb(238, 235, 230), TexId.BIRCH_BARK, 0.5);
-    mb.addSphere(cx - 2.2 * scale, baseY + 17.2 * scale, cz + 0.6 * scale, 4.4 * scale, 3.2 * scale, 4.4 * scale, 8, 12, rgb(232, 242, 252), TexId.SNOW, 0.6);
-    mb.addSphere(cx + 2.2 * scale, baseY + 18.0 * scale, cz - 0.6 * scale, 4.2 * scale, 3.0 * scale, 4.2 * scale, 8, 12, rgb(236, 245, 255), TexId.SNOW, 0.6);
-    mb.addSphere(cx, baseY + 19.6 * scale, cz, 4.8 * scale, 3.4 * scale, 4.8 * scale, 8, 12, rgb(246, 250, 255), TexId.SNOW, 0.6);
+    mb.addSphere(cx - 2.2 * scale, baseY + 17.2 * scale, cz + 0.6 * scale, 4.4 * scale, 3.2 * scale, 4.4 * scale, 6, 9, rgb(232, 242, 252), TexId.SNOW, 0.6);
+    mb.addSphere(cx + 2.2 * scale, baseY + 18.0 * scale, cz - 0.6 * scale, 4.2 * scale, 3.0 * scale, 4.2 * scale, 6, 9, rgb(236, 245, 255), TexId.SNOW, 0.6);
+    mb.addSphere(cx, baseY + 19.6 * scale, cz, 4.8 * scale, 3.4 * scale, 4.8 * scale, 6, 9, rgb(246, 250, 255), TexId.SNOW, 0.6);
   }
 }
 
 function addThujaTree3D(mb: MeshBuilder, cx: number, baseY: number, cz: number): void {
-  mb.addSphere(cx, baseY + 0.3, cz, 3.2, 1.0, 3.2, 6, 10, rgb(242, 248, 255), TexId.SNOW, 0.3);
-  mb.addCylinder(cx, baseY, cz, 1.5, 1.0, 4.5, 10, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.55);
-  mb.addCone(cx, baseY + 3.0, cz, 5.4, 9.5, 12, rgb(36, 114, 60), TexId.PINE_FOLIAGE, 0.65);
-  mb.addCone(cx, baseY + 8.5, cz, 4.4, 9.0, 12, rgb(44, 130, 70), TexId.PINE_FOLIAGE, 0.65);
-  mb.addCone(cx, baseY + 14.0, cz, 3.1, 7.2, 12, rgb(54, 144, 80), TexId.PINE_FOLIAGE, 0.65);
-  mb.addCone(cx, baseY + 17.5, cz, 2.0, 4.5, 12, rgb(244, 250, 255), TexId.SNOW, 0.5);
+  mb.addSphere(cx, baseY + 0.3, cz, 3.2, 1.0, 3.2, 5, 8, rgb(242, 248, 255), TexId.SNOW, 0.3);
+  mb.addCylinder(cx, baseY, cz, 1.5, 1.0, 4.5, 8, rgb(88, 56, 32), TexId.WOOD_GRAIN, 0.55);
+  mb.addCone(cx, baseY + 3.0, cz, 5.4, 9.5, 9, rgb(36, 114, 60), TexId.PINE_FOLIAGE, 0.65);
+  mb.addCone(cx, baseY + 8.5, cz, 4.4, 9.0, 9, rgb(44, 130, 70), TexId.PINE_FOLIAGE, 0.65);
+  mb.addCone(cx, baseY + 14.0, cz, 3.1, 7.2, 8, rgb(54, 144, 80), TexId.PINE_FOLIAGE, 0.65);
+  mb.addCone(cx, baseY + 17.5, cz, 2.0, 4.5, 8, rgb(244, 250, 255), TexId.SNOW, 0.5);
 }
 
 function addHedgeTile3D(mb: MeshBuilder, cx: number, baseY: number, cz: number): void {

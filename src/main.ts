@@ -10,6 +10,7 @@ import { initSecretSantaDB } from './core/secretSantaDB';
 import secretText from '../inspiration/secret.txt';
 import { createCamera3D, updateCamera3D } from './rendering/math3d';
 import { renderGame } from './rendering/renderer';
+import { Hardware3DRenderer, WebGL3DRenderer } from './rendering/webglRenderer';
 import { WebGPURenderer } from './rendering/webgpuRenderer';
 import {
   createGameState,
@@ -72,9 +73,59 @@ async function startGame(): Promise<void> {
     throw new Error('Could not get 2D rendering context');
   }
 
-  const webgpuRenderer = webgpuCanvas
-    ? await WebGPURenderer.create(webgpuCanvas)
-    : null;
+  // Detect mobile / touch / iOS device
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  const isIOSDevice =
+    /iPhone|iPad|iPod/i.test(ua) ||
+    (typeof navigator !== 'undefined' &&
+      navigator.platform === 'MacIntel' &&
+      navigator.maxTouchPoints > 1);
+  const isMobileDevice =
+    isIOSDevice ||
+    (typeof window !== 'undefined' &&
+      ('ontouchstart' in window ||
+        navigator.maxTouchPoints > 0 ||
+        window.matchMedia('(pointer: coarse)').matches));
+
+  const replace3DCanvas = (): HTMLCanvasElement | null => {
+    if (!webgpuCanvas || ! webgpuCanvas.parentElement) return webgpuCanvas;
+    const fresh = document.createElement('canvas');
+    fresh.id = 'webgpu-canvas';
+    fresh.width = webgpuCanvas.width;
+    fresh.height = webgpuCanvas.height;
+    fresh.style.width = webgpuCanvas.style.width;
+    fresh.style.height = webgpuCanvas.style.height;
+    webgpuCanvas.parentElement.replaceChild(fresh, webgpuCanvas);
+    webgpuCanvas = fresh;
+    return webgpuCanvas;
+  };
+
+  const rendererParam =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('renderer')?.toLowerCase()
+      : null;
+  const preferWebGL = rendererParam === 'webgl' || (rendererParam !== 'webgpu' && isIOSDevice);
+
+  let webgpuRenderer: Hardware3DRenderer | null = null;
+  if (webgpuCanvas) {
+    if (preferWebGL) {
+      webgpuRenderer = WebGL3DRenderer.create(webgpuCanvas);
+      if (!webgpuRenderer) {
+        const fresh = replace3DCanvas();
+        if (fresh) {
+          webgpuRenderer = await WebGPURenderer.create(fresh);
+        }
+      }
+    } else {
+      webgpuRenderer = await WebGPURenderer.create(webgpuCanvas);
+      if (!webgpuRenderer) {
+        const fresh = replace3DCanvas();
+        if (fresh) {
+          webgpuRenderer = WebGL3DRenderer.create(fresh);
+        }
+      }
+    }
+  }
   const camera3d = createCamera3D();
 
   const joystickContainer = document.getElementById('virtual-joystick-container');
@@ -83,13 +134,6 @@ async function startGame(): Promise<void> {
 
   const assets = await loadAllAssets();
   const input = createEmptyInput();
-
-  // Detect mobile / touch device by default
-  const isMobileDevice =
-    typeof window !== 'undefined' &&
-    ('ontouchstart' in window ||
-      navigator.maxTouchPoints > 0 ||
-      window.matchMedia('(pointer: coarse)').matches);
 
   let joystick: ReturnType<typeof createVirtualJoystick> | null = null;
   if (joystickContainer && joystickStick) {
@@ -149,9 +193,15 @@ async function startGame(): Promise<void> {
     if (webgpuCanvas) {
       webgpuCanvas.style.width = `${layout.canvasWidth}px`;
       webgpuCanvas.style.height = `${layout.canvasHeight}px`;
-      const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1.5));
-      const targetW = Math.max(1024, Math.min(2048, Math.round(layout.canvasWidth * dpr)));
-      const targetH = Math.max(896, Math.min(1792, Math.round(layout.canvasHeight * dpr)));
+      const dpr = isMobileDevice
+        ? Math.min(1.5, Math.max(1, window.devicePixelRatio || 1))
+        : Math.min(2, Math.max(1, window.devicePixelRatio || 1.5));
+      const minW = isMobileDevice ? 512 : 1024;
+      const maxW = isMobileDevice ? 1024 : 2048;
+      const minH = isMobileDevice ? 448 : 896;
+      const maxH = isMobileDevice ? 896 : 1792;
+      const targetW = Math.max(minW, Math.min(maxW, Math.round(layout.canvasWidth * dpr)));
+      const targetH = Math.max(minH, Math.min(maxH, Math.round(layout.canvasHeight * dpr)));
       if (webgpuCanvas.width !== targetW || webgpuCanvas.height !== targetH) {
         webgpuCanvas.width = targetW;
         webgpuCanvas.height = targetH;

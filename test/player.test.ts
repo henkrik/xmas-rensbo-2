@@ -3982,6 +3982,7 @@ Tanja -> Alex
     // 3. Expanded Spa Room (4x7 = 28 tiles, BathroomTileFloor) with single tub obstacle
     const basementState = createGameState({ showIntroDialogue: false, initialLevelId: 'level-basement' });
     const basementLevel = basementState.levels['level-basement'];
+    expect(basementLevel.doors.find((d) => d.id === 'basement-bathroom-door')?.hiddenRegions).toEqual([]);
     expect(BASEMENT_SPA_ROOM_BOUNDS.width).toBe(4 * TILE_SIZE);
     expect(BASEMENT_SPA_ROOM_BOUNDS.height).toBe(7 * TILE_SIZE);
     expect(basementLevel.map.tiles[6][15]).toBe(TileType.BathroomTileFloor);

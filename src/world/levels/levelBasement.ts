@@ -271,7 +271,7 @@ export class LevelBasement implements GameLevel {
       {
         id: 'basement-bathroom-door',
         bounds: { ...BASEMENT_BATHROOM_DOOR_BOUNDS },
-        hiddenRegions: [{ ...BASEMENT_BATHROOM_HIDDEN_MASK }],
+        hiddenRegions: [],
       },
     ];
     this.coneOfSight = new ConeOfSight(

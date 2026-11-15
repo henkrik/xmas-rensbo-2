@@ -399,8 +399,10 @@ export function createVirtualJoystick(
 
     stick.style.transform = `translate(${(dirX * clampedDist).toFixed(1)}px, ${(dirY * clampedDist).toFixed(1)}px)`;
 
-    // Deadzone of 15% to prevent small thumb rests from triggering motion
-    const deadzone = maxRadius * 0.15;
+    // Deadzone of 15% normally, or 70% for the right (camera) joystick in dual joystick mode
+    const deadzoneRatio =
+      input.dualJoystickMode && currentRole === 'camera' ? 0.7 : 0.15;
+    const deadzone = maxRadius * deadzoneRatio;
     if (dist < deadzone) {
       clearInputForRole();
       return;

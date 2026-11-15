@@ -3194,6 +3194,34 @@ Tanja -> Alex
     expect(leftController.isPointerActive()).toBe(false);
     expect(input.moveVector).toBeNull();
 
+    // 2b. Right (camera) joystick has a 70% deadzone in dualJoystickMode, while left (move) stays at 15%
+    // maxRadius = (200 / 2) * 0.72 = 72. 60% = 43.2px (ignored on right, active on left), 80% = 57.6px (active on right)
+    leftListeners['pointerdown']?.({
+      pointerId: 3,
+      clientX: 100 + 36, // 50% of maxRadius -> active on left
+      clientY: 200,
+      preventDefault: () => {},
+    });
+    rightListeners['pointerdown']?.({
+      pointerId: 4,
+      clientX: 700 + 43, // ~60% of maxRadius -> ignored on right (< 70%)
+      clientY: 200,
+      preventDefault: () => {},
+    });
+    expect(input.moveVector?.x).toBeCloseTo(0.5, 2);
+    expect(input.cameraLookVector).toBeNull();
+
+    // Move right stick to 80% of maxRadius -> now active
+    for (const cb of winListeners.pointermove) {
+      cb({ pointerId: 4, clientX: 700 + 58, clientY: 200, preventDefault: () => {} });
+    }
+    expect(input.cameraLookVector?.x).toBeGreaterThan(0.75);
+
+    for (const cb of winListeners.pointerup) {
+      cb({ pointerId: 3, preventDefault: () => {} });
+      cb({ pointerId: 4, preventDefault: () => {} });
+    }
+
     // 3. In dualJoystickMode, left joystick moves Santa relative to cameraYaw (including strafing)
     // without changing cameraYaw, while right joystick turns cameraYaw without moving Santa
     const state = createGameState({ isMobile: true, showIntroDialogue: false });

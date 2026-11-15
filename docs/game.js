@@ -281,7 +281,8 @@
       const clampedDist = Math.min(dist, maxRadius);
       const intensity = clampedDist / maxRadius;
       stick.style.transform = `translate(${(dirX * clampedDist).toFixed(1)}px, ${(dirY * clampedDist).toFixed(1)}px)`;
-      const deadzone = maxRadius * 0.15;
+      const deadzoneRatio = input.dualJoystickMode && currentRole === "camera" ? 0.7 : 0.15;
+      const deadzone = maxRadius * deadzoneRatio;
       if (dist < deadzone) {
         clearInputForRole();
         return;

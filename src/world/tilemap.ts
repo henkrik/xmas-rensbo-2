@@ -94,6 +94,14 @@ export const ROOF_CHIMNEY_BOUNDS: Rect = {
   height: 18,
 };
 
+// Rudolph's corpse lying on the Main House roof next to the chimney
+export const ROOF_RUDOLPH_BOUNDS: Rect = {
+  x: 9 * TILE_SIZE + 4,
+  y: 4 * TILE_SIZE,
+  width: 22,
+  height: 16,
+};
+
 export const LADDER_CLIMB_X = 4 * TILE_SIZE + 2;
 export const LADDER_BOTTOM_Y = 10 * TILE_SIZE;
 export const ROOF_WALK_Y = 9 * TILE_SIZE;

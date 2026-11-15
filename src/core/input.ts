@@ -5,6 +5,9 @@ export interface InputState {
   right: boolean;
   action: boolean;
   actionJustPressed: boolean;
+  attack?: boolean;
+  attackJustPressed?: boolean;
+  slotJustPressed?: number | null;
   camUp?: boolean;
   camDown?: boolean;
   camLeft?: boolean;
@@ -34,6 +37,9 @@ export function createEmptyInput(): InputState {
     right: false,
     action: false,
     actionJustPressed: false,
+    attack: false,
+    attackJustPressed: false,
+    slotJustPressed: null,
     camUp: false,
     camDown: false,
     camLeft: false,
@@ -96,6 +102,28 @@ export function applyKeyEvent(
     return true;
   }
 
+  if (codeOrKey === 'KeyF' || codeOrKey === 'f' || codeOrKey === 'F') {
+    if (isPressed && !state.attack) {
+      state.attackJustPressed = true;
+    }
+    state.attack = isPressed;
+    return true;
+  }
+
+  let slotDigit: number | null = null;
+  if (codeOrKey.length === 6 && codeOrKey.startsWith('Digit')) {
+    const n = Number(codeOrKey.slice(5));
+    if (n >= 1 && n <= 9) slotDigit = n;
+  } else if (codeOrKey.length === 1 && codeOrKey >= '1' && codeOrKey <= '9') {
+    slotDigit = Number(codeOrKey);
+  }
+  if (slotDigit !== null) {
+    if (isPressed) {
+      state.slotJustPressed = slotDigit;
+    }
+    return true;
+  }
+
   // In 3D mode (cameraYaw is active), arrow keys turn the camera so keyboard-only play works without a mouse.
   const camBtn = ARROW_TO_CAM[codeOrKey];
   if (camBtn && typeof state.cameraYaw === 'number') {
@@ -124,6 +152,23 @@ export function consumeActionPress(state: InputState): boolean {
     return true;
   }
   return false;
+}
+
+export function consumeAttackPress(state: InputState): boolean {
+  if (state.attackJustPressed) {
+    state.attackJustPressed = false;
+    return true;
+  }
+  return false;
+}
+
+export function consumeSlotPress(state: InputState): number | null {
+  if (typeof state.slotJustPressed === 'number') {
+    const slot = state.slotJustPressed;
+    state.slotJustPressed = null;
+    return slot;
+  }
+  return null;
 }
 
 export function attachKeyboardListeners(

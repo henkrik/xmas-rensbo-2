@@ -110,6 +110,9 @@
       right: false,
       action: false,
       actionJustPressed: false,
+      attack: false,
+      attackJustPressed: false,
+      slotJustPressed: null,
       camUp: false,
       camDown: false,
       camLeft: false,
@@ -153,6 +156,26 @@
       options?.onToggleJoystick?.();
       return true;
     }
+    if (codeOrKey === "KeyF" || codeOrKey === "f" || codeOrKey === "F") {
+      if (isPressed && !state.attack) {
+        state.attackJustPressed = true;
+      }
+      state.attack = isPressed;
+      return true;
+    }
+    let slotDigit = null;
+    if (codeOrKey.length === 6 && codeOrKey.startsWith("Digit")) {
+      const n = Number(codeOrKey.slice(5));
+      if (n >= 1 && n <= 9) slotDigit = n;
+    } else if (codeOrKey.length === 1 && codeOrKey >= "1" && codeOrKey <= "9") {
+      slotDigit = Number(codeOrKey);
+    }
+    if (slotDigit !== null) {
+      if (isPressed) {
+        state.slotJustPressed = slotDigit;
+      }
+      return true;
+    }
     const camBtn = ARROW_TO_CAM[codeOrKey];
     if (camBtn && typeof state.cameraYaw === "number") {
       state[camBtn] = isPressed;
@@ -178,6 +201,21 @@
       return true;
     }
     return false;
+  }
+  function consumeAttackPress(state) {
+    if (state.attackJustPressed) {
+      state.attackJustPressed = false;
+      return true;
+    }
+    return false;
+  }
+  function consumeSlotPress(state) {
+    if (typeof state.slotJustPressed === "number") {
+      const slot = state.slotJustPressed;
+      state.slotJustPressed = null;
+      return slot;
+    }
+    return null;
   }
   function attachKeyboardListeners(target, state, options) {
     const onKeyDown = (e) => {
@@ -591,6 +629,12 @@
     width: 16,
     height: 18
   };
+  var ROOF_RUDOLPH_BOUNDS = {
+    x: 9 * TILE_SIZE + 4,
+    y: 4 * TILE_SIZE,
+    width: 22,
+    height: 16
+  };
   var LADDER_CLIMB_X = 4 * TILE_SIZE + 2;
   var LADDER_BOTTOM_Y = 10 * TILE_SIZE;
   var ROOF_WALK_Y = 9 * TILE_SIZE;
@@ -711,6 +755,11 @@
   var PLAYER_JUMP_DURATION = 0.44;
   var PLAYER_JUMP_GRAVITY = 8 * PLAYER_JUMP_HEIGHT / (PLAYER_JUMP_DURATION * PLAYER_JUMP_DURATION);
   var PLAYER_JUMP_INITIAL_VELOCITY = 4 * PLAYER_JUMP_HEIGHT / PLAYER_JUMP_DURATION;
+  var MAX_PLAYER_HEALTH = 100;
+  var PUNCH_DURATION_SECONDS = 0.28;
+  var UZI_EQUIP_DURATION_SECONDS = 0.5;
+  var UZI_FIRE_INTERVAL_SECONDS = 0.2;
+  var UZI_PROJECTILE_SPEED = 4 * TILE_SIZE;
   function createPlayer(x, y) {
     return {
       x,
@@ -729,8 +778,76 @@
       blinkTimer: 0,
       footprintSpawnTimer: 0,
       nextFootprintFoot: "left",
-      states: /* @__PURE__ */ new Map()
+      states: /* @__PURE__ */ new Map(),
+      health: MAX_PLAYER_HEALTH,
+      delayedHealth: MAX_PLAYER_HEALTH,
+      delayedHealthRate: 0,
+      equippedItem: "unarmed",
+      unlockedUzi: false,
+      punchTimer: 0,
+      punchHand: "right",
+      uziEquipTimer: 0,
+      uziFireCooldown: 0
     };
+  }
+  function setPlayerHealth(player, newHealth) {
+    const clamped = Math.max(0, Math.min(MAX_PLAYER_HEALTH, newHealth));
+    player.health = clamped;
+    player.delayedHealthRate = Math.abs(player.delayedHealth - player.health);
+  }
+  function applyPlayerDamage(player, amount) {
+    setPlayerHealth(player, player.health - amount);
+  }
+  function updatePlayerHealthAndTimers(player, dtSeconds) {
+    if (dtSeconds <= 0) {
+      return;
+    }
+    if (player.delayedHealth !== player.health) {
+      const diff = player.health - player.delayedHealth;
+      const step = player.delayedHealthRate * dtSeconds;
+      if (Math.abs(diff) <= step || player.delayedHealthRate <= 0) {
+        player.delayedHealth = player.health;
+        player.delayedHealthRate = 0;
+      } else {
+        player.delayedHealth += Math.sign(diff) * step;
+      }
+    }
+    if (player.punchTimer > 0) {
+      player.punchTimer = Math.max(0, player.punchTimer - dtSeconds);
+    }
+    if (player.uziEquipTimer > 0) {
+      player.uziEquipTimer = Math.max(0, player.uziEquipTimer - dtSeconds);
+    }
+    if (player.uziFireCooldown > 0) {
+      player.uziFireCooldown = Math.max(0, player.uziFireCooldown - dtSeconds);
+    }
+  }
+  function triggerPlayerPunch(player) {
+    if (player.equippedItem !== "unarmed") {
+      return false;
+    }
+    player.punchTimer = PUNCH_DURATION_SECONDS;
+    player.punchHand = player.punchHand === "right" ? "left" : "right";
+    return true;
+  }
+  function selectPlayerEquipmentSlot(player, slot) {
+    if (slot === 1) {
+      player.equippedItem = "unarmed";
+      player.uziEquipTimer = 0;
+      return true;
+    }
+    if (slot === 2) {
+      if (!player.unlockedUzi) {
+        return false;
+      }
+      if (player.equippedItem !== "uzi") {
+        player.equippedItem = "uzi";
+        player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+        player.punchTimer = 0;
+      }
+      return true;
+    }
+    return false;
   }
   function lerpAngle(current, target, t) {
     let diff = (target - current + Math.PI) % (Math.PI * 2);
@@ -2469,6 +2586,7 @@
         () => {
           ctx.loadLevel("level-upstairs");
           player.blinkTimer = 2;
+          ctx.damagePlayer?.(30);
         },
         speaker
       );
@@ -3537,6 +3655,68 @@
     mb.addBox(cx + w * 0.5 + sw * 0.55, cy + 0.2, cz + 0.2, sw, h, 1.2, shutterColor, TexId.WOOD_GRAIN, 0.45);
     mb.addBox(cx, cy + h + 0.2, cz + 0.3, w + 2, 1, 1.8, rgb(246, 250, 255), TexId.SNOW, 0.3);
   }
+  function addRudolphCorpse3D(mb) {
+    const rx = ROOF_RUDOLPH_BOUNDS.x + ROOF_RUDOLPH_BOUNDS.width * 0.5;
+    const rz = ROOF_RUDOLPH_BOUNDS.y + ROOF_RUDOLPH_BOUNDS.height * 0.5;
+    const roofSlope = Math.atan2(16, 60);
+    const ry = getMainHouseRoofElevation(rx, rz);
+    const bloodDark = rgb(104, 8, 16);
+    const bloodBright = rgb(148, 14, 24);
+    const puddleParts = [
+      [0, 0.4, 15, 11.5, bloodDark],
+      [-2.5, -1.2, 8.5, 6.5, bloodBright],
+      [3.2, 1.8, 7.5, 6, bloodDark],
+      [-4.5, 2.5, 6.2, 4.8, bloodBright],
+      [4.8, -2, 5.4, 4.4, bloodDark]
+    ];
+    for (const [dx, dz, lenZ, widthX, col] of puddleParts) {
+      const px = rx + dx;
+      const pz = rz + dz;
+      const py = getMainHouseRoofElevation(px, pz) + 0.14;
+      mb.addOrientedBox(px, py, pz, lenZ, 0.28, widthX, Math.PI * 0.5, roofSlope, col, TexId.SOLID, 0);
+    }
+    const fur = rgb(138, 84, 46);
+    const belly = rgb(212, 182, 140);
+    const hoof = rgb(28, 24, 22);
+    const antler = rgb(218, 190, 136);
+    mb.addSphere(rx + 1.5, ry + 2, rz, 5.2, 2, 3, 10, 12, fur, TexId.FABRIC, 0.65);
+    mb.addSphere(rx + 0.8, ry + 1.8, rz + 0.9, 3.4, 1.5, 1.9, 8, 10, belly, TexId.FABRIC, 0.35);
+    mb.addSphere(rx + 6.9, ry + 2.1, rz - 0.3, 1.2, 0.85, 0.95, 6, 8, belly, TexId.SNOW, 0.35);
+    const legs = [
+      [-1.4, 3.2, 0.3, 0.3],
+      [0.2, 3.8, -0.2, 0.25],
+      [4, 3, 0.25, 0.32],
+      [5.4, 2.4, -0.35, 0.22]
+    ];
+    for (const [dx, dz, yawOff, legPitch] of legs) {
+      const lx = rx + dx;
+      const lz = rz + dz;
+      const ly = getMainHouseRoofElevation(lx, lz);
+      mb.addOrientedBox(lx, ly + 0.95, lz, 1, 1, 4.2, yawOff, legPitch, fur, TexId.FABRIC, 0.45);
+      mb.addSphere(lx, ly + 0.5, lz + 2, 0.72, 0.62, 0.72, 6, 8, hoof, TexId.SOLID, 0.35);
+    }
+    const hx = rx - 4.6;
+    const hz = rz + 0.4;
+    const hy = getMainHouseRoofElevation(hx, hz);
+    mb.addSphere(hx + 2, hy + 1.75, hz - 0.2, 2.2, 1.4, 1.6, 8, 10, fur, TexId.FABRIC, 0.5);
+    mb.addSphere(hx, hy + 1.85, hz, 2.35, 1.65, 2.1, 8, 12, fur, TexId.FABRIC, 0.6);
+    mb.addSphere(hx - 2.1, hy + 1.55, hz + 0.15, 1.65, 1.15, 1.25, 6, 8, belly, TexId.FABRIC, 0.45);
+    mb.addSphere(hx - 3.65, hy + 1.6, hz + 0.15, 1.05, 1.05, 1.05, 8, 10, rgb(255, 22, 24), TexId.SOLID, 0.45);
+    mb.addBox(hx - 0.8, hy + 3.05, hz + 0.95, 1.2, 0.28, 0.28, rgb(20, 16, 18), TexId.SOLID, 0);
+    for (const sideZ of [-1, 1]) {
+      const az = hz - 1.2 + sideZ * 1.1;
+      const ay = getMainHouseRoofElevation(hx + 0.6, az) + 1.85;
+      mb.addOrientedBox(hx + 1, ay, az, 3.8, 0.55, 0.55, sideZ * 0.45, 0.2, antler, TexId.WOOD_GRAIN, 0.35);
+      mb.addOrientedBox(hx + 2.1, ay + 0.45, az + sideZ * 0.8, 1.8, 0.42, 0.42, sideZ * 1.1, 0.35, antler, TexId.WOOD_GRAIN, 0.3);
+    }
+    const kx = rx - 0.4;
+    const kz = rz - 0.1;
+    const ky = getMainHouseRoofElevation(kx, kz);
+    mb.addSphere(kx, ky + 3.5, kz, 1.7, 0.45, 1.7, 6, 8, rgb(172, 12, 20), TexId.SOLID, 0);
+    mb.addOrientedBox(kx + 0.15, ky + 4.9, kz, 0.45, 3.8, 1.2, 0.3, 0.26, rgb(220, 228, 240), TexId.SOLID, 0.45);
+    mb.addOrientedBox(kx - 0.35, ky + 6.7, kz, 0.85, 0.6, 2.7, 0.3, 0.26, rgb(218, 174, 62), TexId.SOLID, 0.35);
+    mb.addOrientedBox(kx - 0.9, ky + 8.3, kz, 0.95, 3, 0.95, 0.3, 0.26, rgb(42, 28, 22), TexId.WOOD_GRAIN, 0.45);
+  }
   function buildOutsideStaticMesh(map) {
     const mb = new MeshBuilder();
     const ts = map.tileSize;
@@ -3646,6 +3826,7 @@
       mb.addBox(chimX, roofWalkY + 19.3, chimZ, 11, 1.2, 11, rgb(24, 20, 24), TexId.SOLID, 0);
       mb.addCylinder(chimX - 3, roofWalkY + 19.3, chimZ, 2, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
       mb.addCylinder(chimX + 3, roofWalkY + 19.3, chimZ, 2, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+      addRudolphCorpse3D(mb);
       const greenShutter = rgb(44, 108, 68);
       for (const winCol of [5.5, 14.5]) {
         const wx = (winCol + 0.5) * ts;
@@ -4486,12 +4667,157 @@
     }
     const armSpread = 4.35;
     const mittenColor = isSanta ? rgb(224, 232, 245) : style.skin;
+    const isUnarmedPunch = (style.equippedItem ?? "unarmed") === "unarmed" && (style.punchTimer ?? 0) > 0;
+    const punchProgress = isUnarmedPunch ? 1 - Math.max(0, Math.min(1, (style.punchTimer ?? 0) / PUNCH_DURATION_SECONDS)) : 0;
+    const punchCurve = Math.sin(punchProgress * Math.PI);
+    const activePunchSide = style.punchHand === "left" ? -1 : 1;
+    const isHoldingUzi = style.equippedItem === "uzi";
     for (const side of [1, -1]) {
+      const shoulderX = cx + rx * 3.7 * side;
+      const shoulderY = y0 + 9.4;
+      const shoulderZ = cz + rz * 3.7 * side;
+      mb.addSphere(shoulderX, shoulderY, shoulderZ, 1.4, 1.4, 1.4, 6, 8, style.coat, TexId.FABRIC, 0.5);
+      if (isHoldingUzi && side === 1) {
+        const equipTimer = Math.max(0, style.uziEquipTimer ?? 0);
+        const tEquip = equipTimer > 0 ? 1 - Math.min(1, equipTimer / UZI_EQUIP_DURATION_SECONDS) : 1;
+        const theta = Math.PI - tEquip * (Math.PI * 0.5);
+        const st = Math.sin(theta);
+        const ct = Math.cos(theta);
+        const dirX = st * fx;
+        const dirY = -ct;
+        const dirZ = st * fz;
+        const ax0 = cx + rx * armSpread * side;
+        const az0 = cz + rz * armSpread * side;
+        mb.addOrientedBox(
+          ax0 + dirX * 2.2,
+          shoulderY + dirY * 2.2,
+          az0 + dirZ * 2.2,
+          2,
+          4.4,
+          2,
+          yaw,
+          theta,
+          style.coat,
+          TexId.FABRIC,
+          0.65
+        );
+        const hx = ax0 + dirX * 4.4;
+        const hy = shoulderY + dirY * 4.4;
+        const hz = az0 + dirZ * 4.4;
+        mb.addSphere(hx, hy, hz, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
+        const gunPitch = theta - Math.PI * 0.5;
+        const upGX = ct * fx;
+        const upGY = st;
+        const upGZ = ct * fz;
+        const gunDark = rgb(32, 36, 46);
+        const gunSteel = rgb(64, 72, 88);
+        const gunBarrel = rgb(20, 24, 32);
+        mb.addOrientedBox(
+          hx + dirX * 1.1 + upGX * 1.35,
+          hy + dirY * 1.1 + upGY * 1.35,
+          hz + dirZ * 1.1 + upGZ * 1.35,
+          4.6,
+          1.6,
+          1.15,
+          yaw,
+          gunPitch,
+          gunDark,
+          TexId.SOLID,
+          0.45
+        );
+        mb.addOrientedBox(
+          hx + dirX * 1 + upGX * 2.25,
+          hy + dirY * 1 + upGY * 2.25,
+          hz + dirZ * 1 + upGZ * 2.25,
+          3.2,
+          0.55,
+          0.9,
+          yaw,
+          gunPitch,
+          gunSteel,
+          TexId.SOLID,
+          0.3
+        );
+        mb.addOrientedBox(
+          hx + dirX * 4.3 + upGX * 1.5,
+          hy + dirY * 4.3 + upGY * 1.5,
+          hz + dirZ * 4.3 + upGZ * 1.5,
+          2.6,
+          0.65,
+          0.65,
+          yaw,
+          gunPitch,
+          gunBarrel,
+          TexId.SOLID,
+          0.35
+        );
+        mb.addOrientedBox(
+          hx + dirX * 0.2 - upGX * 0.55,
+          hy + dirY * 0.2 - upGY * 0.55,
+          hz + dirZ * 0.2 - upGZ * 0.55,
+          1.1,
+          2.6,
+          0.85,
+          yaw,
+          gunPitch,
+          gunDark,
+          TexId.SOLID,
+          0.35
+        );
+        mb.addOrientedBox(
+          hx + dirX * 0.2 - upGX * 2.1,
+          hy + dirY * 0.2 - upGY * 2.1,
+          hz + dirZ * 0.2 - upGZ * 2.1,
+          0.85,
+          1.5,
+          0.7,
+          yaw,
+          gunPitch,
+          gunSteel,
+          TexId.SOLID,
+          0.3
+        );
+        continue;
+      }
+      if (isUnarmedPunch && side === activePunchSide) {
+        const punchTheta = punchCurve * (Math.PI * 0.54);
+        const reachExtra = punchCurve * 2.4;
+        const sp = Math.sin(punchTheta);
+        const cp = Math.cos(punchTheta);
+        const ax0 = cx + rx * armSpread * side + fx * reachExtra;
+        const az0 = cz + rz * armSpread * side + fz * reachExtra;
+        mb.addOrientedBox(
+          ax0 + fx * sp * 2.2,
+          shoulderY - cp * 2.2,
+          az0 + fz * sp * 2.2,
+          2,
+          4.4,
+          2,
+          yaw,
+          punchTheta,
+          style.coat,
+          TexId.FABRIC,
+          0.65
+        );
+        mb.addSphere(
+          ax0 + fx * sp * 4.4,
+          shoulderY - cp * 4.4,
+          az0 + fz * sp * 4.4,
+          1.25,
+          1.25,
+          1.25,
+          6,
+          8,
+          mittenColor,
+          TexId.SOLID,
+          0.5
+        );
+        continue;
+      }
       const aSwing = -side * swing * 0.9;
       const aDist = -side * legSwingDist * 0.72;
       const ax = cx + rx * armSpread * side + fx * aDist;
       const az = cz + rz * armSpread * side + fz * aDist;
-      mb.addSphere(cx + rx * 3.7 * side, y0 + 9.4, cz + rz * 3.7 * side, 1.4, 1.4, 1.4, 6, 8, style.coat, TexId.FABRIC, 0.5);
       mb.addOrientedBox(ax, y0 + 7.5, az, 2, 4.4, 2, yaw, aSwing, style.coat, TexId.FABRIC, 0.65);
       mb.addSphere(ax + fx * Math.sin(aSwing) * 1.4, y0 + 5.1, az + fz * Math.sin(aSwing) * 1.4, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
     }
@@ -4861,7 +5187,11 @@
         skin: rgb(255, 255, 255),
         hair: rgb(255, 255, 255),
         hat: rgb(245, 250, 120),
-        hasBeard: true
+        hasBeard: true,
+        equippedItem: state.player.equippedItem,
+        punchTimer: state.player.punchTimer,
+        punchHand: state.player.punchHand,
+        uziEquipTimer: state.player.uziEquipTimer
       } : {
         coat: rgb(216, 34, 42),
         trim: rgb(248, 250, 255),
@@ -4869,7 +5199,11 @@
         skin: rgb(250, 208, 176),
         hair: rgb(250, 252, 255),
         hat: rgb(220, 36, 42),
-        hasBeard: true
+        hasBeard: true,
+        equippedItem: state.player.equippedItem,
+        punchTimer: state.player.punchTimer,
+        punchHand: state.player.punchHand,
+        uziEquipTimer: state.player.uziEquipTimer
       };
       const rosannaCutsceneActive = levelId === "level-upstairs" && Boolean(state.levels["level-upstairs"].rosannaCutscene?.active);
       const toiletCutsceneActive = levelId === "level-basement" && Boolean(state.levels["level-basement"].toiletCutscene?.active);
@@ -5367,6 +5701,21 @@
         );
       }
     }
+    for (const proj of state.projectiles) {
+      opaque.addOrientedBox(
+        proj.x,
+        proj.z,
+        proj.y,
+        3.2,
+        0.8,
+        0.8,
+        proj.yaw,
+        0,
+        rgb(255, 224, 96),
+        TexId.SOLID,
+        0.35
+      );
+    }
     if (state.debugMode) {
       translucent.addBox(
         state.player.x + state.player.width * 0.5,
@@ -5587,6 +5936,285 @@
       );
     }
     ctx.restore();
+  }
+  function drawHealthBar(ctx, player) {
+    const x = 8;
+    const y = 8;
+    const innerW = 88;
+    const innerH = 8;
+    const outerW = innerW + 4;
+    const outerH = innerH + 4;
+    ctx.save();
+    ctx.fillStyle = "rgba(8, 12, 20, 0.7)";
+    ctx.fillRect(x + 1, y + 1, outerW, outerH);
+    ctx.fillStyle = "#18080e";
+    ctx.fillRect(x, y, outerW, outerH);
+    ctx.strokeStyle = "#e8f0ff";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, outerW - 1, outerH - 1);
+    const bx = x + 2;
+    const by = y + 2;
+    const healthRatio = Math.max(0, Math.min(1, player.health / MAX_PLAYER_HEALTH));
+    const delayedRatio = Math.max(
+      0,
+      Math.min(1, player.delayedHealth / MAX_PLAYER_HEALTH)
+    );
+    const healthPx = player.health > 0 ? Math.max(1, Math.round(innerW * healthRatio)) : 0;
+    const delayedPx = player.delayedHealth > 0 ? Math.max(1, Math.round(innerW * delayedRatio)) : 0;
+    if (healthPx > 0) {
+      ctx.fillStyle = "#ef233c";
+      ctx.fillRect(bx, by, healthPx, innerH);
+      ctx.fillStyle = "#ff6b6b";
+      ctx.fillRect(bx, by, healthPx, 2);
+    }
+    if (player.delayedHealth !== player.health) {
+      const startPx = Math.min(healthPx, delayedPx);
+      const endPx = Math.max(healthPx, delayedPx);
+      const deltaW = Math.max(1, endPx - startPx);
+      ctx.fillStyle = "#7f0b18";
+      ctx.fillRect(bx + startPx, by, deltaW, innerH);
+      ctx.fillStyle = "#a41623";
+      ctx.fillRect(bx + startPx, by, deltaW, 2);
+    }
+    ctx.restore();
+  }
+  function drawUnarmedArmsIcon(ctx, cx, cy, punching, scale = 1) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    const leftReach = punching ? -2 : 0;
+    ctx.fillStyle = "#181420";
+    ctx.fillRect(-10, -2 + leftReach, 6, 9);
+    ctx.fillStyle = "#d62828";
+    ctx.fillRect(-9, -1 + leftReach, 4, 7);
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(-9, -2 + leftReach, 4, 2);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillRect(-9, -5 + leftReach, 4, 3);
+    const rightReach = punching ? -4 : 0;
+    ctx.fillStyle = "#181420";
+    ctx.fillRect(4, -2 + rightReach, 6, 9);
+    ctx.fillStyle = "#d62828";
+    ctx.fillRect(5, -1 + rightReach, 4, 7);
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(5, -2 + rightReach, 4, 2);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillRect(5, -5 + rightReach, 4, 3);
+    ctx.restore();
+  }
+  function drawUziIcon(ctx, cx, cy, scale = 1) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = "#d62828";
+    ctx.fillRect(-8, 2, 5, 6);
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(-7, 1, 4, 2);
+    ctx.fillStyle = "#111622";
+    ctx.fillRect(-8, -5, 14, 5);
+    ctx.fillStyle = "#475569";
+    ctx.fillRect(-7, -4, 12, 3);
+    ctx.fillStyle = "#1e293b";
+    ctx.fillRect(6, -4, 5, 2);
+    ctx.fillStyle = "#111622";
+    ctx.fillRect(-4, 0, 4, 6);
+    ctx.fillStyle = "#334155";
+    ctx.fillRect(-3, 0, 2, 7);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillRect(-5, -1, 4, 3);
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillRect(-5, -6, 3, 1);
+    ctx.fillRect(4, -6, 1, 1);
+    ctx.restore();
+  }
+  function drawEquippedItemHud(ctx, player) {
+    const boxW = 48;
+    const boxH = 34;
+    const boxX = ctx.canvas.width - boxW - 8;
+    const boxY = 8;
+    ctx.save();
+    drawSnesFrame(ctx, boxX, boxY, boxW, boxH);
+    const iconCenterX = boxX + Math.floor(boxW / 2);
+    const iconCenterY = boxY + 13;
+    if (player.equippedItem === "uzi") {
+      drawUziIcon(ctx, iconCenterX, iconCenterY, 1);
+      const label = "UZI";
+      const tw = measurePixelText(label);
+      drawPixelText(
+        ctx,
+        label,
+        boxX + Math.round((boxW - tw) / 2),
+        boxY + 23,
+        "#ffd166",
+        "#0c101a"
+      );
+    } else {
+      drawUnarmedArmsIcon(ctx, iconCenterX, iconCenterY + 1, player.punchTimer > 0, 1);
+      const label = "UNARMED";
+      const tw = measurePixelText(label);
+      drawPixelText(
+        ctx,
+        label,
+        boxX + Math.round((boxW - tw) / 2),
+        boxY + 23,
+        "#e8f0ff",
+        "#0c101a"
+      );
+    }
+    if (player.unlockedUzi) {
+      const slotSize = 20;
+      const gap = 3;
+      const slotsTotalW = slotSize * 2 + gap;
+      const slotsStartX = boxX + boxW - slotsTotalW;
+      const slotsY = boxY + boxH + 4;
+      drawSnesFrame(ctx, slotsStartX, slotsY, slotSize, slotSize);
+      if (player.equippedItem === "unarmed") {
+        ctx.strokeStyle = "#ffd166";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(slotsStartX + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
+      }
+      drawUnarmedArmsIcon(
+        ctx,
+        slotsStartX + Math.floor(slotSize / 2),
+        slotsY + 11,
+        false,
+        0.7
+      );
+      drawPixelText(ctx, "1", slotsStartX + 3, slotsY + 2, "#ffd166", "#0c101a");
+      const slot2X = slotsStartX + slotSize + gap;
+      drawSnesFrame(ctx, slot2X, slotsY, slotSize, slotSize);
+      if (player.equippedItem === "uzi") {
+        ctx.strokeStyle = "#ffd166";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(slot2X + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
+      }
+      drawUziIcon(ctx, slot2X + Math.floor(slotSize / 2), slotsY + 11, 0.7);
+      drawPixelText(ctx, "2", slot2X + 3, slotsY + 2, "#ffd166", "#0c101a");
+    }
+    ctx.restore();
+  }
+  function drawAchievementBanner(ctx, text, zKeySprite, showHint) {
+    ctx.save();
+    ctx.fillStyle = "rgba(8, 10, 18, 0.55)";
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    const prefix = "ACHIEVEMENT UNLOCKED:";
+    const hasPrefix = text.startsWith(prefix);
+    const titleText = hasPrefix ? "ACHIEVEMENT UNLOCKED" : "ACHIEVEMENT";
+    const bodyText = hasPrefix ? text.slice(prefix.length).trim() : text;
+    const boxW = ctx.canvas.width - 20;
+    const bodyLines = wrapPixelText(bodyText, boxW - 20);
+    const titleScale = 2;
+    const lineH = 12;
+    const boxH = 38 + bodyLines.length * lineH + (showHint ? 16 : 8);
+    const boxX = Math.round((ctx.canvas.width - boxW) / 2);
+    const boxY = Math.round((ctx.canvas.height - boxH) / 2);
+    ctx.fillStyle = "rgba(10, 14, 26, 0.96)";
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(boxX + 1, boxY + 1, boxW - 2, boxH - 2);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(boxX + 3.5, boxY + 3.5, boxW - 7, boxH - 7);
+    const rawTitleW = measurePixelText(titleText);
+    ctx.save();
+    ctx.scale(titleScale, titleScale);
+    drawPixelText(
+      ctx,
+      titleText,
+      Math.round((ctx.canvas.width / titleScale - rawTitleW) / 2),
+      Math.round((boxY + 10) / titleScale),
+      "#ffd166",
+      "#4a1d06"
+    );
+    ctx.restore();
+    bodyLines.forEach((line, idx) => {
+      const lineW = measurePixelText(line);
+      const lx = Math.round((ctx.canvas.width - lineW) / 2);
+      const ly = boxY + 32 + idx * lineH;
+      drawPixelText(ctx, line, lx, ly, "#ffffff", "#0c101a");
+    });
+    if (showHint) {
+      const prompt = "SPACE";
+      const pw = measurePixelText(prompt);
+      drawPixelText(
+        ctx,
+        prompt,
+        boxX + boxW - pw - 22,
+        boxY + boxH - 16,
+        "#cbd5e1",
+        "#0c101a"
+      );
+      ctx.drawImage(zKeySprite, boxX + boxW - 19, boxY + boxH - 18, 12, 12);
+    }
+    ctx.restore();
+  }
+  function drawGameOverScreen(ctx, promptLine) {
+    ctx.save();
+    ctx.fillStyle = "rgba(20, 4, 8, 0.9)";
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    const title = "GAME OVER";
+    const titleScale = 3;
+    const rawTitleW = measurePixelText(title);
+    ctx.save();
+    ctx.scale(titleScale, titleScale);
+    drawPixelText(
+      ctx,
+      title,
+      Math.round((ctx.canvas.width / titleScale - rawTitleW) / 2),
+      Math.round(62 / titleScale),
+      "#ef233c",
+      "#2b0509"
+    );
+    ctx.restore();
+    const promptScale = 2;
+    const rawPromptW = measurePixelText(promptLine);
+    ctx.save();
+    ctx.scale(promptScale, promptScale);
+    drawPixelText(
+      ctx,
+      promptLine,
+      Math.round((ctx.canvas.width / promptScale - rawPromptW) / 2),
+      Math.round(118 / promptScale),
+      "#ffffff",
+      "#0c101a"
+    );
+    ctx.restore();
+    const hint = "Press SPACE or tap to restart";
+    const hintW = measurePixelText(hint);
+    drawPixelText(
+      ctx,
+      hint,
+      Math.round((ctx.canvas.width - hintW) / 2),
+      158,
+      "#ffd166",
+      "#0c101a"
+    );
+    ctx.restore();
+  }
+  function drawDialogueOverlay(ctx, state, assets) {
+    const activeDialogue = state.activeDialogue;
+    if (!activeDialogue) {
+      if (state.nearbyInteractable && !state.joystickActive) {
+        drawInteractionPrompt(ctx, state.nearbyInteractable.promptText, assets.zKeySprite);
+      }
+      return;
+    }
+    const line = activeDialogue.lines[activeDialogue.currentIndex] ?? "";
+    if (activeDialogue.variant === "gameover") {
+      drawGameOverScreen(ctx, line);
+    } else if (activeDialogue.variant === "achievement") {
+      drawAchievementBanner(ctx, line, assets.zKeySprite, !state.joystickActive);
+    } else {
+      drawDialogueBox(
+        ctx,
+        line,
+        assets.zKeySprite,
+        !state.joystickActive,
+        activeDialogue.speakerPortrait,
+        assets.portraitsAtlas
+      );
+    }
   }
   function drawFootprints(ctx, footprints) {
     if (footprints.length === 0) return;
@@ -6159,8 +6787,6 @@
       dog,
       throwers,
       snowballs,
-      nearbyInteractable,
-      activeDialogue,
       elapsedTime
     } = state;
     ctx.imageSmoothingEnabled = false;
@@ -6172,19 +6798,11 @@
       } else {
         renderSoftware3DScene(ctx, state, cam);
       }
-      if (activeDialogue) {
-        const line = activeDialogue.lines[activeDialogue.currentIndex] ?? "";
-        drawDialogueBox(
-          ctx,
-          line,
-          assets.zKeySprite,
-          !state.joystickActive,
-          activeDialogue.speakerPortrait,
-          assets.portraitsAtlas
-        );
-      } else if (nearbyInteractable && !state.joystickActive) {
-        drawInteractionPrompt(ctx, nearbyInteractable.promptText, assets.zKeySprite);
+      if (!state.worldFadedToBlack) {
+        drawHealthBar(ctx, player);
+        drawEquippedItemHud(ctx, player);
       }
+      drawDialogueOverlay(ctx, state, assets);
       return;
     }
     if (state.currentLevelId !== "level-outside") {
@@ -6571,6 +7189,12 @@
         state.levels["level-basement"].toiletCutscene.timer
       );
     }
+    if (state.projectiles.length > 0) {
+      ctx.fillStyle = "#fde047";
+      for (const p of state.projectiles) {
+        ctx.fillRect(Math.round(p.x - 1), Math.round(p.y - 1), 3, 3);
+      }
+    }
     if (state.debugMode) {
       drawCollisionDebugOutlines(ctx, state);
     }
@@ -6584,19 +7208,11 @@
     if (state.currentLevelId === "level-outside" && !state.worldFadedToBlack) {
       drawSnowfall(ctx, elapsedTime, camera);
     }
-    if (activeDialogue) {
-      const line = activeDialogue.lines[activeDialogue.currentIndex] ?? "";
-      drawDialogueBox(
-        ctx,
-        line,
-        assets.zKeySprite,
-        !state.joystickActive,
-        activeDialogue.speakerPortrait,
-        assets.portraitsAtlas
-      );
-    } else if (nearbyInteractable && !state.joystickActive) {
-      drawInteractionPrompt(ctx, nearbyInteractable.promptText, assets.zKeySprite);
+    if (!state.worldFadedToBlack) {
+      drawHealthBar(ctx, player);
+      drawEquippedItemHud(ctx, player);
     }
+    drawDialogueOverlay(ctx, state, assets);
   }
 
   // src/rendering/webglRenderer.ts
@@ -8130,6 +8746,12 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           bounds: { ...ROOF_CHIMNEY_BOUNDS },
           promptText: "Climb down chimney",
           dialogueLines: []
+        },
+        {
+          id: "roof-rudolph",
+          bounds: { ...ROOF_RUDOLPH_BOUNDS },
+          promptText: "Inspect Rudolph",
+          dialogueLines: []
         }
       ];
     }
@@ -8565,6 +9187,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           () => {
             ctx.loadLevel("level-basement");
             player.blinkTimer = 2;
+            ctx.damagePlayer?.(30);
           },
           "Arjan"
         );
@@ -8579,6 +9202,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           () => {
             ctx.loadLevel("level-basement");
             player.blinkTimer = 2;
+            ctx.damagePlayer?.(30);
           },
           "Olexa"
         );
@@ -8603,6 +9227,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           () => {
             ctx.loadLevel("level-basement");
             player.blinkTimer = 2;
+            ctx.damagePlayer?.(30);
           },
           "Hanneloes"
         );
@@ -8711,6 +9336,44 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         player.renderYaw = Math.PI / 2;
         player.jumpOffset = 0;
         player.jumpVelocity = 0;
+        return true;
+      }
+      if (interactableId === "roof-rudolph") {
+        ctx.openDialogue(
+          [
+            "RUDOLPH?!! WHO DID THIS?",
+            "...",
+            "This is no longer about saving christmas...",
+            "This is about REVENGE!",
+            "I will find out who did this, if it is the last thing I'll ever do."
+          ],
+          () => {
+            ctx.openDialogue(
+              ["ACHIEVEMENT UNLOCKED: Murder-mystery genre unlocked."],
+              () => {
+                ctx.openDialogue(["I'm dreaming of a RED CHRISTMAS."], () => {
+                  ctx.openDialogue(
+                    [
+                      "ACHIEVEMENT UNLOCKED: Action genre unlocked. Viewer discretion is advised."
+                    ],
+                    () => {
+                      if (!player.unlockedUzi) {
+                        player.unlockedUzi = true;
+                        selectPlayerEquipmentSlot(player, 2);
+                      }
+                    },
+                    void 0,
+                    false,
+                    "achievement"
+                  );
+                });
+              },
+              void 0,
+              false,
+              "achievement"
+            );
+          }
+        );
         return true;
       }
       if (interactableId === "roof-chimney") {
@@ -8888,6 +9551,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     const nextLevel = state.levels[levelId];
     state.map = nextLevel.map;
     state.footprints = [];
+    state.projectiles = [];
     state.nearbyInteractable = null;
     state.activeDialogue = null;
     nextLevel.enter(state.player);
@@ -9001,6 +9665,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       motorcycle: levelOutside.motorcycle,
       throwers: levelOutside.throwers,
       snowballs: levelOutside.snowballs,
+      projectiles: [],
       hasLadder: levelOutside.hasLadder,
       ladderPlaced: levelOutside.ladderPlaced,
       isOnRoof: levelOutside.isOnRoof,
@@ -9010,6 +9675,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       interactables: activeLevel.getInteractables(player),
       nearbyInteractable: null,
       activeDialogue,
+      gameOver: false,
       elapsedTime: 0,
       debugMode,
       cheatMode,
@@ -9018,6 +9684,32 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     };
     debugLog(`Loaded level: ${initialLevelId}`);
     return state;
+  }
+  function restartEntireGame(state) {
+    const prevJoystick = state.joystickActive;
+    const fresh = createGameState({
+      initialLevelId: "level-outside",
+      debug: state.debugMode,
+      cheat: state.cheatMode,
+      secretSantaDB: state.secretSantaDB
+    });
+    Object.assign(state, fresh);
+    state.joystickActive = prevJoystick;
+  }
+  function damagePlayer(state, amount) {
+    applyPlayerDamage(state.player, amount);
+    if (state.player.health <= 0 && !state.cheatMode) {
+      state.gameOver = true;
+      state.nearbyInteractable = null;
+      state.activeDialogue = {
+        lines: ["Try again?"],
+        currentIndex: 0,
+        variant: "gameover",
+        onClose: () => {
+          restartEntireGame(state);
+        }
+      };
+    }
   }
   function resetAfterSnowballHit(state) {
     state.player.x = PLAYER_START_X;
@@ -9037,6 +9729,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     state.motorcycle = createMotorcycle();
     state.throwers = createDrivewayThrowers();
     state.snowballs = [];
+    state.projectiles = [];
     state.hasLadder = false;
     state.ladderPlaced = false;
     state.isOnRoof = false;
@@ -9045,6 +9738,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     state.activeDialogue = null;
     syncOutsideToLevel(state);
     refreshInteractables(state);
+    damagePlayer(state, 30);
   }
   function isMainHouseTile(col, row) {
     return col >= 4 && col <= 16 && row >= 3 && row <= 9;
@@ -9128,6 +9822,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         state.player.isMoving = false;
         state.player.walkTimer = 0;
         state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
+        damagePlayer(state, 10);
       }
       refreshInteractables(state);
       return true;
@@ -9211,11 +9906,86 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     return false;
   }
+  function updateProjectiles(state, dtSeconds) {
+    if (state.projectiles.length === 0 || dtSeconds <= 0) {
+      return;
+    }
+    const mapWidth = state.map.cols * state.map.tileSize;
+    const mapHeight = state.map.rows * state.map.tileSize;
+    const activeLevel = getActiveLevel(state);
+    const obstacles = activeLevel.getSolidObstacles();
+    for (let i = state.projectiles.length - 1; i >= 0; i--) {
+      const p = state.projectiles[i];
+      p.x += p.vx * dtSeconds;
+      p.y += p.vy * dtSeconds;
+      if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
+        state.projectiles.splice(i, 1);
+        continue;
+      }
+      const projRect = {
+        x: p.x - 1.5,
+        y: p.y - 1.5,
+        width: 3,
+        height: 3
+      };
+      if (p.fromRoof) {
+        const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
+        const hitTallTreeOrEdge = isRectCollidingWithMap(
+          state.map,
+          projRect.x,
+          projRect.y,
+          projRect.width,
+          projRect.height,
+          true,
+          (c, r) => c >= 0 && r >= 0 && c < state.map.cols && r < state.map.rows && state.map.tiles[r][c] !== 1 /* Tree */
+        );
+        if (hitChimney || hitTallTreeOrEdge) {
+          state.projectiles.splice(i, 1);
+        }
+        continue;
+      }
+      const hitMap = isRectCollidingWithMap(
+        state.map,
+        projRect.x,
+        projRect.y,
+        projRect.width,
+        projRect.height,
+        true
+      );
+      const hitObstacle = obstacles.some((obs) => rectsIntersect(projRect, obs));
+      const hitOutsideDynamic = state.currentLevelId === "level-outside" && (rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle) || state.throwers.some((t) => rectsIntersect(projRect, t)));
+      if (hitMap || hitObstacle || hitOutsideDynamic) {
+        state.projectiles.splice(i, 1);
+      }
+    }
+  }
+  function fireUziProjectile(state) {
+    const player = state.player;
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const cx = player.x + player.width * 0.5;
+    const cy = player.y + player.height * 0.5;
+    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
+    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
+    state.projectiles.push({
+      x: cx + Math.cos(aimYaw) * 6,
+      y: cy + Math.sin(aimYaw) * 6,
+      z: groundZ + (player.jumpOffset ?? 0) + 8.5,
+      vx: Math.cos(aimYaw) * UZI_PROJECTILE_SPEED,
+      vy: Math.sin(aimYaw) * UZI_PROJECTILE_SPEED,
+      yaw: aimYaw,
+      fromRoof: onRoof
+    });
+  }
   function updateGameState(state, input, dtSeconds) {
     const safeDt = Math.max(0, dtSeconds);
     state.elapsedTime += safeDt;
     dtSeconds = safeDt;
+    const prevUziCooldown = state.player.uziFireCooldown;
+    updatePlayerHealthAndTimers(state.player, dtSeconds);
+    const uziCooldownRemainder = prevUziCooldown > 0 ? Math.max(0, dtSeconds - prevUziCooldown) : 0;
     const actionPressed = consumeActionPress(input);
+    const attackPressed = consumeAttackPress(input);
+    const slotPressed = consumeSlotPress(input);
     if (input.pointerClick) {
       input.pointerClick = null;
     }
@@ -9236,7 +10006,11 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       }
       return;
     }
+    if (slotPressed !== null) {
+      selectPlayerEquipmentSlot(state.player, slotPressed);
+    }
     updatePlayerJump(state.player, dtSeconds);
+    updateProjectiles(state, dtSeconds);
     for (const door of state.levels["level-basement"].openedDoors) {
       door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
     }
@@ -9245,15 +10019,17 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     const transitionCtx = {
       loadLevel: (nextId) => loadLevel(state, nextId),
-      openDialogue: (lines, onClose, speakerPortrait, unclosable) => {
+      openDialogue: (lines, onClose, speakerPortrait, unclosable, variant) => {
         state.activeDialogue = {
           lines,
           currentIndex: 0,
           onClose,
           speakerPortrait,
-          unclosable
+          unclosable,
+          variant
         };
       },
+      damagePlayer: (amount) => damagePlayer(state, amount),
       getSecretSantaReceiver: () => {
         if (!state.secretSantaDB) return void 0;
         const playerName = state.secretSantaDB.playerName;
@@ -9337,33 +10113,47 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       );
     }
     refreshInteractables(state);
-    if (actionPressed) {
-      if (state.nearbyInteractable) {
-        const target = state.nearbyInteractable;
-        if (state.currentLevelId === "level-outside") {
-          syncOutsideToLevel(state);
+    if (actionPressed && state.nearbyInteractable) {
+      const target = state.nearbyInteractable;
+      if (state.currentLevelId === "level-outside") {
+        syncOutsideToLevel(state);
+      }
+      const activeLevel = getActiveLevel(state);
+      const prevLevelId = state.currentLevelId;
+      const handledByLevel = activeLevel.handleInteraction(
+        target.id,
+        state.player,
+        transitionCtx
+      );
+      if (handledByLevel) {
+        if (prevLevelId === "level-outside" && state.currentLevelId === "level-outside") {
+          syncLevelToOutside(state);
         }
-        const activeLevel = getActiveLevel(state);
-        const prevLevelId = state.currentLevelId;
-        const handledByLevel = activeLevel.handleInteraction(
-          target.id,
-          state.player,
-          transitionCtx
-        );
-        if (handledByLevel) {
-          if (prevLevelId === "level-outside" && state.currentLevelId === "level-outside") {
-            syncLevelToOutside(state);
-          }
-          refreshInteractables(state);
-        } else if (target.dialogueLines.length > 0) {
-          state.activeDialogue = {
-            lines: target.dialogueLines,
-            currentIndex: 0,
-            speakerPortrait: target.speakerPortrait
-          };
-        }
-      } else {
+        refreshInteractables(state);
+      } else if (target.dialogueLines.length > 0) {
+        state.activeDialogue = {
+          lines: target.dialogueLines,
+          currentIndex: 0,
+          speakerPortrait: target.speakerPortrait
+        };
+      }
+      return;
+    }
+    if (state.player.equippedItem === "unarmed") {
+      if (attackPressed) {
+        triggerPlayerPunch(state.player);
+      }
+      if (actionPressed && !state.nearbyInteractable) {
         triggerPlayerJump(state.player);
+      }
+    } else if (state.player.equippedItem === "uzi") {
+      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
+      if (wantsToFire && state.player.uziFireCooldown <= 1e-6) {
+        state.player.uziFireCooldown = Math.max(
+          0.01,
+          UZI_FIRE_INTERVAL_SECONDS - uziCooldownRemainder
+        );
+        fireUziProjectile(state);
       }
     }
   }

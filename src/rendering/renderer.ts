@@ -1,7 +1,13 @@
 import { GameAssets } from '../assets';
 import { Cat } from '../entities/cat';
 import { Dog } from '../entities/dog';
-import { Direction, Footprint, Rect } from '../entities/player';
+import {
+  Direction,
+  Footprint,
+  MAX_PLAYER_HEALTH,
+  Player,
+  Rect,
+} from '../entities/player';
 import { GameState, MotorcycleState } from '../world/gameState';
 import {
   DIANA_DISTRACTED_KEY,
@@ -359,6 +365,365 @@ function drawDialogueBox(
     );
   }
   ctx.restore();
+}
+
+function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
+  const x = 8;
+  const y = 8;
+  const innerW = 88;
+  const innerH = 8;
+  const outerW = innerW + 4;
+  const outerH = innerH + 4;
+
+  ctx.save();
+  // Drop shadow & frame
+  ctx.fillStyle = 'rgba(8, 12, 20, 0.7)';
+  ctx.fillRect(x + 1, y + 1, outerW, outerH);
+  ctx.fillStyle = '#18080e';
+  ctx.fillRect(x, y, outerW, outerH);
+  ctx.strokeStyle = '#e8f0ff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, outerW - 1, outerH - 1);
+
+  const bx = x + 2;
+  const by = y + 2;
+  const healthRatio = Math.max(0, Math.min(1, player.health / MAX_PLAYER_HEALTH));
+  const delayedRatio = Math.max(
+    0,
+    Math.min(1, player.delayedHealth / MAX_PLAYER_HEALTH)
+  );
+  const healthPx =
+    player.health > 0 ? Math.max(1, Math.round(innerW * healthRatio)) : 0;
+  const delayedPx =
+    player.delayedHealth > 0 ? Math.max(1, Math.round(innerW * delayedRatio)) : 0;
+
+  // Bright red active health bar
+  if (healthPx > 0) {
+    ctx.fillStyle = '#ef233c';
+    ctx.fillRect(bx, by, healthPx, innerH);
+    ctx.fillStyle = '#ff6b6b';
+    ctx.fillRect(bx, by, healthPx, 2);
+  }
+
+  // Darker red delta highlight on top whenever delayedHealth != health
+  if (player.delayedHealth !== player.health) {
+    const startPx = Math.min(healthPx, delayedPx);
+    const endPx = Math.max(healthPx, delayedPx);
+    const deltaW = Math.max(1, endPx - startPx);
+    ctx.fillStyle = '#7f0b18';
+    ctx.fillRect(bx + startPx, by, deltaW, innerH);
+    ctx.fillStyle = '#a41623';
+    ctx.fillRect(bx + startPx, by, deltaW, 2);
+  }
+
+  ctx.restore();
+}
+
+function drawUnarmedArmsIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  punching: boolean,
+  scale = 1
+): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+
+  // Left arm sleeve + cuff + mitten
+  const leftReach = punching ? -2 : 0;
+  ctx.fillStyle = '#181420';
+  ctx.fillRect(-10, -2 + leftReach, 6, 9);
+  ctx.fillStyle = '#d62828';
+  ctx.fillRect(-9, -1 + leftReach, 4, 7);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(-9, -2 + leftReach, 4, 2);
+  ctx.fillStyle = '#e2e8f0';
+  ctx.fillRect(-9, -5 + leftReach, 4, 3);
+
+  // Right arm sleeve + cuff + mitten
+  const rightReach = punching ? -4 : 0;
+  ctx.fillStyle = '#181420';
+  ctx.fillRect(4, -2 + rightReach, 6, 9);
+  ctx.fillStyle = '#d62828';
+  ctx.fillRect(5, -1 + rightReach, 4, 7);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(5, -2 + rightReach, 4, 2);
+  ctx.fillStyle = '#e2e8f0';
+  ctx.fillRect(5, -5 + rightReach, 4, 3);
+
+  ctx.restore();
+}
+
+function drawUziIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  scale = 1
+): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+
+  // Santa sleeve & cuff holding grip
+  ctx.fillStyle = '#d62828';
+  ctx.fillRect(-8, 2, 5, 6);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(-7, 1, 4, 2);
+
+  // Uzi receiver & barrel
+  ctx.fillStyle = '#111622';
+  ctx.fillRect(-8, -5, 14, 5);
+  ctx.fillStyle = '#475569';
+  ctx.fillRect(-7, -4, 12, 3);
+  // Front barrel
+  ctx.fillStyle = '#1e293b';
+  ctx.fillRect(6, -4, 5, 2);
+  // Vertical grip & magazine
+  ctx.fillStyle = '#111622';
+  ctx.fillRect(-4, 0, 4, 6);
+  ctx.fillStyle = '#334155';
+  ctx.fillRect(-3, 0, 2, 7);
+  // Hand/mitten over grip
+  ctx.fillStyle = '#e2e8f0';
+  ctx.fillRect(-5, -1, 4, 3);
+  // Top sight & bolt knob
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillRect(-5, -6, 3, 1);
+  ctx.fillRect(4, -6, 1, 1);
+
+  ctx.restore();
+}
+
+function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Player): void {
+  const boxW = 48;
+  const boxH = 34;
+  const boxX = ctx.canvas.width - boxW - 8;
+  const boxY = 8;
+
+  ctx.save();
+  drawSnesFrame(ctx, boxX, boxY, boxW, boxH);
+
+  const iconCenterX = boxX + Math.floor(boxW / 2);
+  const iconCenterY = boxY + 13;
+
+  if (player.equippedItem === 'uzi') {
+    drawUziIcon(ctx, iconCenterX, iconCenterY, 1);
+    const label = 'UZI';
+    const tw = measurePixelText(label);
+    drawPixelText(
+      ctx,
+      label,
+      boxX + Math.round((boxW - tw) / 2),
+      boxY + 23,
+      '#ffd166',
+      '#0c101a'
+    );
+  } else {
+    drawUnarmedArmsIcon(ctx, iconCenterX, iconCenterY + 1, player.punchTimer > 0, 1);
+    const label = 'UNARMED';
+    const tw = measurePixelText(label);
+    drawPixelText(
+      ctx,
+      label,
+      boxX + Math.round((boxW - tw) / 2),
+      boxY + 23,
+      '#e8f0ff',
+      '#0c101a'
+    );
+  }
+
+  // Only show slot numbers once Uzi is unlocked so the twist stays hidden before Rudolph
+  if (player.unlockedUzi) {
+    const slotSize = 20;
+    const gap = 3;
+    const slotsTotalW = slotSize * 2 + gap;
+    const slotsStartX = boxX + boxW - slotsTotalW;
+    const slotsY = boxY + boxH + 4;
+
+    // Slot 1: Unarmed
+    drawSnesFrame(ctx, slotsStartX, slotsY, slotSize, slotSize);
+    if (player.equippedItem === 'unarmed') {
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(slotsStartX + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
+    }
+    drawUnarmedArmsIcon(
+      ctx,
+      slotsStartX + Math.floor(slotSize / 2),
+      slotsY + 11,
+      false,
+      0.7
+    );
+    drawPixelText(ctx, '1', slotsStartX + 3, slotsY + 2, '#ffd166', '#0c101a');
+
+    // Slot 2: Uzi
+    const slot2X = slotsStartX + slotSize + gap;
+    drawSnesFrame(ctx, slot2X, slotsY, slotSize, slotSize);
+    if (player.equippedItem === 'uzi') {
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(slot2X + 1.5, slotsY + 1.5, slotSize - 3, slotSize - 3);
+    }
+    drawUziIcon(ctx, slot2X + Math.floor(slotSize / 2), slotsY + 11, 0.7);
+    drawPixelText(ctx, '2', slot2X + 3, slotsY + 2, '#ffd166', '#0c101a');
+  }
+
+  ctx.restore();
+}
+
+function drawAchievementBanner(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  zKeySprite: HTMLImageElement,
+  showHint: boolean
+): void {
+  ctx.save();
+  // Subtle backdrop focus
+  ctx.fillStyle = 'rgba(8, 10, 18, 0.55)';
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+  const prefix = 'ACHIEVEMENT UNLOCKED:';
+  const hasPrefix = text.startsWith(prefix);
+  const titleText = hasPrefix ? 'ACHIEVEMENT UNLOCKED' : 'ACHIEVEMENT';
+  const bodyText = hasPrefix ? text.slice(prefix.length).trim() : text;
+
+  const boxW = ctx.canvas.width - 20;
+  const bodyLines = wrapPixelText(bodyText, boxW - 20);
+  const titleScale = 2;
+  const lineH = 12;
+  const boxH = 38 + bodyLines.length * lineH + (showHint ? 16 : 8);
+  const boxX = Math.round((ctx.canvas.width - boxW) / 2);
+  const boxY = Math.round((ctx.canvas.height - boxH) / 2);
+
+  // Dark gold-trimmed center plaque
+  ctx.fillStyle = 'rgba(10, 14, 26, 0.96)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = '#ffd166';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(boxX + 1, boxY + 1, boxW - 2, boxH - 2);
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(boxX + 3.5, boxY + 3.5, boxW - 7, boxH - 7);
+
+  // Large 2x centered title in middle of screen
+  const rawTitleW = measurePixelText(titleText);
+  ctx.save();
+  ctx.scale(titleScale, titleScale);
+  drawPixelText(
+    ctx,
+    titleText,
+    Math.round((ctx.canvas.width / titleScale - rawTitleW) / 2),
+    Math.round((boxY + 10) / titleScale),
+    '#ffd166',
+    '#4a1d06'
+  );
+  ctx.restore();
+
+  // Centered achievement description lines
+  bodyLines.forEach((line, idx) => {
+    const lineW = measurePixelText(line);
+    const lx = Math.round((ctx.canvas.width - lineW) / 2);
+    const ly = boxY + 32 + idx * lineH;
+    drawPixelText(ctx, line, lx, ly, '#ffffff', '#0c101a');
+  });
+
+  if (showHint) {
+    const prompt = 'SPACE';
+    const pw = measurePixelText(prompt);
+    drawPixelText(
+      ctx,
+      prompt,
+      boxX + boxW - pw - 22,
+      boxY + boxH - 16,
+      '#cbd5e1',
+      '#0c101a'
+    );
+    ctx.drawImage(zKeySprite, boxX + boxW - 19, boxY + boxH - 18, 12, 12);
+  }
+
+  ctx.restore();
+}
+
+function drawGameOverScreen(
+  ctx: CanvasRenderingContext2D,
+  promptLine: string
+): void {
+  ctx.save();
+  ctx.fillStyle = 'rgba(20, 4, 8, 0.9)';
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+  const title = 'GAME OVER';
+  const titleScale = 3;
+  const rawTitleW = measurePixelText(title);
+  ctx.save();
+  ctx.scale(titleScale, titleScale);
+  drawPixelText(
+    ctx,
+    title,
+    Math.round((ctx.canvas.width / titleScale - rawTitleW) / 2),
+    Math.round(62 / titleScale),
+    '#ef233c',
+    '#2b0509'
+  );
+  ctx.restore();
+
+  const promptScale = 2;
+  const rawPromptW = measurePixelText(promptLine);
+  ctx.save();
+  ctx.scale(promptScale, promptScale);
+  drawPixelText(
+    ctx,
+    promptLine,
+    Math.round((ctx.canvas.width / promptScale - rawPromptW) / 2),
+    Math.round(118 / promptScale),
+    '#ffffff',
+    '#0c101a'
+  );
+  ctx.restore();
+
+  const hint = 'Press SPACE or tap to restart';
+  const hintW = measurePixelText(hint);
+  drawPixelText(
+    ctx,
+    hint,
+    Math.round((ctx.canvas.width - hintW) / 2),
+    158,
+    '#ffd166',
+    '#0c101a'
+  );
+
+  ctx.restore();
+}
+
+function drawDialogueOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  assets: GameAssets
+): void {
+  const activeDialogue = state.activeDialogue;
+  if (!activeDialogue) {
+    if (state.nearbyInteractable && !state.joystickActive) {
+      drawInteractionPrompt(ctx, state.nearbyInteractable.promptText, assets.zKeySprite);
+    }
+    return;
+  }
+
+  const line = activeDialogue.lines[activeDialogue.currentIndex] ?? '';
+  if (activeDialogue.variant === 'gameover') {
+    drawGameOverScreen(ctx, line);
+  } else if (activeDialogue.variant === 'achievement') {
+    drawAchievementBanner(ctx, line, assets.zKeySprite, !state.joystickActive);
+  } else {
+    drawDialogueBox(
+      ctx,
+      line,
+      assets.zKeySprite,
+      !state.joystickActive,
+      activeDialogue.speakerPortrait,
+      assets.portraitsAtlas
+    );
+  }
 }
 
 /**
@@ -1197,8 +1562,6 @@ export function renderGame(
     dog,
     throwers,
     snowballs,
-    nearbyInteractable,
-    activeDialogue,
     elapsedTime,
   } = state;
 
@@ -1214,20 +1577,12 @@ export function renderGame(
       renderSoftware3DScene(ctx, state, cam);
     }
 
-    // 2D HUD overlay on top of the 3D scene (Portraits, SNES Dialogue Boxes, Interaction Prompts)
-    if (activeDialogue) {
-      const line = activeDialogue.lines[activeDialogue.currentIndex] ?? '';
-      drawDialogueBox(
-        ctx,
-        line,
-        assets.zKeySprite,
-        !state.joystickActive,
-        activeDialogue.speakerPortrait,
-        assets.portraitsAtlas
-      );
-    } else if (nearbyInteractable && !state.joystickActive) {
-      drawInteractionPrompt(ctx, nearbyInteractable.promptText, assets.zKeySprite);
+    // 2D HUD overlay on top of the 3D scene (Health Bar, Equipped Item, Dialogue, Interaction Prompts)
+    if (!state.worldFadedToBlack) {
+      drawHealthBar(ctx, player);
+      drawEquippedItemHud(ctx, player);
     }
+    drawDialogueOverlay(ctx, state, assets);
     return;
   }
 
@@ -1703,6 +2058,14 @@ export function renderGame(
     );
   }
 
+  // Draw Uzi projectiles in 2D fallback mode
+  if (state.projectiles.length > 0) {
+    ctx.fillStyle = '#fde047';
+    for (const p of state.projectiles) {
+      ctx.fillRect(Math.round(p.x - 1), Math.round(p.y - 1), 3, 3);
+    }
+  }
+
   // Debug overlay: render green collision bounding boxes for all collidable objects and the player
   if (state.debugMode) {
     drawCollisionDebugOutlines(ctx, state);
@@ -1723,18 +2086,10 @@ export function renderGame(
     drawSnowfall(ctx, elapsedTime, camera);
   }
 
-  // Screen-space UI overlay: Dialogue box OR bottom Z-key interaction prompt
-  if (activeDialogue) {
-    const line = activeDialogue.lines[activeDialogue.currentIndex] ?? '';
-    drawDialogueBox(
-      ctx,
-      line,
-      assets.zKeySprite,
-      !state.joystickActive,
-      activeDialogue.speakerPortrait,
-      assets.portraitsAtlas
-    );
-  } else if (nearbyInteractable && !state.joystickActive) {
-    drawInteractionPrompt(ctx, nearbyInteractable.promptText, assets.zKeySprite);
+  // Screen-space UI overlay: Health Bar, Equipped Item HUD, Dialogue/Achievement/GameOver
+  if (!state.worldFadedToBlack) {
+    drawHealthBar(ctx, player);
+    drawEquippedItemHud(ctx, player);
   }
+  drawDialogueOverlay(ctx, state, assets);
 }

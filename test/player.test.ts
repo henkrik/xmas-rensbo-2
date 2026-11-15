@@ -25,9 +25,14 @@ import {
 import {
   createPlayer,
   FOOTPRINT_DURATION_SECONDS,
+  MAX_PLAYER_HEALTH,
   PLAYER_JUMP_HEIGHT,
+  PUNCH_DURATION_SECONDS,
+  setPlayerHealth,
   triggerPlayerJump,
   updatePlayer,
+  UZI_EQUIP_DURATION_SECONDS,
+  UZI_PROJECTILE_SPEED,
 } from '../src/entities/player';
 import { ConeOfSight, LineOfSight } from '../src/entities/sight';
 import { HIT_BLINK_DURATION_SECONDS } from '../src/entities/snowball';
@@ -59,6 +64,7 @@ import {
 } from '../src/rendering/textures3d';
 import {
   createGameState,
+  damagePlayer,
   loadLevel,
   parseLevelQueryParam,
   refreshInteractables,
@@ -85,6 +91,7 @@ import {
   SIMON_DISTRACTED_KEY,
   SIMON_PRESENT_TAKEN_KEY,
   UPSTAIRS_ALBIN_START_Y,
+  UPSTAIRS_ALBIN_X,
   UPSTAIRS_BEDROOM_DOOR_BOUNDS,
   UPSTAIRS_BEDROOM_HIDDEN_MASK,
   UPSTAIRS_COMPUTER_BOUNDS,
@@ -124,6 +131,7 @@ import {
   PLAYER_START_Y,
   ROOF_CHIMNEY_BOUNDS,
   ROOF_LADDER_BOUNDS,
+  ROOF_RUDOLPH_BOUNDS,
   ROOF_WALK_Y,
   STARTER_MAP,
   TILE_SIZE,
@@ -3268,5 +3276,244 @@ Tanja -> Alex
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines).toEqual(["It's locked."]);
+  });
+
+  it('tracks health, 1-second delayedHealth catch-up, 30hp/10hp damage, Game Over restart, and ?cheat immunity', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+
+    expect(state.player.health).toBe(MAX_PLAYER_HEALTH);
+    expect(state.player.delayedHealth).toBe(MAX_PLAYER_HEALTH);
+
+    // 1. Motorcycle crash deals 10 hp without respawn and sets delayedHealthRate = 10/sec (1 second catch-up)
+    state.motorcycle.status = 'driving';
+    state.motorcycle.x = MOTORCYCLE_CRASH_X - 1;
+    updateGameState(state, input, 0.1);
+    expect(state.motorcycle.status).toBe('crashed');
+    expect(state.player.health).toBe(90);
+    expect(state.player.delayedHealth).toBe(100);
+
+    // After 0.5 seconds, delayedHealth moves halfway from 100 toward 90 (~95)
+    updateGameState(state, input, 0.5);
+    expect(state.player.delayedHealth).toBeCloseTo(95, 2);
+
+    // Another health change recalculates rate so delayedHealth still reaches health in 1.0 second
+    setPlayerHealth(state.player, 65);
+    expect(state.player.delayedHealthRate).toBeCloseTo(30, 2);
+    updateGameState(state, input, 0.5);
+    expect(state.player.delayedHealth).toBeCloseTo(80, 2);
+    updateGameState(state, input, 0.5);
+    expect(state.player.delayedHealth).toBeCloseTo(65, 4);
+
+    // 2. Respawn hazards deal 30 hp (snowball/outdoor reset, basement NPCs, upstairs NPCs)
+    const outsideRespawn = createGameState({ showIntroDialogue: false });
+    resetAfterSnowballHit(outsideRespawn);
+    expect(outsideRespawn.player.health).toBe(70);
+
+    const basementState = createGameState({ initialLevelId: 'level-basement' });
+    const basement = basementState.levels['level-basement'];
+    basementState.player.x = basement.windowNpc.x;
+    basementState.player.y = basement.windowNpc.y - TILE_SIZE;
+    updateGameState(basementState, createEmptyInput(), 0.01);
+    expect(basementState.activeDialogue?.speakerPortrait).toBe('Arjan');
+    const spaceInput = createEmptyInput();
+    applyKeyEvent(spaceInput, 'Space', true);
+    updateGameState(basementState, spaceInput, 0.01);
+    applyKeyEvent(spaceInput, 'Space', false);
+    expect(basementState.player.health).toBe(70);
+
+    const upstairsState = createGameState({ initialLevelId: 'level-upstairs' });
+    upstairsState.player.x = UPSTAIRS_ALBIN_X;
+    upstairsState.player.y = UPSTAIRS_ALBIN_START_Y + TILE_SIZE;
+    updateGameState(upstairsState, createEmptyInput(), 0.01);
+    expect(upstairsState.activeDialogue?.speakerPortrait).toBe('Albin');
+    applyKeyEvent(spaceInput, 'Space', true);
+    updateGameState(upstairsState, spaceInput, 0.01);
+    applyKeyEvent(spaceInput, 'Space', false);
+    expect(upstairsState.player.health).toBe(70);
+
+    // 3. Reaching <= 0 hp triggers Game Over ("Try again?") and advancing restarts from level-outside
+    damagePlayer(basementState, 30); // 40
+    damagePlayer(basementState, 30); // 10
+    damagePlayer(basementState, 30); // 0
+    expect(basementState.player.health).toBe(0);
+    expect(basementState.gameOver).toBe(true);
+    expect(basementState.activeDialogue?.variant).toBe('gameover');
+    expect(basementState.activeDialogue?.lines).toEqual(['Try again?']);
+
+    // Advancing Game Over dialogue restarts the entire game from outside with 100 HP
+    applyKeyEvent(spaceInput, 'Space', true);
+    updateGameState(basementState, spaceInput, 0.01);
+    applyKeyEvent(spaceInput, 'Space', false);
+    expect(basementState.gameOver).toBe(false);
+    expect(basementState.currentLevelId).toBe('level-outside');
+    expect(basementState.player.health).toBe(MAX_PLAYER_HEALTH);
+    expect(basementState.player.delayedHealth).toBe(MAX_PLAYER_HEALTH);
+    expect(basementState.activeDialogue).toBeNull();
+
+    // 4. With ?cheat enabled, running out of health does NOT trigger Game Over
+    const cheatState = createGameState({ cheat: true });
+    damagePlayer(cheatState, 120);
+    expect(cheatState.player.health).toBe(0);
+    expect(cheatState.gameOver).toBe(false);
+    expect(cheatState.activeDialogue).toBeNull();
+  });
+
+  it('supports unarmed punch on F, Rudolph corpse murder-mystery achievement chain, Uzi unlock/0.5s equip anim, 1-9 slots, and 5/s @ 4 tiles/s projectiles', () => {
+    const state = createGameState({ showIntroDialogue: false });
+    const input = createEmptyInput();
+
+    // 1. Starts unarmed; slot 2 (Uzi) cannot be equipped before unlocking it
+    expect(state.player.equippedItem).toBe('unarmed');
+    expect(state.player.unlockedUzi).toBe(false);
+    applyKeyEvent(input, 'Digit2', true);
+    applyKeyEvent(input, 'Digit2', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('unarmed');
+
+    // F triggers punching animation when unarmed
+    applyKeyEvent(input, 'KeyF', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'KeyF', false);
+    expect(state.player.punchTimer).toBeCloseTo(PUNCH_DURATION_SECONDS, 4);
+    expect(state.projectiles.length).toBe(0);
+
+    // 2. Verify Rudolph corpse mesh is built into the outside roof scene
+    const staticOutside = getStaticLevelMesh('level-outside', state.map);
+    expect(staticOutside.vertexCount).toBeGreaterThan(0);
+
+    // 3. Move Santa onto the roof next to Rudolph and inspect him
+    state.isOnRoof = true;
+    state.player.x = ROOF_RUDOLPH_BOUNDS.x;
+    state.player.y = ROOF_RUDOLPH_BOUNDS.y + 4;
+    updateGameState(state, input, 0.01);
+    expect(state.nearbyInteractable?.id).toBe('roof-rudolph');
+
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+
+    // Regular 5-line monologue about Rudolph
+    expect(state.activeDialogue?.variant).toBeUndefined();
+    expect(state.activeDialogue?.lines).toEqual([
+      'RUDOLPH?!! WHO DID THIS?',
+      '...',
+      'This is no longer about saving christmas...',
+      'This is about REVENGE!',
+      "I will find out who did this, if it is the last thing I'll ever do.",
+    ]);
+
+    for (let i = 0; i < 5; i++) {
+      applyKeyEvent(input, 'Space', true);
+      updateGameState(state, input, 0.01);
+      applyKeyEvent(input, 'Space', false);
+    }
+
+    // Special centered Achievement 1
+    expect(state.activeDialogue?.variant).toBe('achievement');
+    expect(state.activeDialogue?.lines).toEqual([
+      'ACHIEVEMENT UNLOCKED: Murder-mystery genre unlocked.',
+    ]);
+
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+
+    // Regular dialogue: "I'm dreaming of a RED CHRISTMAS."
+    expect(state.activeDialogue?.variant).toBeUndefined();
+    expect(state.activeDialogue?.lines).toEqual([
+      "I'm dreaming of a RED CHRISTMAS.",
+    ]);
+
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+
+    // Special centered Achievement 2
+    expect(state.activeDialogue?.variant).toBe('achievement');
+    expect(state.activeDialogue?.lines).toEqual([
+      'ACHIEVEMENT UNLOCKED: Action genre unlocked. Viewer discretion is advised.',
+    ]);
+
+    // Closing the second achievement unlocks & equips Uzi with 0.5s sky-to-forward animation
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+
+    expect(state.activeDialogue).toBeNull();
+    expect(state.player.unlockedUzi).toBe(true);
+    expect(state.player.equippedItem).toBe('uzi');
+    expect(state.player.uziEquipTimer).toBeCloseTo(
+      UZI_EQUIP_DURATION_SECONDS,
+      4
+    );
+
+    // Build dynamic 3D mesh mid-equip and after equip finishes
+    const midEquipMesh = buildDynamicSceneMeshes(state, 50);
+    expect(midEquipMesh.opaque.vertexCount).toBeGreaterThan(0);
+
+    // Switch back to slot 1 (unarmed), then slot 2 (uzi) via digit keys
+    applyKeyEvent(input, 'Digit1', true);
+    applyKeyEvent(input, 'Digit1', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('unarmed');
+
+    applyKeyEvent(input, 'Digit2', true);
+    applyKeyEvent(input, 'Digit2', false);
+    updateGameState(state, input, 0.01);
+    expect(state.player.equippedItem).toBe('uzi');
+    expect(state.player.uziEquipTimer).toBeCloseTo(
+      UZI_EQUIP_DURATION_SECONDS,
+      4
+    );
+
+    // 4. Firing Uzi in open ground emits 5 projectiles per second (every 0.2s) moving at 4 tiles/s (64 px/s)
+    state.isOnRoof = false;
+    state.player.x = 15 * TILE_SIZE;
+    state.player.y = 25 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2; // aiming straight north (open driveway)
+    state.player.uziEquipTimer = 0;
+
+    applyKeyEvent(input, 'Space', true);
+    let spawned = 0;
+    let prevCount = 0;
+    // Simulate 1.0 second in 0.05s steps holding Space -> 5 shots fired
+    for (let step = 0; step < 20; step++) {
+      updateGameState(state, input, 0.05);
+      if (state.projectiles.length > prevCount) {
+        spawned += state.projectiles.length - prevCount;
+      }
+      prevCount = state.projectiles.length;
+    }
+    applyKeyEvent(input, 'Space', false);
+    expect(spawned).toBe(5);
+    expect(state.projectiles.length).toBe(5);
+
+    // Verify projectile velocity = 4 tiles/sec (64 px/s) and 3D bullet rendering
+    const firstProj = state.projectiles[0];
+    expect(Math.hypot(firstProj.vx, firstProj.vy)).toBeCloseTo(
+      UZI_PROJECTILE_SPEED,
+      4
+    );
+    const bulletScene = buildDynamicSceneMeshes(state, 50);
+    expect(bulletScene.opaque.vertexCount).toBeGreaterThan(0);
+
+    // Moving projectiles collide with obstacles / walls and disappear
+    const wallTestState = createGameState({ showIntroDialogue: false });
+    wallTestState.player.unlockedUzi = true;
+    wallTestState.player.equippedItem = 'uzi';
+    // Stand just south of the Main House south wall (row 9 is solid house wall)
+    wallTestState.player.x = 11 * TILE_SIZE;
+    wallTestState.player.y = 10 * TILE_SIZE + 8;
+    wallTestState.player.yaw = -Math.PI / 2;
+    const shootInput = createEmptyInput();
+    applyKeyEvent(shootInput, 'KeyF', true);
+    updateGameState(wallTestState, shootInput, 0.016);
+    applyKeyEvent(shootInput, 'KeyF', false);
+    expect(wallTestState.projectiles.length).toBe(1);
+
+    // Advance 0.25s (~16px travel north) -> collides with house wall at row 9 and disappears
+    updateGameState(wallTestState, shootInput, 0.25);
+    expect(wallTestState.projectiles.length).toBe(0);
   });
 });

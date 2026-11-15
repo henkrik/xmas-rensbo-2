@@ -1,19 +1,30 @@
 import { debugLog } from '../core/debugConsole';
 import { SecretSantaDB } from '../core/secretSantaDB';
-import { consumeActionPress, InputState } from '../core/input';
+import {
+  consumeActionPress,
+  consumeAttackPress,
+  consumeSlotPress,
+  InputState,
+} from '../core/input';
 import { updateCat } from '../entities/cat';
 import { createDog, Dog, updateDog } from '../entities/dog';
 import { ConeOfSight } from '../entities/sight';
 import {
+  applyPlayerDamage,
   createPlayer,
   Footprint,
   Player,
   Rect,
   rectsIntersect,
+  selectPlayerEquipmentSlot,
   triggerPlayerJump,
+  triggerPlayerPunch,
   updateFootprints,
   updatePlayer,
+  updatePlayerHealthAndTimers,
   updatePlayerJump,
+  UZI_FIRE_INTERVAL_SECONDS,
+  UZI_PROJECTILE_SPEED,
 } from '../entities/player';
 import {
   createDrivewayThrowers,
@@ -24,6 +35,7 @@ import {
 } from '../entities/snowball';
 import {
   DialogueState,
+  DialogueVariant,
   findNearbyInteractable,
   Interactable,
 } from './interaction';
@@ -39,6 +51,7 @@ import { LevelUpstairs } from './levels/levelUpstairs';
 import { LevelPeople } from './levels/levelPeople';
 import { GameLevel, LevelId, LevelTransitionContext } from './levels/types';
 import {
+  directionToYaw,
   getMainHouseRoofElevation,
   getTerrainHeight,
 } from '../rendering/math3d';
@@ -46,6 +59,7 @@ import {
   CLIMB_DURATION_SECONDS,
   DAMAGED_WIRE_HAZARD,
   ELECTROCUTION_DURATION_SECONDS,
+  isRectCollidingWithMap,
   LADDER_BOTTOM_Y,
   LADDER_CLIMB_X,
   MAIN_HOUSE_ROOF_BOUNDS,
@@ -58,10 +72,21 @@ import {
   ROOF_WALK_Y,
   STARTER_MAP,
   TileMap,
+  TileType,
 } from './tilemap';
 
 export { createMotorcycle };
 export type { ClimbingState, MotorcycleState, MotorcycleStatus };
+
+export interface Projectile {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  yaw: number;
+  fromRoof?: boolean;
+}
 
 export interface LevelRegistry {
   'level-outside': LevelOutside;
@@ -80,6 +105,7 @@ export interface GameState {
   motorcycle: MotorcycleState;
   throwers: SnowballThrower[];
   snowballs: Snowball[];
+  projectiles: Projectile[];
   hasLadder: boolean;
   ladderPlaced: boolean;
   isOnRoof: boolean;
@@ -89,6 +115,7 @@ export interface GameState {
   interactables: Interactable[];
   nearbyInteractable: Interactable | null;
   activeDialogue: DialogueState | null;
+  gameOver: boolean;
   elapsedTime: number;
   debugMode: boolean;
   cheatMode: boolean;
@@ -165,6 +192,7 @@ export function loadLevel(state: GameState, levelId: LevelId): void {
   const nextLevel = state.levels[levelId];
   state.map = nextLevel.map;
   state.footprints = [];
+  state.projectiles = [];
   state.nearbyInteractable = null;
   state.activeDialogue = null;
 
@@ -325,6 +353,7 @@ export function createGameState(
     motorcycle: levelOutside.motorcycle,
     throwers: levelOutside.throwers,
     snowballs: levelOutside.snowballs,
+    projectiles: [],
     hasLadder: levelOutside.hasLadder,
     ladderPlaced: levelOutside.ladderPlaced,
     isOnRoof: levelOutside.isOnRoof,
@@ -334,6 +363,7 @@ export function createGameState(
     interactables: activeLevel.getInteractables(player),
     nearbyInteractable: null,
     activeDialogue,
+    gameOver: false,
     elapsedTime: 0,
     debugMode,
     cheatMode,
@@ -343,6 +373,34 @@ export function createGameState(
 
   debugLog(`Loaded level: ${initialLevelId}`);
   return state;
+}
+
+export function restartEntireGame(state: GameState): void {
+  const prevJoystick = state.joystickActive;
+  const fresh = createGameState({
+    initialLevelId: 'level-outside',
+    debug: state.debugMode,
+    cheat: state.cheatMode,
+    secretSantaDB: state.secretSantaDB,
+  });
+  Object.assign(state, fresh);
+  state.joystickActive = prevJoystick;
+}
+
+export function damagePlayer(state: GameState, amount: number): void {
+  applyPlayerDamage(state.player, amount);
+  if (state.player.health <= 0 && !state.cheatMode) {
+    state.gameOver = true;
+    state.nearbyInteractable = null;
+    state.activeDialogue = {
+      lines: ['Try again?'],
+      currentIndex: 0,
+      variant: 'gameover',
+      onClose: () => {
+        restartEntireGame(state);
+      },
+    };
+  }
 }
 
 /**
@@ -370,6 +428,7 @@ export function resetAfterSnowballHit(state: GameState): void {
   state.motorcycle = createMotorcycle();
   state.throwers = createDrivewayThrowers();
   state.snowballs = [];
+  state.projectiles = [];
   state.hasLadder = false;
   state.ladderPlaced = false;
   state.isOnRoof = false;
@@ -378,6 +437,7 @@ export function resetAfterSnowballHit(state: GameState): void {
   state.activeDialogue = null;
   syncOutsideToLevel(state);
   refreshInteractables(state);
+  damagePlayer(state, 30);
 }
 
 function isMainHouseTile(col: number, row: number): boolean {
@@ -484,6 +544,7 @@ function updateOutsideLevel(
       state.player.isMoving = false;
       state.player.walkTimer = 0;
       state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
+      damagePlayer(state, 10);
     }
 
     refreshInteractables(state);
@@ -586,6 +647,100 @@ function updateOutsideLevel(
   return false;
 }
 
+function updateProjectiles(state: GameState, dtSeconds: number): void {
+  if (state.projectiles.length === 0 || dtSeconds <= 0) {
+    return;
+  }
+
+  const mapWidth = state.map.cols * state.map.tileSize;
+  const mapHeight = state.map.rows * state.map.tileSize;
+  const activeLevel = getActiveLevel(state);
+  const obstacles = activeLevel.getSolidObstacles();
+
+  for (let i = state.projectiles.length - 1; i >= 0; i--) {
+    const p = state.projectiles[i];
+    p.x += p.vx * dtSeconds;
+    p.y += p.vy * dtSeconds;
+
+    if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
+      state.projectiles.splice(i, 1);
+      continue;
+    }
+
+    const projRect: Rect = {
+      x: p.x - 1.5,
+      y: p.y - 1.5,
+      width: 3,
+      height: 3,
+    };
+
+    if (p.fromRoof) {
+      const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
+      const hitTallTreeOrEdge = isRectCollidingWithMap(
+        state.map,
+        projRect.x,
+        projRect.y,
+        projRect.width,
+        projRect.height,
+        true,
+        (c, r) =>
+          c >= 0 &&
+          r >= 0 &&
+          c < state.map.cols &&
+          r < state.map.rows &&
+          state.map.tiles[r][c] !== TileType.Tree
+      );
+      if (hitChimney || hitTallTreeOrEdge) {
+        state.projectiles.splice(i, 1);
+      }
+      continue;
+    }
+
+    const hitMap = isRectCollidingWithMap(
+      state.map,
+      projRect.x,
+      projRect.y,
+      projRect.width,
+      projRect.height,
+      true
+    );
+    const hitObstacle = obstacles.some((obs) => rectsIntersect(projRect, obs));
+    const hitOutsideDynamic =
+      state.currentLevelId === 'level-outside' &&
+      (rectsIntersect(projRect, state.dog) ||
+        rectsIntersect(projRect, state.motorcycle) ||
+        state.throwers.some((t) => rectsIntersect(projRect, t)));
+
+    if (hitMap || hitObstacle || hitOutsideDynamic) {
+      state.projectiles.splice(i, 1);
+    }
+  }
+}
+
+function fireUziProjectile(state: GameState): void {
+  const player = state.player;
+  const aimYaw =
+    typeof player.yaw === 'number'
+      ? player.yaw
+      : directionToYaw(player.facing);
+  const cx = player.x + player.width * 0.5;
+  const cy = player.y + player.height * 0.5;
+  const onRoof = state.currentLevelId === 'level-outside' && state.isOnRoof;
+  const groundZ = onRoof
+    ? getMainHouseRoofElevation(cx, cy)
+    : getTerrainHeight(cx, cy, state.currentLevelId);
+
+  state.projectiles.push({
+    x: cx + Math.cos(aimYaw) * 6,
+    y: cy + Math.sin(aimYaw) * 6,
+    z: groundZ + (player.jumpOffset ?? 0) + 8.5,
+    vx: Math.cos(aimYaw) * UZI_PROJECTILE_SPEED,
+    vy: Math.sin(aimYaw) * UZI_PROJECTILE_SPEED,
+    yaw: aimYaw,
+    fromRoof: onRoof,
+  });
+}
+
 export function updateGameState(
   state: GameState,
   input: InputState,
@@ -594,7 +749,13 @@ export function updateGameState(
   const safeDt = Math.max(0, dtSeconds);
   state.elapsedTime += safeDt;
   dtSeconds = safeDt;
+  const prevUziCooldown = state.player.uziFireCooldown;
+  updatePlayerHealthAndTimers(state.player, dtSeconds);
+  const uziCooldownRemainder =
+    prevUziCooldown > 0 ? Math.max(0, dtSeconds - prevUziCooldown) : 0;
   const actionPressed = consumeActionPress(input);
+  const attackPressed = consumeAttackPress(input);
+  const slotPressed = consumeSlotPress(input);
 
   // Clear any legacy pointerClick without triggering dialogue skip or interactions
   if (input.pointerClick) {
@@ -626,8 +787,13 @@ export function updateGameState(
     return;
   }
 
-  // Update 3D jump / fall arc and indoor door opening animations
+  if (slotPressed !== null) {
+    selectPlayerEquipmentSlot(state.player, slotPressed);
+  }
+
+  // Update 3D jump / fall arc, indoor door opening animations, and Uzi projectiles
   updatePlayerJump(state.player, dtSeconds);
+  updateProjectiles(state, dtSeconds);
   for (const door of state.levels['level-basement'].openedDoors) {
     door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
   }
@@ -641,7 +807,8 @@ export function updateGameState(
       lines: string[],
       onClose?: () => void,
       speakerPortrait?: string,
-      unclosable?: boolean
+      unclosable?: boolean,
+      variant?: DialogueVariant
     ) => {
       state.activeDialogue = {
         lines,
@@ -649,8 +816,10 @@ export function updateGameState(
         onClose,
         speakerPortrait,
         unclosable,
+        variant,
       };
     },
+    damagePlayer: (amount: number) => damagePlayer(state, amount),
     getSecretSantaReceiver: () => {
       if (!state.secretSantaDB) return undefined;
       const playerName = state.secretSantaDB.playerName;
@@ -742,39 +911,57 @@ export function updateGameState(
   // Check if Santa is close enough to an interactable object to show the Space prompt
   refreshInteractables(state);
 
-  if (actionPressed) {
-    if (state.nearbyInteractable) {
-      const target = state.nearbyInteractable;
-      if (state.currentLevelId === 'level-outside') {
-        syncOutsideToLevel(state);
-      }
+  if (actionPressed && state.nearbyInteractable) {
+    const target = state.nearbyInteractable;
+    if (state.currentLevelId === 'level-outside') {
+      syncOutsideToLevel(state);
+    }
 
-      const activeLevel = getActiveLevel(state);
-      const prevLevelId = state.currentLevelId;
-      const handledByLevel = activeLevel.handleInteraction(
-        target.id,
-        state.player,
-        transitionCtx
-      );
+    const activeLevel = getActiveLevel(state);
+    const prevLevelId = state.currentLevelId;
+    const handledByLevel = activeLevel.handleInteraction(
+      target.id,
+      state.player,
+      transitionCtx
+    );
 
-      if (handledByLevel) {
-        if (
-          prevLevelId === 'level-outside' &&
-          state.currentLevelId === 'level-outside'
-        ) {
-          syncLevelToOutside(state);
-        }
-        refreshInteractables(state);
-      } else if (target.dialogueLines.length > 0) {
-        state.activeDialogue = {
-          lines: target.dialogueLines,
-          currentIndex: 0,
-          speakerPortrait: target.speakerPortrait,
-        };
+    if (handledByLevel) {
+      if (
+        prevLevelId === 'level-outside' &&
+        state.currentLevelId === 'level-outside'
+      ) {
+        syncLevelToOutside(state);
       }
-    } else {
-      // No interactable Action available: Space triggers a 3D half-tile jump animation
+      refreshInteractables(state);
+    } else if (target.dialogueLines.length > 0) {
+      state.activeDialogue = {
+        lines: target.dialogueLines,
+        currentIndex: 0,
+        speakerPortrait: target.speakerPortrait,
+      };
+    }
+    return;
+  }
+
+  if (state.player.equippedItem === 'unarmed') {
+    if (attackPressed) {
+      triggerPlayerPunch(state.player);
+    }
+    if (actionPressed && !state.nearbyInteractable) {
+      // No interactable Action available while unarmed: Space triggers a 3D half-tile jump animation
       triggerPlayerJump(state.player);
+    }
+  } else if (state.player.equippedItem === 'uzi') {
+    const wantsToFire =
+      attackPressed ||
+      Boolean(input.attack) ||
+      (!state.nearbyInteractable && (actionPressed || Boolean(input.action)));
+    if (wantsToFire && state.player.uziFireCooldown <= 1e-6) {
+      state.player.uziFireCooldown = Math.max(
+        0.01,
+        UZI_FIRE_INTERVAL_SECONDS - uziCooldownRemainder
+      );
+      fireUziProjectile(state);
     }
   }
 }

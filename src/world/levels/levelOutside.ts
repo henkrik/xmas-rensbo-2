@@ -1,5 +1,9 @@
 import { createDog, Dog } from '../../entities/dog';
-import { Player, Rect } from '../../entities/player';
+import {
+  Player,
+  Rect,
+  selectPlayerEquipmentSlot,
+} from '../../entities/player';
 import {
   createDrivewayThrowers,
   Snowball,
@@ -141,6 +145,44 @@ export class LevelOutside implements GameLevel {
       player.renderYaw = Math.PI / 2;
       player.jumpOffset = 0;
       player.jumpVelocity = 0;
+      return true;
+    }
+    if (interactableId === 'roof-rudolph') {
+      ctx.openDialogue(
+        [
+          'RUDOLPH?!! WHO DID THIS?',
+          '...',
+          'This is no longer about saving christmas...',
+          'This is about REVENGE!',
+          "I will find out who did this, if it is the last thing I'll ever do.",
+        ],
+        () => {
+          ctx.openDialogue(
+            ['ACHIEVEMENT UNLOCKED: Murder-mystery genre unlocked.'],
+            () => {
+              ctx.openDialogue(["I'm dreaming of a RED CHRISTMAS."], () => {
+                ctx.openDialogue(
+                  [
+                    'ACHIEVEMENT UNLOCKED: Action genre unlocked. Viewer discretion is advised.',
+                  ],
+                  () => {
+                    if (!player.unlockedUzi) {
+                      player.unlockedUzi = true;
+                      selectPlayerEquipmentSlot(player, 2);
+                    }
+                  },
+                  undefined,
+                  false,
+                  'achievement'
+                );
+              });
+            },
+            undefined,
+            false,
+            'achievement'
+          );
+        }
+      );
       return true;
     }
     if (interactableId === 'roof-chimney') {

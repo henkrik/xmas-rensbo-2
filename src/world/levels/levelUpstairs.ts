@@ -915,6 +915,7 @@ export class LevelUpstairs implements GameLevel {
       () => {
         ctx.loadLevel('level-upstairs');
         player.blinkTimer = 2.0; // HIT_BLINK_DURATION_SECONDS
+        ctx.damagePlayer?.(30);
       },
       speaker
     );

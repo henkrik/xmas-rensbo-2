@@ -18,6 +18,14 @@ export const PLAYER_JUMP_GRAVITY =
 export const PLAYER_JUMP_INITIAL_VELOCITY =
   (4 * PLAYER_JUMP_HEIGHT) / PLAYER_JUMP_DURATION;
 
+export const MAX_PLAYER_HEALTH = 100;
+export const PUNCH_DURATION_SECONDS = 0.28;
+export const UZI_EQUIP_DURATION_SECONDS = 0.5;
+export const UZI_FIRE_INTERVAL_SECONDS = 0.2;
+export const UZI_PROJECTILE_SPEED = 4 * TILE_SIZE;
+
+export type EquipmentId = 'unarmed' | 'uzi';
+
 export interface Footprint {
   x: number;
   y: number;
@@ -55,6 +63,15 @@ export interface Player {
   footprintSpawnTimer: number;
   nextFootprintFoot: 'left' | 'right';
   states: Map<string, unknown>;
+  health: number;
+  delayedHealth: number;
+  delayedHealthRate: number;
+  equippedItem: EquipmentId;
+  unlockedUzi: boolean;
+  punchTimer: number;
+  punchHand: 'left' | 'right';
+  uziEquipTimer: number;
+  uziFireCooldown: number;
 }
 
 export function createPlayer(x: number, y: number): Player {
@@ -75,7 +92,81 @@ export function createPlayer(x: number, y: number): Player {
     footprintSpawnTimer: 0,
     nextFootprintFoot: 'left',
     states: new Map<string, unknown>(),
+    health: MAX_PLAYER_HEALTH,
+    delayedHealth: MAX_PLAYER_HEALTH,
+    delayedHealthRate: 0,
+    equippedItem: 'unarmed',
+    unlockedUzi: false,
+    punchTimer: 0,
+    punchHand: 'right',
+    uziEquipTimer: 0,
+    uziFireCooldown: 0,
   };
+}
+
+export function setPlayerHealth(player: Player, newHealth: number): void {
+  const clamped = Math.max(0, Math.min(MAX_PLAYER_HEALTH, newHealth));
+  player.health = clamped;
+  // Rate is recalculated on every health change so delayedHealth reaches health in 1 second.
+  player.delayedHealthRate = Math.abs(player.delayedHealth - player.health);
+}
+
+export function applyPlayerDamage(player: Player, amount: number): void {
+  setPlayerHealth(player, player.health - amount);
+}
+
+export function updatePlayerHealthAndTimers(player: Player, dtSeconds: number): void {
+  if (dtSeconds <= 0) {
+    return;
+  }
+  if (player.delayedHealth !== player.health) {
+    const diff = player.health - player.delayedHealth;
+    const step = player.delayedHealthRate * dtSeconds;
+    if (Math.abs(diff) <= step || player.delayedHealthRate <= 0) {
+      player.delayedHealth = player.health;
+      player.delayedHealthRate = 0;
+    } else {
+      player.delayedHealth += Math.sign(diff) * step;
+    }
+  }
+  if (player.punchTimer > 0) {
+    player.punchTimer = Math.max(0, player.punchTimer - dtSeconds);
+  }
+  if (player.uziEquipTimer > 0) {
+    player.uziEquipTimer = Math.max(0, player.uziEquipTimer - dtSeconds);
+  }
+  if (player.uziFireCooldown > 0) {
+    player.uziFireCooldown = Math.max(0, player.uziFireCooldown - dtSeconds);
+  }
+}
+
+export function triggerPlayerPunch(player: Player): boolean {
+  if (player.equippedItem !== 'unarmed') {
+    return false;
+  }
+  player.punchTimer = PUNCH_DURATION_SECONDS;
+  player.punchHand = player.punchHand === 'right' ? 'left' : 'right';
+  return true;
+}
+
+export function selectPlayerEquipmentSlot(player: Player, slot: number): boolean {
+  if (slot === 1) {
+    player.equippedItem = 'unarmed';
+    player.uziEquipTimer = 0;
+    return true;
+  }
+  if (slot === 2) {
+    if (!player.unlockedUzi) {
+      return false;
+    }
+    if (player.equippedItem !== 'uzi') {
+      player.equippedItem = 'uzi';
+      player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+      player.punchTimer = 0;
+    }
+    return true;
+  }
+  return false;
 }
 
 export function lerpAngle(current: number, target: number, t: number): number {

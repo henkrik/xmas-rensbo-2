@@ -9,6 +9,7 @@ import {
   MOTORCYCLE_START_Y,
   ROOF_CHIMNEY_BOUNDS,
   ROOF_LADDER_BOUNDS,
+  ROOF_RUDOLPH_BOUNDS,
   TILE_SIZE,
 } from './tilemap';
 
@@ -20,12 +21,15 @@ export interface Interactable {
   speakerPortrait?: string; // name of person for portrait display, e.g. "Henrik"
 }
 
+export type DialogueVariant = 'regular' | 'achievement' | 'gameover';
+
 export interface DialogueState {
   lines: string[];
   currentIndex: number;
   onClose?: () => void;
   speakerPortrait?: string;
   unclosable?: boolean;
+  variant?: DialogueVariant;
 }
 
 export interface LadderInteractionOptions {
@@ -72,6 +76,12 @@ export function buildInteractables(
         id: 'roof-chimney',
         bounds: { ...ROOF_CHIMNEY_BOUNDS },
         promptText: 'Climb down chimney',
+        dialogueLines: [],
+      },
+      {
+        id: 'roof-rudolph',
+        bounds: { ...ROOF_RUDOLPH_BOUNDS },
+        promptText: 'Inspect Rudolph',
         dialogueLines: [],
       },
     ];

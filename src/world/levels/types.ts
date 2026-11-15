@@ -1,5 +1,5 @@
 import { Player, Rect } from '../../entities/player';
-import { Interactable } from '../interaction';
+import { DialogueVariant, Interactable } from '../interaction';
 import { TileMap } from '../tilemap';
 
 export type LevelId = 'level-outside' | 'level-basement' | 'level-upstairs' | 'level-people';
@@ -24,8 +24,10 @@ export interface LevelTransitionContext {
     lines: string[],
     onClose?: () => void,
     speakerPortrait?: string,
-    unclosable?: boolean
+    unclosable?: boolean,
+    variant?: DialogueVariant
   ) => void;
+  damagePlayer?: (amount: number) => void;
   getSecretSantaReceiver?: () => string | undefined;
   fadeWorldToBlack?: () => void;
 }

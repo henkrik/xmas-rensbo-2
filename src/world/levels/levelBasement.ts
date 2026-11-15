@@ -373,6 +373,7 @@ export class LevelBasement implements GameLevel {
           // Player takes damage: reload current level, make Santa blink
           ctx.loadLevel('level-basement');
           player.blinkTimer = 2.0; // HIT_BLINK_DURATION_SECONDS
+          ctx.damagePlayer?.(30);
         },
         'Arjan'
       );
@@ -390,6 +391,7 @@ export class LevelBasement implements GameLevel {
           // Player takes damage: reload current level, make Santa blink
           ctx.loadLevel('level-basement');
           player.blinkTimer = 2.0; // HIT_BLINK_DURATION_SECONDS
+          ctx.damagePlayer?.(30);
         },
         'Olexa'
       );
@@ -422,6 +424,7 @@ export class LevelBasement implements GameLevel {
           // Player takes damage: reload current level, make Santa blink
           ctx.loadLevel('level-basement');
           player.blinkTimer = 2.0; // HIT_BLINK_DURATION_SECONDS
+          ctx.damagePlayer?.(30);
         },
         'Hanneloes'
       );

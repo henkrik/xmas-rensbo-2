@@ -17,6 +17,10 @@
 
 import { Cat } from '../entities/cat';
 import { Dog } from '../entities/dog';
+import {
+  PUNCH_DURATION_SECONDS,
+  UZI_EQUIP_DURATION_SECONDS,
+} from '../entities/player';
 import { ConeOfSight } from '../entities/sight';
 import { SnowballThrower } from '../entities/snowball';
 import { GameState, MotorcycleState } from '../world/gameState';
@@ -35,6 +39,7 @@ import {
   GROUND_LADDER_BOUNDS,
   LADDER_CLIMB_X,
   ROOF_CHIMNEY_BOUNDS,
+  ROOF_RUDOLPH_BOUNDS,
   ROOF_WALK_Y,
   TILE_SIZE,
   TileMap,
@@ -817,6 +822,89 @@ function addWindowWithShutters3D(
   mb.addBox(cx, cy + h + 0.2, cz + 0.3, w + 2.0, 1.0, 1.8, rgb(246, 250, 255), TexId.SNOW, 0.3);
 }
 
+function addRudolphCorpse3D(mb: MeshBuilder): void {
+  const rx = ROOF_RUDOLPH_BOUNDS.x + ROOF_RUDOLPH_BOUNDS.width * 0.5;
+  const rz = ROOF_RUDOLPH_BOUNDS.y + ROOF_RUDOLPH_BOUNDS.height * 0.5;
+  const roofSlope = Math.atan2(16, 60);
+  const ry = getMainHouseRoofElevation(rx, rz);
+
+  // Pool of dark crimson blood spread flush across the pitched roof tiles around Rudolph
+  const bloodDark = rgb(104, 8, 16);
+  const bloodBright = rgb(148, 14, 24);
+  const puddleParts: ReadonlyArray<[number, number, number, number, Color4]> = [
+    [0, 0.4, 15.0, 11.5, bloodDark],
+    [-2.5, -1.2, 8.5, 6.5, bloodBright],
+    [3.2, 1.8, 7.5, 6.0, bloodDark],
+    [-4.5, 2.5, 6.2, 4.8, bloodBright],
+    [4.8, -2.0, 5.4, 4.4, bloodDark],
+  ];
+  for (const [dx, dz, lenZ, widthX, col] of puddleParts) {
+    const px = rx + dx;
+    const pz = rz + dz;
+    const py = getMainHouseRoofElevation(px, pz) + 0.14;
+    mb.addOrientedBox(px, py, pz, lenZ, 0.28, widthX, Math.PI * 0.5, roofSlope, col, TexId.SOLID, 0);
+  }
+
+  const fur = rgb(138, 84, 46);
+  const belly = rgb(212, 182, 140);
+  const hoof = rgb(28, 24, 22);
+  const antler = rgb(218, 190, 136);
+
+  // Torso lying on its side along East-West axis next to the chimney
+  mb.addSphere(rx + 1.5, ry + 2.0, rz, 5.2, 2.0, 3.0, 10, 12, fur, TexId.FABRIC, 0.65);
+  mb.addSphere(rx + 0.8, ry + 1.8, rz + 0.9, 3.4, 1.5, 1.9, 8, 10, belly, TexId.FABRIC, 0.35);
+  // Short tail tuft
+  mb.addSphere(rx + 6.9, ry + 2.1, rz - 0.3, 1.2, 0.85, 0.95, 6, 8, belly, TexId.SNOW, 0.35);
+
+  // Four limp splayed legs + dark hooves
+  const legs: ReadonlyArray<[number, number, number, number]> = [
+    [-1.4, 3.2, 0.3, 0.3],
+    [0.2, 3.8, -0.2, 0.25],
+    [4.0, 3.0, 0.25, 0.32],
+    [5.4, 2.4, -0.35, 0.22],
+  ];
+  for (const [dx, dz, yawOff, legPitch] of legs) {
+    const lx = rx + dx;
+    const lz = rz + dz;
+    const ly = getMainHouseRoofElevation(lx, lz);
+    mb.addOrientedBox(lx, ly + 0.95, lz, 1.0, 1.0, 4.2, yawOff, legPitch, fur, TexId.FABRIC, 0.45);
+    mb.addSphere(lx, ly + 0.5, lz + 2.0, 0.72, 0.62, 0.72, 6, 8, hoof, TexId.SOLID, 0.35);
+  }
+
+  // Head & neck slumped onto the roof tiles (facing West toward the chimney)
+  const hx = rx - 4.6;
+  const hz = rz + 0.4;
+  const hy = getMainHouseRoofElevation(hx, hz);
+  mb.addSphere(hx + 2.0, hy + 1.75, hz - 0.2, 2.2, 1.4, 1.6, 8, 10, fur, TexId.FABRIC, 0.5);
+  mb.addSphere(hx, hy + 1.85, hz, 2.35, 1.65, 2.1, 8, 12, fur, TexId.FABRIC, 0.6);
+  // Snout + Rudolph's signature bright red nose
+  mb.addSphere(hx - 2.1, hy + 1.55, hz + 0.15, 1.65, 1.15, 1.25, 6, 8, belly, TexId.FABRIC, 0.45);
+  mb.addSphere(hx - 3.65, hy + 1.6, hz + 0.15, 1.05, 1.05, 1.05, 8, 10, rgb(255, 22, 24), TexId.SOLID, 0.45);
+
+  // Closed lifeless eye slits
+  mb.addBox(hx - 0.8, hy + 3.05, hz + 0.95, 1.2, 0.28, 0.28, rgb(20, 16, 18), TexId.SOLID, 0);
+
+  // Branching antlers splayed flat on the roof behind the head
+  for (const sideZ of [-1, 1] as const) {
+    const az = hz - 1.2 + sideZ * 1.1;
+    const ay = getMainHouseRoofElevation(hx + 0.6, az) + 1.85;
+    mb.addOrientedBox(hx + 1.0, ay, az, 3.8, 0.55, 0.55, sideZ * 0.45, 0.2, antler, TexId.WOOD_GRAIN, 0.35);
+    mb.addOrientedBox(hx + 2.1, ay + 0.45, az + sideZ * 0.8, 1.8, 0.42, 0.42, sideZ * 1.1, 0.35, antler, TexId.WOOD_GRAIN, 0.3);
+  }
+
+  // Knife visibly sticking straight out of Rudolph's chest
+  const kx = rx - 0.4;
+  const kz = rz - 0.1;
+  const ky = getMainHouseRoofElevation(kx, kz);
+  mb.addSphere(kx, ky + 3.5, kz, 1.7, 0.45, 1.7, 6, 8, rgb(172, 12, 20), TexId.SOLID, 0);
+  // Gleaming steel blade plunged into torso
+  mb.addOrientedBox(kx + 0.15, ky + 4.9, kz, 0.45, 3.8, 1.2, 0.3, 0.26, rgb(220, 228, 240), TexId.SOLID, 0.45);
+  // Brass crossguard
+  mb.addOrientedBox(kx - 0.35, ky + 6.7, kz, 0.85, 0.6, 2.7, 0.3, 0.26, rgb(218, 174, 62), TexId.SOLID, 0.35);
+  // Dark wooden/leather handle grip rising high above chest
+  mb.addOrientedBox(kx - 0.9, ky + 8.3, kz, 0.95, 3.0, 0.95, 0.3, 0.26, rgb(42, 28, 22), TexId.WOOD_GRAIN, 0.45);
+}
+
 // ============================================================================
 // Static Level 1: Outside (32x28 TileMap = 512x448 world units)
 // ============================================================================
@@ -960,6 +1048,9 @@ export function buildOutsideStaticMesh(map: TileMap): MeshBuilder {
     // Dual terracotta chimney flue pots
     mb.addCylinder(chimX - 3, roofWalkY + 19.3, chimZ, 2.0, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
     mb.addCylinder(chimX + 3, roofWalkY + 19.3, chimZ, 2.0, 1.8, 3.2, 10, rgb(164, 68, 44), TexId.SOLID, 0.45);
+
+    // Dead Rudolph the Red-Nosed Reindeer on the roof next to the chimney with blood pool & knife in chest
+    addRudolphCorpse3D(mb);
 
     // Shuttered Glowing Windows on South wall (cols 5..6 and 14..15, two stories)
     const greenShutter = rgb(44, 108, 68);
@@ -2081,6 +2172,10 @@ export interface CharacterColors3D {
   holdingBook?: boolean;
   sitting?: boolean;
   hasPresentInLap?: boolean;
+  equippedItem?: 'unarmed' | 'uzi';
+  punchTimer?: number;
+  punchHand?: 'left' | 'right';
+  uziEquipTimer?: number;
 }
 
 export function addHumanoid3D(
@@ -2161,17 +2256,184 @@ export function addHumanoid3D(
     mb.addTorus(cx, y0 + 10.2, cz, 2.85, 0.75, 12, 8, 'y', style.trim, TexId.FABRIC, 0.45);
   }
 
-  // 3. Articulated Shoulders, Arms & Rounded Mittens/Hands
+  // 3. Articulated Shoulders, Arms & Rounded Mittens/Hands (plus Unarmed Punch & Uzi Weapon)
   const armSpread = 4.35;
   const mittenColor: Color4 = isSanta ? rgb(224, 232, 245) : style.skin;
+  const isUnarmedPunch =
+    (style.equippedItem ?? 'unarmed') === 'unarmed' &&
+    (style.punchTimer ?? 0) > 0;
+  const punchProgress = isUnarmedPunch
+    ? 1 - Math.max(0, Math.min(1, (style.punchTimer ?? 0) / PUNCH_DURATION_SECONDS))
+    : 0;
+  const punchCurve = Math.sin(punchProgress * Math.PI);
+  const activePunchSide = style.punchHand === 'left' ? -1 : 1;
+  const isHoldingUzi = style.equippedItem === 'uzi';
+
   for (const side of [1, -1] as const) {
+    // Shoulder cap
+    const shoulderX = cx + rx * 3.7 * side;
+    const shoulderY = y0 + 9.4;
+    const shoulderZ = cz + rz * 3.7 * side;
+    mb.addSphere(shoulderX, shoulderY, shoulderZ, 1.4, 1.4, 1.4, 6, 8, style.coat, TexId.FABRIC, 0.5);
+
+    if (isHoldingUzi && side === 1) {
+      // Right arm holding the Uzi: smoothly rotates from sky (PI) to forward aim (PI/2) over 0.5s
+      const equipTimer = Math.max(0, style.uziEquipTimer ?? 0);
+      const tEquip =
+        equipTimer > 0
+          ? 1 - Math.min(1, equipTimer / UZI_EQUIP_DURATION_SECONDS)
+          : 1;
+      const theta = Math.PI - tEquip * (Math.PI * 0.5);
+      const st = Math.sin(theta);
+      const ct = Math.cos(theta);
+      const dirX = st * fx;
+      const dirY = -ct;
+      const dirZ = st * fz;
+      const ax0 = cx + rx * armSpread * side;
+      const az0 = cz + rz * armSpread * side;
+
+      mb.addOrientedBox(
+        ax0 + dirX * 2.2,
+        shoulderY + dirY * 2.2,
+        az0 + dirZ * 2.2,
+        2.0,
+        4.4,
+        2.0,
+        yaw,
+        theta,
+        style.coat,
+        TexId.FABRIC,
+        0.65
+      );
+
+      const hx = ax0 + dirX * 4.4;
+      const hy = shoulderY + dirY * 4.4;
+      const hz = az0 + dirZ * 4.4;
+      mb.addSphere(hx, hy, hz, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
+
+      // Uzi submachine gun aligned with the aiming hand/arm direction
+      const gunPitch = theta - Math.PI * 0.5;
+      const upGX = ct * fx;
+      const upGY = st;
+      const upGZ = ct * fz;
+      const gunDark = rgb(32, 36, 46);
+      const gunSteel = rgb(64, 72, 88);
+      const gunBarrel = rgb(20, 24, 32);
+
+      // Receiver body
+      mb.addOrientedBox(
+        hx + dirX * 1.1 + upGX * 1.35,
+        hy + dirY * 1.1 + upGY * 1.35,
+        hz + dirZ * 1.1 + upGZ * 1.35,
+        4.6,
+        1.6,
+        1.15,
+        yaw,
+        gunPitch,
+        gunDark,
+        TexId.SOLID,
+        0.45
+      );
+      // Top bolt/sight shroud
+      mb.addOrientedBox(
+        hx + dirX * 1.0 + upGX * 2.25,
+        hy + dirY * 1.0 + upGY * 2.25,
+        hz + dirZ * 1.0 + upGZ * 2.25,
+        3.2,
+        0.55,
+        0.9,
+        yaw,
+        gunPitch,
+        gunSteel,
+        TexId.SOLID,
+        0.3
+      );
+      // Forward barrel
+      mb.addOrientedBox(
+        hx + dirX * 4.3 + upGX * 1.5,
+        hy + dirY * 4.3 + upGY * 1.5,
+        hz + dirZ * 4.3 + upGZ * 1.5,
+        2.6,
+        0.65,
+        0.65,
+        yaw,
+        gunPitch,
+        gunBarrel,
+        TexId.SOLID,
+        0.35
+      );
+      // Grip & vertical magazine
+      mb.addOrientedBox(
+        hx + dirX * 0.2 - upGX * 0.55,
+        hy + dirY * 0.2 - upGY * 0.55,
+        hz + dirZ * 0.2 - upGZ * 0.55,
+        1.1,
+        2.6,
+        0.85,
+        yaw,
+        gunPitch,
+        gunDark,
+        TexId.SOLID,
+        0.35
+      );
+      mb.addOrientedBox(
+        hx + dirX * 0.2 - upGX * 2.1,
+        hy + dirY * 0.2 - upGY * 2.1,
+        hz + dirZ * 0.2 - upGZ * 2.1,
+        0.85,
+        1.5,
+        0.7,
+        yaw,
+        gunPitch,
+        gunSteel,
+        TexId.SOLID,
+        0.3
+      );
+      continue;
+    }
+
+    if (isUnarmedPunch && side === activePunchSide) {
+      const punchTheta = punchCurve * (Math.PI * 0.54);
+      const reachExtra = punchCurve * 2.4;
+      const sp = Math.sin(punchTheta);
+      const cp = Math.cos(punchTheta);
+      const ax0 = cx + rx * armSpread * side + fx * reachExtra;
+      const az0 = cz + rz * armSpread * side + fz * reachExtra;
+
+      mb.addOrientedBox(
+        ax0 + fx * sp * 2.2,
+        shoulderY - cp * 2.2,
+        az0 + fz * sp * 2.2,
+        2.0,
+        4.4,
+        2.0,
+        yaw,
+        punchTheta,
+        style.coat,
+        TexId.FABRIC,
+        0.65
+      );
+      mb.addSphere(
+        ax0 + fx * sp * 4.4,
+        shoulderY - cp * 4.4,
+        az0 + fz * sp * 4.4,
+        1.25,
+        1.25,
+        1.25,
+        6,
+        8,
+        mittenColor,
+        TexId.SOLID,
+        0.5
+      );
+      continue;
+    }
+
     const aSwing = -side * swing * 0.9;
     const aDist = -side * legSwingDist * 0.72;
     const ax = cx + rx * armSpread * side + fx * aDist;
     const az = cz + rz * armSpread * side + fz * aDist;
 
-    // Shoulder cap
-    mb.addSphere(cx + rx * 3.7 * side, y0 + 9.4, cz + rz * 3.7 * side, 1.4, 1.4, 1.4, 6, 8, style.coat, TexId.FABRIC, 0.5);
     // Sleeve
     mb.addOrientedBox(ax, y0 + 7.5, az, 2.0, 4.4, 2.0, yaw, aSwing, style.coat, TexId.FABRIC, 0.65);
     // Mitten / Hand sphere
@@ -2675,6 +2937,10 @@ export function buildDynamicSceneMeshes(
           hair: rgb(255, 255, 255),
           hat: rgb(245, 250, 120),
           hasBeard: true,
+          equippedItem: state.player.equippedItem,
+          punchTimer: state.player.punchTimer,
+          punchHand: state.player.punchHand,
+          uziEquipTimer: state.player.uziEquipTimer,
         }
       : {
           coat: rgb(216, 34, 42),
@@ -2684,6 +2950,10 @@ export function buildDynamicSceneMeshes(
           hair: rgb(250, 252, 255),
           hat: rgb(220, 36, 42),
           hasBeard: true,
+          equippedItem: state.player.equippedItem,
+          punchTimer: state.player.punchTimer,
+          punchHand: state.player.punchHand,
+          uziEquipTimer: state.player.uziEquipTimer,
         };
 
     const rosannaCutsceneActive =
@@ -3249,7 +3519,24 @@ export function buildDynamicSceneMeshes(
     }
   }
 
-  // 3. Debug 3D Collision Bounding Boxes (?debug mode)
+  // 3. Uzi Projectiles across all levels
+  for (const proj of state.projectiles) {
+    opaque.addOrientedBox(
+      proj.x,
+      proj.z,
+      proj.y,
+      3.2,
+      0.8,
+      0.8,
+      proj.yaw,
+      0,
+      rgb(255, 224, 96),
+      TexId.SOLID,
+      0.35
+    );
+  }
+
+  // 4. Debug 3D Collision Bounding Boxes (?debug mode)
   if (state.debugMode) {
     translucent.addBox(
       state.player.x + state.player.width * 0.5,

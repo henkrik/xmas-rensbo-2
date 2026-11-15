@@ -116,6 +116,8 @@
       camRight: false,
       pointerClick: null,
       moveVector: null,
+      cameraLookVector: null,
+      dualJoystickMode: false,
       cameraYaw: null,
       cameraPitch: 0.38
     };
@@ -223,6 +225,8 @@
         joystickSize,
         joystickLeft: safeVw - joystickSize,
         joystickTop: Math.round((safeVh - joystickSize) / 2),
+        leftJoystickLeft: 0,
+        leftJoystickTop: Math.round((safeVh - joystickSize) / 2),
         actionBtnLeft: 20,
         actionBtnTop: Math.round(safeVh / 2),
         actionBtnBottom: null
@@ -237,6 +241,8 @@
       joystickSize,
       joystickLeft: Math.round((safeVw - joystickSize) / 2),
       joystickTop: safeVh - joystickSize,
+      leftJoystickLeft: 0,
+      leftJoystickTop: safeVh - joystickSize,
       actionBtnLeft: 20,
       actionBtnTop: null,
       actionBtnBottom: 24
@@ -246,13 +252,21 @@
     const { container, stick, input } = options;
     let activePointerId = null;
     let isDragging = false;
+    let currentRole = options.role ?? "move";
+    const clearInputForRole = () => {
+      if (currentRole === "camera") {
+        input.cameraLookVector = null;
+      } else {
+        input.left = false;
+        input.right = false;
+        input.up = false;
+        input.down = false;
+        input.moveVector = null;
+      }
+    };
     const resetStick = () => {
       stick.style.transform = "translate(0px, 0px)";
-      input.left = false;
-      input.right = false;
-      input.up = false;
-      input.down = false;
-      input.moveVector = null;
+      clearInputForRole();
     };
     const handlePointer = (clientX, clientY) => {
       const rect = container.getBoundingClientRect();
@@ -269,26 +283,36 @@
       stick.style.transform = `translate(${(dirX * clampedDist).toFixed(1)}px, ${(dirY * clampedDist).toFixed(1)}px)`;
       const deadzone = maxRadius * 0.15;
       if (dist < deadzone) {
-        input.left = false;
-        input.right = false;
-        input.up = false;
-        input.down = false;
-        input.moveVector = null;
+        clearInputForRole();
         return;
       }
-      input.moveVector = {
-        x: dirX * intensity,
-        y: dirY * intensity
-      };
-      input.left = dirX < 0;
-      input.right = dirX > 0;
-      input.up = dirY < 0;
-      input.down = dirY > 0;
+      if (currentRole === "camera") {
+        input.cameraLookVector = {
+          x: dirX * intensity,
+          y: dirY * intensity
+        };
+      } else {
+        input.moveVector = {
+          x: dirX * intensity,
+          y: dirY * intensity
+        };
+        input.left = dirX < 0;
+        input.right = dirX > 0;
+        input.up = dirY < 0;
+        input.down = dirY > 0;
+      }
     };
     const onPointerDown = (e) => {
+      if (isDragging && activePointerId !== null && activePointerId !== e.pointerId) {
+        return;
+      }
       activePointerId = e.pointerId;
       isDragging = true;
       e.preventDefault();
+      try {
+        container.setPointerCapture?.(e.pointerId);
+      } catch {
+      }
       handlePointer(e.clientX, e.clientY);
     };
     const onPointerMove = (e) => {
@@ -338,6 +362,15 @@
         isDragging = false;
         resetStick();
       },
+      setRole: (role) => {
+        if (currentRole !== role) {
+          activePointerId = null;
+          isDragging = false;
+          resetStick();
+          currentRole = role;
+        }
+      },
+      getRole: () => currentRole,
       isVisible: () => container.style.display !== "none",
       isPointerActive: () => isDragging,
       destroy: () => {
@@ -780,10 +813,21 @@
     let dy = 0;
     if (input.moveVector) {
       if (typeof input.cameraYaw === "number") {
-        const forward = -input.moveVector.y;
-        if (Math.abs(forward) > 1e-3) {
-          dx = forward * Math.cos(input.cameraYaw);
-          dy = forward * Math.sin(input.cameraYaw);
+        if (input.dualJoystickMode) {
+          const forward = -input.moveVector.y;
+          const strafe = input.moveVector.x;
+          if (Math.abs(forward) > 1e-3 || Math.abs(strafe) > 1e-3) {
+            const cosY = Math.cos(input.cameraYaw);
+            const sinY = Math.sin(input.cameraYaw);
+            dx = forward * cosY - strafe * sinY;
+            dy = forward * sinY + strafe * cosY;
+          }
+        } else {
+          const forward = -input.moveVector.y;
+          if (Math.abs(forward) > 1e-3) {
+            dx = forward * Math.cos(input.cameraYaw);
+            dy = forward * Math.sin(input.cameraYaw);
+          }
         }
       } else {
         dx = input.moveVector.x;
@@ -1383,7 +1427,13 @@
       if (input.camRight) {
         input.cameraYaw = wrapAngle(input.cameraYaw + yawSpeed * dtSeconds);
       }
-      if (input.moveVector && Math.abs(input.moveVector.x) > 1e-3) {
+      if (input.dualJoystickMode) {
+        if (input.cameraLookVector && Math.abs(input.cameraLookVector.x) > 1e-3) {
+          input.cameraYaw = wrapAngle(
+            input.cameraYaw + input.cameraLookVector.x * yawSpeed * dtSeconds
+          );
+        }
+      } else if (input.moveVector && Math.abs(input.moveVector.x) > 1e-3) {
         input.cameraYaw = wrapAngle(
           input.cameraYaw + input.moveVector.x * yawSpeed * dtSeconds
         );
@@ -9383,22 +9433,69 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     const camera3d = createCamera3D();
     const joystickContainer = document.getElementById("virtual-joystick-container");
     const joystickStick = document.getElementById("virtual-joystick-stick");
+    let leftJoystickContainer = document.getElementById("virtual-joystick-left-container");
+    let leftJoystickStick = document.getElementById("virtual-joystick-left-stick");
+    if (!leftJoystickContainer && gameContainer) {
+      leftJoystickContainer = document.createElement("div");
+      leftJoystickContainer.id = "virtual-joystick-left-container";
+      leftJoystickContainer.style.display = "none";
+      const leftBase = document.createElement("div");
+      leftBase.id = "virtual-joystick-left-base";
+      leftJoystickStick = document.createElement("div");
+      leftJoystickStick.id = "virtual-joystick-left-stick";
+      leftBase.appendChild(leftJoystickStick);
+      leftJoystickContainer.appendChild(leftBase);
+      if (joystickContainer) {
+        gameContainer.insertBefore(leftJoystickContainer, joystickContainer);
+      } else {
+        gameContainer.appendChild(leftJoystickContainer);
+      }
+    } else if (leftJoystickContainer && !leftJoystickStick) {
+      leftJoystickStick = document.getElementById("virtual-joystick-left-stick");
+    }
     const mobileActionBtn = document.getElementById("mobile-action-btn");
     const assets = await loadAllAssets();
     const input = createEmptyInput();
+    let joystickEnabled = isMobileDevice;
     let joystick = null;
     if (joystickContainer && joystickStick) {
       joystick = createVirtualJoystick({
         container: joystickContainer,
         stick: joystickStick,
-        input
+        input,
+        role: "move"
       });
-      if (isMobileDevice) {
-        joystick.show();
-      } else {
-        joystick.hide();
-      }
     }
+    let leftJoystick = null;
+    if (leftJoystickContainer && leftJoystickStick) {
+      leftJoystick = createVirtualJoystick({
+        container: leftJoystickContainer,
+        stick: leftJoystickStick,
+        input,
+        role: "move"
+      });
+    }
+    const syncJoystickMode = (isLandscape) => {
+      if (!joystickEnabled) {
+        input.dualJoystickMode = false;
+        joystick?.hide();
+        leftJoystick?.hide();
+        return;
+      }
+      if (isLandscape) {
+        input.dualJoystickMode = true;
+        joystick?.setRole("camera");
+        joystick?.show();
+        leftJoystick?.setRole("move");
+        leftJoystick?.show();
+      } else {
+        input.dualJoystickMode = false;
+        leftJoystick?.hide();
+        joystick?.setRole("move");
+        joystick?.show();
+      }
+    };
+    syncJoystickMode(detectIsLandscape());
     let lastLayoutKey = "";
     let lastIsLandscape = null;
     const applyViewportLayout = (force = false) => {
@@ -9411,15 +9508,17 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       const rawW = Math.round(vv ? vv.width : window.innerWidth);
       const rawH = Math.round(vv ? vv.height : window.innerHeight);
       const layout = computeViewportLayout(rawW, rawH, isLandscape);
-      const layoutKey = `${layout.isLandscape}-${layout.containerWidth}-${layout.containerHeight}-${layout.canvasWidth}-${layout.canvasHeight}`;
+      const layoutKey = `${joystickEnabled}-${layout.isLandscape}-${layout.containerWidth}-${layout.containerHeight}-${layout.canvasWidth}-${layout.canvasHeight}`;
       if (!force && layoutKey === lastLayoutKey) {
         return;
       }
       lastLayoutKey = layoutKey;
       if (lastIsLandscape !== null && lastIsLandscape !== layout.isLandscape) {
         joystick?.reset();
+        leftJoystick?.reset();
       }
       lastIsLandscape = layout.isLandscape;
+      syncJoystickMode(layout.isLandscape);
       if (gameContainer) {
         gameContainer.style.left = "0px";
         gameContainer.style.top = "0px";
@@ -9452,10 +9551,23 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         joystickContainer.style.bottom = "auto";
         joystickContainer.style.transform = "none";
       }
+      if (leftJoystickContainer) {
+        leftJoystickContainer.style.width = `${layout.joystickSize}px`;
+        leftJoystickContainer.style.height = `${layout.joystickSize}px`;
+        leftJoystickContainer.style.left = `${layout.leftJoystickLeft}px`;
+        leftJoystickContainer.style.top = `${layout.leftJoystickTop}px`;
+        leftJoystickContainer.style.right = "auto";
+        leftJoystickContainer.style.bottom = "auto";
+        leftJoystickContainer.style.transform = "none";
+      }
       if (mobileActionBtn) {
         mobileActionBtn.style.left = `${layout.actionBtnLeft}px`;
         mobileActionBtn.style.right = "auto";
-        if (layout.actionBtnTop !== null) {
+        if (layout.isLandscape) {
+          mobileActionBtn.style.top = "28px";
+          mobileActionBtn.style.bottom = "auto";
+          mobileActionBtn.style.transform = "none";
+        } else if (layout.actionBtnTop !== null) {
           mobileActionBtn.style.top = `${layout.actionBtnTop}px`;
           mobileActionBtn.style.bottom = "auto";
           mobileActionBtn.style.transform = "translateY(-50%)";
@@ -9517,7 +9629,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     const secretSantaDB = await initSecretSantaDB(secret_default);
     attachKeyboardListeners(window, input, {
       onToggleJoystick: () => {
-        joystick?.toggle();
+        joystickEnabled = !joystickEnabled;
         applyViewportLayout(true);
       }
     });
@@ -9587,7 +9699,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           fpsAccumSeconds = 0;
         }
       }
-      const isJoystickShown = joystick?.isVisible() ?? false;
+      const isJoystickShown = joystickEnabled || (joystick?.isVisible() ?? false) || (leftJoystick?.isVisible() ?? false);
       state.joystickActive = isJoystickShown;
       updateGameState(state, input, dtSeconds);
       updateCamera3D(camera3d, state, input, dtSeconds, canvas.width / canvas.height);

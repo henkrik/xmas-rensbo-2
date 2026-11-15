@@ -23,6 +23,11 @@ const indexHtml = `<!DOCTYPE html>
       <div id="game-container">
         <canvas id="webgpu-canvas" width="1280" height="1120"></canvas>
         <canvas id="game-canvas" width="256" height="224"></canvas>
+        <div id="virtual-joystick-left-container" style="display: none;">
+          <div id="virtual-joystick-left-base">
+            <div id="virtual-joystick-left-stick"></div>
+          </div>
+        </div>
         <div id="virtual-joystick-container" style="display: none;">
           <div id="virtual-joystick-base">
             <div id="virtual-joystick-stick"></div>

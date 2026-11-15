@@ -553,7 +553,13 @@ export function updateCamera3D(
     if (input.camRight) {
       input.cameraYaw = wrapAngle(input.cameraYaw + yawSpeed * dtSeconds);
     }
-    if (input.moveVector && Math.abs(input.moveVector.x) > 0.001) {
+    if (input.dualJoystickMode) {
+      if (input.cameraLookVector && Math.abs(input.cameraLookVector.x) > 0.001) {
+        input.cameraYaw = wrapAngle(
+          input.cameraYaw + input.cameraLookVector.x * yawSpeed * dtSeconds
+        );
+      }
+    } else if (input.moveVector && Math.abs(input.moveVector.x) > 0.001) {
       input.cameraYaw = wrapAngle(
         input.cameraYaw + input.moveVector.x * yawSpeed * dtSeconds
       );

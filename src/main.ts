@@ -130,10 +130,34 @@ async function startGame(): Promise<void> {
 
   const joystickContainer = document.getElementById('virtual-joystick-container');
   const joystickStick = document.getElementById('virtual-joystick-stick');
+
+  let leftJoystickContainer = document.getElementById('virtual-joystick-left-container');
+  let leftJoystickStick = document.getElementById('virtual-joystick-left-stick');
+  if (!leftJoystickContainer && gameContainer) {
+    leftJoystickContainer = document.createElement('div');
+    leftJoystickContainer.id = 'virtual-joystick-left-container';
+    leftJoystickContainer.style.display = 'none';
+    const leftBase = document.createElement('div');
+    leftBase.id = 'virtual-joystick-left-base';
+    leftJoystickStick = document.createElement('div');
+    leftJoystickStick.id = 'virtual-joystick-left-stick';
+    leftBase.appendChild(leftJoystickStick);
+    leftJoystickContainer.appendChild(leftBase);
+    if (joystickContainer) {
+      gameContainer.insertBefore(leftJoystickContainer, joystickContainer);
+    } else {
+      gameContainer.appendChild(leftJoystickContainer);
+    }
+  } else if (leftJoystickContainer && !leftJoystickStick) {
+    leftJoystickStick = document.getElementById('virtual-joystick-left-stick');
+  }
+
   const mobileActionBtn = document.getElementById('mobile-action-btn') as HTMLButtonElement | null;
 
   const assets = await loadAllAssets();
   const input = createEmptyInput();
+
+  let joystickEnabled = isMobileDevice;
 
   let joystick: ReturnType<typeof createVirtualJoystick> | null = null;
   if (joystickContainer && joystickStick) {
@@ -141,14 +165,43 @@ async function startGame(): Promise<void> {
       container: joystickContainer,
       stick: joystickStick,
       input,
+      role: 'move',
     });
-
-    if (isMobileDevice) {
-      joystick.show();
-    } else {
-      joystick.hide();
-    }
   }
+
+  let leftJoystick: ReturnType<typeof createVirtualJoystick> | null = null;
+  if (leftJoystickContainer && leftJoystickStick) {
+    leftJoystick = createVirtualJoystick({
+      container: leftJoystickContainer,
+      stick: leftJoystickStick,
+      input,
+      role: 'move',
+    });
+  }
+
+  const syncJoystickMode = (isLandscape: boolean): void => {
+    if (!joystickEnabled) {
+      input.dualJoystickMode = false;
+      joystick?.hide();
+      leftJoystick?.hide();
+      return;
+    }
+
+    if (isLandscape) {
+      input.dualJoystickMode = true;
+      joystick?.setRole('camera');
+      joystick?.show();
+      leftJoystick?.setRole('move');
+      leftJoystick?.show();
+    } else {
+      input.dualJoystickMode = false;
+      leftJoystick?.hide();
+      joystick?.setRole('move');
+      joystick?.show();
+    }
+  };
+
+  syncJoystickMode(detectIsLandscape());
 
   let lastLayoutKey = '';
   let lastIsLandscape: boolean | null = null;
@@ -170,7 +223,7 @@ async function startGame(): Promise<void> {
     // are correctly mapped regardless of delayed browser viewport updates
     const layout = computeViewportLayout(rawW, rawH, isLandscape);
 
-    const layoutKey = `${layout.isLandscape}-${layout.containerWidth}-${layout.containerHeight}-${layout.canvasWidth}-${layout.canvasHeight}`;
+    const layoutKey = `${joystickEnabled}-${layout.isLandscape}-${layout.containerWidth}-${layout.containerHeight}-${layout.canvasWidth}-${layout.canvasHeight}`;
     if (!force && layoutKey === lastLayoutKey) {
       return;
     }
@@ -178,8 +231,10 @@ async function startGame(): Promise<void> {
 
     if (lastIsLandscape !== null && lastIsLandscape !== layout.isLandscape) {
       joystick?.reset();
+      leftJoystick?.reset();
     }
     lastIsLandscape = layout.isLandscape;
+    syncJoystickMode(layout.isLandscape);
 
     if (gameContainer) {
       gameContainer.style.left = '0px';
@@ -218,10 +273,24 @@ async function startGame(): Promise<void> {
       joystickContainer.style.transform = 'none';
     }
 
+    if (leftJoystickContainer) {
+      leftJoystickContainer.style.width = `${layout.joystickSize}px`;
+      leftJoystickContainer.style.height = `${layout.joystickSize}px`;
+      leftJoystickContainer.style.left = `${layout.leftJoystickLeft}px`;
+      leftJoystickContainer.style.top = `${layout.leftJoystickTop}px`;
+      leftJoystickContainer.style.right = 'auto';
+      leftJoystickContainer.style.bottom = 'auto';
+      leftJoystickContainer.style.transform = 'none';
+    }
+
     if (mobileActionBtn) {
       mobileActionBtn.style.left = `${layout.actionBtnLeft}px`;
       mobileActionBtn.style.right = 'auto';
-      if (layout.actionBtnTop !== null) {
+      if (layout.isLandscape) {
+        mobileActionBtn.style.top = '28px';
+        mobileActionBtn.style.bottom = 'auto';
+        mobileActionBtn.style.transform = 'none';
+      } else if (layout.actionBtnTop !== null) {
         mobileActionBtn.style.top = `${layout.actionBtnTop}px`;
         mobileActionBtn.style.bottom = 'auto';
         mobileActionBtn.style.transform = 'translateY(-50%)';
@@ -301,7 +370,7 @@ async function startGame(): Promise<void> {
 
   attachKeyboardListeners(window, input, {
     onToggleJoystick: () => {
-      joystick?.toggle();
+      joystickEnabled = !joystickEnabled;
       applyViewportLayout(true);
     },
   });
@@ -389,7 +458,7 @@ async function startGame(): Promise<void> {
     }
 
     // Track joystick active state in game state so renderer & entities (like dog speed) adapt
-    const isJoystickShown = joystick?.isVisible() ?? false;
+    const isJoystickShown = joystickEnabled || (joystick?.isVisible() ?? false) || (leftJoystick?.isVisible() ?? false);
     state.joystickActive = isJoystickShown;
 
     updateGameState(state, input, dtSeconds);

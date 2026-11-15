@@ -11,6 +11,8 @@ export interface InputState {
   camRight?: boolean;
   pointerClick?: { worldX: number; worldY: number } | null;
   moveVector?: { x: number; y: number } | null;
+  cameraLookVector?: { x: number; y: number } | null;
+  dualJoystickMode?: boolean;
   /**
    * 3D camera horizontal look yaw in radians (`-Math.PI / 2` = looking North / -Y).
    * When set to a number, WASD / directional keys move Santa relative to the camera look direction,
@@ -38,6 +40,8 @@ export function createEmptyInput(): InputState {
     camRight: false,
     pointerClick: null,
     moveVector: null,
+    cameraLookVector: null,
+    dualJoystickMode: false,
     cameraYaw: null,
     cameraPitch: 0.38,
   };
@@ -241,6 +245,7 @@ export interface VirtualJoystickOptions {
   container: HTMLElement;
   stick: HTMLElement;
   input: InputState;
+  role?: 'move' | 'camera';
   targetWindow?: EventTarget;
 }
 
@@ -249,6 +254,8 @@ export interface VirtualJoystickController {
   hide: () => void;
   toggle: () => void;
   reset: () => void;
+  setRole: (role: 'move' | 'camera') => void;
+  getRole: () => 'move' | 'camera';
   isVisible: () => boolean;
   isPointerActive: () => boolean;
   destroy: () => void;
@@ -263,6 +270,8 @@ export interface ViewportLayout {
   joystickSize: number;
   joystickLeft: number;
   joystickTop: number;
+  leftJoystickLeft: number;
+  leftJoystickTop: number;
   actionBtnLeft: number;
   actionBtnTop: number | null;
   actionBtnBottom: number | null;
@@ -319,6 +328,8 @@ export function computeViewportLayout(
       joystickSize,
       joystickLeft: safeVw - joystickSize,
       joystickTop: Math.round((safeVh - joystickSize) / 2),
+      leftJoystickLeft: 0,
+      leftJoystickTop: Math.round((safeVh - joystickSize) / 2),
       actionBtnLeft: 20,
       actionBtnTop: Math.round(safeVh / 2),
       actionBtnBottom: null,
@@ -334,6 +345,8 @@ export function computeViewportLayout(
     joystickSize,
     joystickLeft: Math.round((safeVw - joystickSize) / 2),
     joystickTop: safeVh - joystickSize,
+    leftJoystickLeft: 0,
+    leftJoystickTop: safeVh - joystickSize,
     actionBtnLeft: 20,
     actionBtnTop: null,
     actionBtnBottom: 24,
@@ -347,14 +360,23 @@ export function createVirtualJoystick(
 
   let activePointerId: number | null = null;
   let isDragging = false;
+  let currentRole: 'move' | 'camera' = options.role ?? 'move';
+
+  const clearInputForRole = () => {
+    if (currentRole === 'camera') {
+      input.cameraLookVector = null;
+    } else {
+      input.left = false;
+      input.right = false;
+      input.up = false;
+      input.down = false;
+      input.moveVector = null;
+    }
+  };
 
   const resetStick = () => {
     stick.style.transform = 'translate(0px, 0px)';
-    input.left = false;
-    input.right = false;
-    input.up = false;
-    input.down = false;
-    input.moveVector = null;
+    clearInputForRole();
   };
 
   const handlePointer = (clientX: number, clientY: number) => {
@@ -380,33 +402,44 @@ export function createVirtualJoystick(
     // Deadzone of 15% to prevent small thumb rests from triggering motion
     const deadzone = maxRadius * 0.15;
     if (dist < deadzone) {
-      input.left = false;
-      input.right = false;
-      input.up = false;
-      input.down = false;
-      input.moveVector = null;
+      clearInputForRole();
       return;
     }
 
     // Direction vector scaled by [0, 1] clamped distance from center:
     // - Whenever pointer is at or outside the circle (clampedDist == maxRadius), intensity is 1.0 (100% speed)
     // - When pointer is halfway, intensity is 0.5 (50% speed)
-    input.moveVector = {
-      x: dirX * intensity,
-      y: dirY * intensity,
-    };
+    if (currentRole === 'camera') {
+      input.cameraLookVector = {
+        x: dirX * intensity,
+        y: dirY * intensity,
+      };
+    } else {
+      input.moveVector = {
+        x: dirX * intensity,
+        y: dirY * intensity,
+      };
 
-    // Digital directional booleans without any restrictive angle deadbands
-    input.left = dirX < 0;
-    input.right = dirX > 0;
-    input.up = dirY < 0;
-    input.down = dirY > 0;
+      // Digital directional booleans without any restrictive angle deadbands
+      input.left = dirX < 0;
+      input.right = dirX > 0;
+      input.up = dirY < 0;
+      input.down = dirY > 0;
+    }
   };
 
   const onPointerDown = (e: PointerEvent) => {
+    if (isDragging && activePointerId !== null && activePointerId !== e.pointerId) {
+      return;
+    }
     activePointerId = e.pointerId;
     isDragging = true;
     e.preventDefault();
+    try {
+      container.setPointerCapture?.(e.pointerId);
+    } catch {
+      // Ignore in mocked/headless environments
+    }
     handlePointer(e.clientX, e.clientY);
   };
 
@@ -462,6 +495,15 @@ export function createVirtualJoystick(
       isDragging = false;
       resetStick();
     },
+    setRole: (role: 'move' | 'camera') => {
+      if (currentRole !== role) {
+        activePointerId = null;
+        isDragging = false;
+        resetStick();
+        currentRole = role;
+      }
+    },
+    getRole: () => currentRole,
     isVisible: () => container.style.display !== 'none',
     isPointerActive: () => isDragging,
     destroy: () => {

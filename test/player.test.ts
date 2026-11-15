@@ -3082,4 +3082,145 @@ Tanja -> Alex
     expect(input.cameraYaw).toBeCloseTo(yawBeforeUp, 5);
     expect(input.cameraPitch).toBeCloseTo(0.38, 5);
   });
+
+  it('supports dual joysticks in mobile landscape mode with simultaneous multi-touch pointer IDs', () => {
+    // 1. Landscape layout positions identical-sized left and right joysticks symmetrically
+    const layout = computeViewportLayout(844, 390);
+    expect(layout.isLandscape).toBe(true);
+    expect(layout.joystickSize).toBe(195);
+    expect(layout.leftJoystickLeft).toBe(0);
+    expect(layout.leftJoystickTop).toBe(Math.round((390 - 195) / 2));
+    expect(layout.joystickLeft).toBe(844 - 195);
+    expect(layout.joystickTop).toBe(Math.round((390 - 195) / 2));
+
+    // 2. Simultaneous multi-touch on left (move, pointerId 1) and right (camera, pointerId 2)
+    const input = createEmptyInput();
+    input.dualJoystickMode = true;
+    input.cameraYaw = -Math.PI / 2;
+    input.cameraPitch = 0.38;
+
+    const leftListeners: Record<string, (e: unknown) => void> = {};
+    const rightListeners: Record<string, (e: unknown) => void> = {};
+    const winListeners: Record<string, Array<(e: unknown) => void>> = {
+      pointermove: [],
+      pointerup: [],
+      pointercancel: [],
+    };
+    const mockWindow = {
+      addEventListener: (evt: string, cb: (e: unknown) => void) => {
+        winListeners[evt]?.push(cb);
+      },
+      removeEventListener: () => {},
+    } as unknown as EventTarget;
+
+    const leftContainer = {
+      getBoundingClientRect: () => ({ left: 0, top: 100, width: 200, height: 200 }),
+      addEventListener: (evt: string, cb: (e: unknown) => void) => {
+        leftListeners[evt] = cb;
+      },
+      removeEventListener: () => {},
+      style: { display: 'none' },
+    } as unknown as HTMLElement;
+    const leftStick = { style: { transform: '' } } as unknown as HTMLElement;
+
+    const rightContainer = {
+      getBoundingClientRect: () => ({ left: 600, top: 100, width: 200, height: 200 }),
+      addEventListener: (evt: string, cb: (e: unknown) => void) => {
+        rightListeners[evt] = cb;
+      },
+      removeEventListener: () => {},
+      style: { display: 'none' },
+    } as unknown as HTMLElement;
+    const rightStick = { style: { transform: '' } } as unknown as HTMLElement;
+
+    const leftController = createVirtualJoystick({
+      container: leftContainer,
+      stick: leftStick,
+      input,
+      role: 'move',
+      targetWindow: mockWindow,
+    });
+    const rightController = createVirtualJoystick({
+      container: rightContainer,
+      stick: rightStick,
+      input,
+      role: 'camera',
+      targetWindow: mockWindow,
+    });
+
+    leftController.show();
+    rightController.show();
+
+    // Touch down simultaneously on left stick (right/east strafe) and right stick (right camera turn)
+    leftListeners['pointerdown']?.({
+      pointerId: 1,
+      clientX: 172,
+      clientY: 200,
+      preventDefault: () => {},
+    });
+    rightListeners['pointerdown']?.({
+      pointerId: 2,
+      clientX: 772,
+      clientY: 200,
+      preventDefault: () => {},
+    });
+
+    expect(leftController.isPointerActive()).toBe(true);
+    expect(rightController.isPointerActive()).toBe(true);
+    expect(input.moveVector?.x).toBeCloseTo(1.0, 2);
+    expect(input.cameraLookVector?.x).toBeCloseTo(1.0, 2);
+
+    // Move pointer 1 (left thumb) while pointer 2 stays held; right stick must remain untouched
+    for (const cb of winListeners.pointermove) {
+      cb({ pointerId: 1, clientX: 100, clientY: 128, preventDefault: () => {} });
+    }
+    expect(input.moveVector?.x).toBeCloseTo(0, 2);
+    expect(input.moveVector?.y).toBeCloseTo(-1.0, 2);
+    expect(input.cameraLookVector?.x).toBeCloseTo(1.0, 2);
+
+    // Release pointer 2 (right thumb) while pointer 1 stays held; moveVector must stay active
+    for (const cb of winListeners.pointerup) {
+      cb({ pointerId: 2, preventDefault: () => {} });
+    }
+    expect(rightController.isPointerActive()).toBe(false);
+    expect(leftController.isPointerActive()).toBe(true);
+    expect(input.cameraLookVector).toBeNull();
+    expect(input.moveVector?.y).toBeCloseTo(-1.0, 2);
+
+    // Release pointer 1 as well
+    for (const cb of winListeners.pointerup) {
+      cb({ pointerId: 1, preventDefault: () => {} });
+    }
+    expect(leftController.isPointerActive()).toBe(false);
+    expect(input.moveVector).toBeNull();
+
+    // 3. In dualJoystickMode, left joystick moves Santa relative to cameraYaw (including strafing)
+    // without changing cameraYaw, while right joystick turns cameraYaw without moving Santa
+    const state = createGameState({ isMobile: true, showIntroDialogue: false });
+    const cam = createCamera3D();
+    input.cameraYaw = -Math.PI / 2; // Facing North (-Y)
+    updateCamera3D(cam, state, input, 0);
+    const startX = state.player.x;
+    const startY = state.player.y;
+
+    // Strafe right + forward via left joystick only
+    input.moveVector = { x: 1, y: 0 };
+    input.cameraLookVector = null;
+    updateGameState(state, input, 0.2);
+    updateCamera3D(cam, state, input, 0.2);
+    expect(state.player.x).toBeGreaterThan(startX);
+    expect(state.player.y).toBeCloseTo(startY, 4);
+    expect(input.cameraYaw).toBeCloseTo(-Math.PI / 2, 5);
+
+    // Turn camera right via right joystick only
+    const posXAfterStrafe = state.player.x;
+    const posYAfterStrafe = state.player.y;
+    input.moveVector = null;
+    input.cameraLookVector = { x: 1, y: 0 };
+    updateGameState(state, input, 0.2);
+    updateCamera3D(cam, state, input, 0.2);
+    expect(state.player.x).toBeCloseTo(posXAfterStrafe, 5);
+    expect(state.player.y).toBeCloseTo(posYAfterStrafe, 5);
+    expect(input.cameraYaw).toBeGreaterThan(-Math.PI / 2);
+  });
 });

@@ -189,12 +189,24 @@ export function updatePlayer(
 
   if (input.moveVector) {
     if (typeof input.cameraYaw === 'number') {
-      // In 3D mode, joystick up/down moves Santa forwards/backwards along cameraYaw
-      // while left/right turns the camera angle in updateCamera3D.
-      const forward = -input.moveVector.y;
-      if (Math.abs(forward) > 0.001) {
-        dx = forward * Math.cos(input.cameraYaw);
-        dy = forward * Math.sin(input.cameraYaw);
+      if (input.dualJoystickMode) {
+        // Dual joystick mode (landscape): left joystick controls full 360 camera-relative movement
+        const forward = -input.moveVector.y;
+        const strafe = input.moveVector.x;
+        if (Math.abs(forward) > 0.001 || Math.abs(strafe) > 0.001) {
+          const cosY = Math.cos(input.cameraYaw);
+          const sinY = Math.sin(input.cameraYaw);
+          dx = forward * cosY - strafe * sinY;
+          dy = forward * sinY + strafe * cosY;
+        }
+      } else {
+        // Single joystick mode (portrait): joystick up/down moves Santa forwards/backwards along cameraYaw
+        // while left/right turns the camera angle in updateCamera3D.
+        const forward = -input.moveVector.y;
+        if (Math.abs(forward) > 0.001) {
+          dx = forward * Math.cos(input.cameraYaw);
+          dy = forward * Math.sin(input.cameraYaw);
+        }
       }
     } else {
       dx = input.moveVector.x;

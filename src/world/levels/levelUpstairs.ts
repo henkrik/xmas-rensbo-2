@@ -1,5 +1,18 @@
 import { Cat, createCat } from '../../entities/cat';
-import { Direction, Player, Rect, rectsIntersect } from '../../entities/player';
+import {
+  ArmedNpcState,
+  createArmedNpcState,
+  NPC_HOSTILE_LOSE_SIGHT_SECONDS,
+  stepHostileNpcAlongPath,
+  tryFireHostileNpcUzi,
+  updateNpcHealthAndTimers,
+} from '../../entities/npcCombat';
+import {
+  Direction,
+  Player,
+  Rect,
+  rectsIntersect,
+} from '../../entities/player';
 import {
   ConeOfSight,
   DEFAULT_CONE_OF_SIGHT_DISTANCE,
@@ -317,28 +330,35 @@ export class LevelUpstairs implements GameLevel {
   public cat: Cat;
 
   // Upstairs NPCs
+  public albinX: number = UPSTAIRS_ALBIN_X;
   public albinY: number = UPSTAIRS_ALBIN_START_Y;
   public albinDir: 1 | -1 = 1; // 1 = walking down (south), -1 = walking up (north)
-  public albinCone: ConeOfSight;
+  public albinCone: ConeOfSight | null;
+  public albinCombat: ArmedNpcState;
 
   public readonly henrikNpc = { ...UPSTAIRS_HENRIK_NPC };
   public henrikAngle: number = Math.PI / 2; // Facing south initially
   public henrikTimer: number = 0;
-  public henrikCone: ConeOfSight;
+  public henrikCone: ConeOfSight | null;
+  public henrikCombat: ArmedNpcState;
 
   public readonly tanjaNpc = { ...UPSTAIRS_TANJA_NPC };
-  public tanjaCone: ConeOfSight;
+  public tanjaCone: ConeOfSight | null;
+  public tanjaCombat: ArmedNpcState;
 
   public readonly dianaNpc = { ...UPSTAIRS_DIANA_NPC };
   public dianaCone: ConeOfSight | null = null;
+  public dianaCombat: ArmedNpcState;
 
   public readonly simonNpc = { ...UPSTAIRS_SIMON_NPC };
   public simonCone: ConeOfSight | null = null;
+  public simonCombat: ArmedNpcState;
 
   public readonly anneMarieNpc = { ...UPSTAIRS_ANNE_MARIE_NPC };
   public anneMarieAngle: number = -Math.PI / 2; // Facing north initially
   public anneMarieTimer: number = 0;
-  public anneMarieCone: ConeOfSight;
+  public anneMarieCone: ConeOfSight | null;
+  public anneMarieCombat: ArmedNpcState;
 
   public intruderDetected: boolean = false;
 
@@ -367,6 +387,10 @@ export class LevelUpstairs implements GameLevel {
       },
     ];
 
+    this.albinCombat = createArmedNpcState('upstairs:Albin', 'Albin', Math.PI / 2);
+    this.henrikCombat = createArmedNpcState('upstairs:Henrik', 'Henrik', this.henrikAngle);
+    this.tanjaCombat = createArmedNpcState('upstairs:Tanja', 'Tanja', -Math.PI / 2);
+
     this.albinCone = new ConeOfSight(
       { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
       Math.PI / 2, // south
@@ -393,6 +417,7 @@ export class LevelUpstairs implements GameLevel {
       15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
       3.0 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
     );
+    this.dianaCombat = createArmedNpcState('upstairs:Diana', 'Diana', dianaTreeAngle);
     this.dianaCone = new ConeOfSight(
       { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
       dianaTreeAngle,
@@ -406,6 +431,7 @@ export class LevelUpstairs implements GameLevel {
       15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
       3.0 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
     );
+    this.simonCombat = createArmedNpcState('upstairs:Simon', 'Simon', simonTreeAngle);
     this.simonCone = new ConeOfSight(
       { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
       simonTreeAngle,
@@ -414,12 +440,45 @@ export class LevelUpstairs implements GameLevel {
       DEFAULT_CONE_OF_SIGHT_FOV * 1.5
     );
 
+    this.anneMarieCombat = createArmedNpcState(
+      'upstairs:Anne-Marie',
+      'Anne-Marie',
+      this.anneMarieAngle
+    );
     this.anneMarieCone = new ConeOfSight(
       { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
       this.anneMarieAngle,
       undefined,
       this.map
     );
+  }
+
+  public getArmedNpcs(): Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> {
+    const isTableRoomDoorOpen = !this.doors.some(
+      (d) => d.id === 'upstairs-table-room-door'
+    );
+    const isBedroomDoorOpen = !this.doors.some(
+      (d) => d.id === 'upstairs-bedroom-door'
+    );
+    return [
+      {
+        state: this.albinCombat,
+        bounds: { x: this.albinX, y: this.albinY, width: 12, height: 12 },
+        visible: true,
+      },
+      { state: this.henrikCombat, bounds: this.henrikNpc, visible: isTableRoomDoorOpen },
+      { state: this.tanjaCombat, bounds: this.tanjaNpc, visible: isTableRoomDoorOpen },
+      { state: this.dianaCombat, bounds: this.dianaNpc, visible: true },
+      { state: this.simonCombat, bounds: this.simonNpc, visible: true },
+      { state: this.anneMarieCombat, bounds: this.anneMarieNpc, visible: isBedroomDoorOpen },
+    ];
+  }
+
+  public getArmedNpcByKey(key: string): ArmedNpcState | undefined {
+    for (const entry of this.getArmedNpcs()) {
+      if (entry.state.key === key) return entry.state;
+    }
+    return undefined;
   }
 
   public enter(player: Player): void {
@@ -433,38 +492,62 @@ export class LevelUpstairs implements GameLevel {
     player.isMoving = false;
     player.walkTimer = 0;
 
-    // Reset Upstairs sight & timers
+    // Reset Upstairs passive sight & timers (preserve dead NPCs)
     this.intruderDetected = false;
-    this.albinY = UPSTAIRS_ALBIN_START_Y;
-    this.albinDir = 1;
-    this.albinCone = new ConeOfSight(
-      { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
-      Math.PI / 2,
-      undefined,
-      this.map
-    );
+    if (this.albinCombat.mode !== 'dead') {
+      this.albinCombat.mode = 'passive';
+      this.albinCombat.unseenTimer = 0;
+      this.albinY = UPSTAIRS_ALBIN_START_Y;
+      this.albinDir = 1;
+      this.albinCombat.aimYaw = Math.PI / 2;
+      this.albinCone = new ConeOfSight(
+        { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
+        Math.PI / 2,
+        undefined,
+        this.map
+      );
+    } else {
+      this.albinCone = null;
+    }
 
-    this.henrikAngle = Math.PI / 2;
-    this.henrikTimer = 0;
-    this.henrikCone = new ConeOfSight(
-      { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
-      this.henrikAngle,
-      undefined,
-      this.map
-    );
+    if (this.henrikCombat.mode !== 'dead') {
+      this.henrikCombat.mode = 'passive';
+      this.henrikCombat.unseenTimer = 0;
+      this.henrikAngle = Math.PI / 2;
+      this.henrikTimer = 0;
+      this.henrikCombat.aimYaw = this.henrikAngle;
+      this.henrikCone = new ConeOfSight(
+        { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
+        this.henrikAngle,
+        undefined,
+        this.map
+      );
+    } else {
+      this.henrikCone = null;
+    }
 
-    this.tanjaCone = new ConeOfSight(
-      { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
-      -Math.PI / 2,
-      undefined,
-      this.map
-    );
+    if (this.tanjaCombat.mode !== 'dead') {
+      this.tanjaCombat.mode = 'passive';
+      this.tanjaCombat.unseenTimer = 0;
+      this.tanjaCombat.aimYaw = -Math.PI / 2;
+      this.tanjaCone = new ConeOfSight(
+        { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
+        -Math.PI / 2,
+        undefined,
+        this.map
+      );
+    } else {
+      this.tanjaCone = null;
+    }
 
-    if (!player.states.get(DIANA_DISTRACTED_KEY)) {
+    if (this.dianaCombat.mode !== 'dead' && !player.states.get(DIANA_DISTRACTED_KEY)) {
+      this.dianaCombat.mode = 'passive';
+      this.dianaCombat.unseenTimer = 0;
       const dianaTreeAngle = Math.atan2(
         15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
         3.0 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
       );
+      this.dianaCombat.aimYaw = dianaTreeAngle;
       this.dianaCone = new ConeOfSight(
         { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
         dianaTreeAngle,
@@ -476,11 +559,14 @@ export class LevelUpstairs implements GameLevel {
       this.dianaCone = null;
     }
 
-    if (!player.states.get(SIMON_DISTRACTED_KEY)) {
+    if (this.simonCombat.mode !== 'dead' && !player.states.get(SIMON_DISTRACTED_KEY)) {
+      this.simonCombat.mode = 'passive';
+      this.simonCombat.unseenTimer = 0;
       const simonTreeAngle = Math.atan2(
         15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
         3.0 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
       );
+      this.simonCombat.aimYaw = simonTreeAngle;
       this.simonCone = new ConeOfSight(
         { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
         simonTreeAngle,
@@ -492,27 +578,37 @@ export class LevelUpstairs implements GameLevel {
       this.simonCone = null;
     }
 
-    this.anneMarieAngle = -Math.PI / 2;
-    this.anneMarieTimer = 0;
-    this.anneMarieCone = new ConeOfSight(
-      { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
-      this.anneMarieAngle,
-      undefined,
-      this.map
-    );
+    if (this.anneMarieCombat.mode !== 'dead') {
+      this.anneMarieCombat.mode = 'passive';
+      this.anneMarieCombat.unseenTimer = 0;
+      this.anneMarieAngle = -Math.PI / 2;
+      this.anneMarieTimer = 0;
+      this.anneMarieCombat.aimYaw = this.anneMarieAngle;
+      this.anneMarieCone = new ConeOfSight(
+        { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
+        this.anneMarieAngle,
+        undefined,
+        this.map
+      );
+    } else {
+      this.anneMarieCone = null;
+    }
   }
 
   public getSolidObstacles(): readonly Rect[] {
-    return [
+    const obs: Rect[] = [
       UPSTAIRS_STAIRS_TRIGGER_BOUNDS,
-      { x: UPSTAIRS_ALBIN_X, y: this.albinY, width: 12, height: 12 },
-      this.henrikNpc,
-      this.tanjaNpc,
-      this.dianaNpc,
-      this.simonNpc,
-      this.anneMarieNpc,
       ...this.doors.map((d) => d.bounds),
     ];
+    if (this.albinCombat.mode !== 'dead') {
+      obs.push({ x: this.albinX, y: this.albinY, width: 12, height: 12 });
+    }
+    if (this.henrikCombat.mode !== 'dead') obs.push(this.henrikNpc);
+    if (this.tanjaCombat.mode !== 'dead') obs.push(this.tanjaNpc);
+    if (this.dianaCombat.mode !== 'dead') obs.push(this.dianaNpc);
+    if (this.simonCombat.mode !== 'dead') obs.push(this.simonNpc);
+    if (this.anneMarieCombat.mode !== 'dead') obs.push(this.anneMarieNpc);
+    return obs;
   }
 
   public getInteractables(player?: Player): Interactable[] {
@@ -765,153 +861,320 @@ export class LevelUpstairs implements GameLevel {
     return false;
   }
 
+  private updateHostileNpc(
+    combat: ArmedNpcState,
+    bounds: Rect,
+    player: Player,
+    dtSeconds: number,
+    ctx: LevelTransitionContext,
+    fov: number = DEFAULT_CONE_OF_SIGHT_FOV
+  ): ConeOfSight {
+    stepHostileNpcAlongPath(
+      combat,
+      bounds,
+      player,
+      this.map,
+      this.getSolidObstacles(),
+      dtSeconds
+    );
+    const originX = bounds.x + bounds.width * 0.5;
+    const originY = bounds.y + bounds.height * 0.5;
+    const playerCx = player.x + player.width * 0.5;
+    const playerCy = player.y + player.height * 0.5;
+    const aimYaw = Math.atan2(playerCy - originY, playerCx - originX);
+    combat.aimYaw = aimYaw;
+    const cone = new ConeOfSight(
+      { x: originX, y: originY },
+      aimYaw,
+      DEFAULT_CONE_OF_SIGHT_DISTANCE,
+      this.map,
+      fov
+    );
+    if (cone.checkDetection(player)) {
+      combat.unseenTimer = 0;
+    } else {
+      combat.unseenTimer += dtSeconds;
+    }
+    if (combat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+      combat.mode = 'passive';
+      combat.unseenTimer = 0;
+      combat.isMoving = false;
+      combat.path = [];
+      combat.pathTimer = 0;
+    } else {
+      tryFireHostileNpcUzi(combat, originX, originY, aimYaw, ctx.fireNpcUzi);
+    }
+    return cone;
+  }
+
   /**
-   * Updates all Upstairs NPCs movement, rotation, and line/cone of sight detection.
+   * Updates all Upstairs NPCs' patrol, cones of sight, and hostile Uzi combat.
    */
   public updateNpcSight(
     dtSeconds: number,
     player: Player,
     ctx: LevelTransitionContext
   ): void {
-    if (this.intruderDetected) {
-      return;
-    }
+    const playerCx = player.x + player.width * 0.5;
+    const playerCy = player.y + player.height * 0.5;
 
-    // 1. Albin walks up and down in dining room (col 7, rows 5..9)
-    this.albinY += this.albinDir * UPSTAIRS_ALBIN_SPEED * dtSeconds;
-    if (this.albinDir === 1 && this.albinY >= UPSTAIRS_ALBIN_END_Y) {
-      this.albinY = UPSTAIRS_ALBIN_END_Y;
-      this.albinDir = -1; // change to walking north
-    } else if (this.albinDir === -1 && this.albinY <= UPSTAIRS_ALBIN_START_Y) {
-      this.albinY = UPSTAIRS_ALBIN_START_Y;
-      this.albinDir = 1; // change to walking south
-    }
-
-    // Cone faces north (-PI/2) when walking north, south (PI/2) when walking south
-    const albinAngle = this.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2;
-    this.albinCone = new ConeOfSight(
-      { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
-      albinAngle,
-      undefined,
-      this.map
-    );
-
-    if (this.albinCone.checkDetection(player)) {
-      this.triggerDetection(
-        ctx,
+    // 1. Albin in dining room (col 7, rows 5..9)
+    updateNpcHealthAndTimers(this.albinCombat, dtSeconds);
+    if (this.albinCombat.mode === 'dead') {
+      this.albinCone = null;
+    } else if (this.albinCombat.mode === 'hostile') {
+      const albinBounds: Rect = { x: this.albinX, y: this.albinY, width: 12, height: 12 };
+      this.albinCone = this.updateHostileNpc(
+        this.albinCombat,
+        albinBounds,
         player,
-        'Albin',
-        'I was looking for Rosanna... but instead I found you!!'
+        dtSeconds,
+        ctx
       );
-      return;
+      this.albinX = albinBounds.x;
+      this.albinY = albinBounds.y;
+    } else {
+      this.albinY += this.albinDir * UPSTAIRS_ALBIN_SPEED * dtSeconds;
+      if (this.albinDir === 1 && this.albinY >= UPSTAIRS_ALBIN_END_Y) {
+        this.albinY = UPSTAIRS_ALBIN_END_Y;
+        this.albinDir = -1;
+      } else if (this.albinDir === -1 && this.albinY <= UPSTAIRS_ALBIN_START_Y) {
+        this.albinY = UPSTAIRS_ALBIN_START_Y;
+        this.albinDir = 1;
+      }
+      const albinAngle = this.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2;
+      this.albinCombat.aimYaw = albinAngle;
+      this.albinCone = new ConeOfSight(
+        { x: this.albinX + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
+        albinAngle,
+        undefined,
+        this.map
+      );
+      if (this.albinCone.checkDetection(player)) {
+        this.albinCombat.mode = 'hostile';
+        this.albinCombat.unseenTimer = 0;
+        this.albinCombat.pathTimer = 0;
+        const aimYaw = Math.atan2(playerCy - (this.albinY + 6), playerCx - (this.albinX + 6));
+        this.albinCombat.aimYaw = aimYaw;
+        this.albinCone = new ConeOfSight(
+          { x: this.albinX + 6, y: this.albinY + 6 },
+          aimYaw,
+          undefined,
+          this.map
+        );
+      }
     }
 
     // 2. Henrik & Tanja in table room (only if table room door is opened!)
     const isTableRoomDoorOpen = !this.doors.some(
       (d) => d.id === 'upstairs-table-room-door'
     );
+    updateNpcHealthAndTimers(this.henrikCombat, dtSeconds);
+    updateNpcHealthAndTimers(this.tanjaCombat, dtSeconds);
     if (isTableRoomDoorOpen) {
-      this.henrikTimer += dtSeconds;
-      if (this.henrikTimer >= 1.0) {
-        this.henrikTimer -= 1.0;
-        // rotates 45 degrees counter-clockwise (-PI/4)
-        this.henrikAngle -= Math.PI / 4;
-        this.henrikCone = new ConeOfSight(
-          { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
-          this.henrikAngle,
-          undefined,
-          this.map
+      if (this.henrikCombat.mode === 'dead') {
+        this.henrikCone = null;
+      } else if (this.henrikCombat.mode === 'hostile') {
+        this.henrikCone = this.updateHostileNpc(
+          this.henrikCombat,
+          this.henrikNpc,
+          player,
+          dtSeconds,
+          ctx
         );
+      } else {
+        this.henrikTimer += dtSeconds;
+        if (this.henrikTimer >= 1.0) {
+          this.henrikTimer -= 1.0;
+          this.henrikAngle -= Math.PI / 4;
+          this.henrikCone = new ConeOfSight(
+            { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
+            this.henrikAngle,
+            undefined,
+            this.map
+          );
+        }
+        this.henrikCombat.aimYaw = this.henrikCone?.direction ?? this.henrikAngle;
+        if (this.henrikCone?.checkDetection(player)) {
+          this.henrikCombat.mode = 'hostile';
+          this.henrikCombat.unseenTimer = 0;
+          const aimYaw = Math.atan2(playerCy - (this.henrikNpc.y + 6), playerCx - (this.henrikNpc.x + 6));
+          this.henrikCombat.aimYaw = aimYaw;
+          this.henrikCone = new ConeOfSight(
+            { x: this.henrikNpc.x + 6, y: this.henrikNpc.y + 6 },
+            aimYaw,
+            undefined,
+            this.map
+          );
+        }
       }
 
-      if (this.henrikCone.checkDetection(player)) {
-        this.triggerDetection(
-          ctx,
+      if (this.tanjaCombat.mode === 'dead') {
+        this.tanjaCone = null;
+      } else if (this.tanjaCombat.mode === 'hostile') {
+        this.tanjaCone = this.updateHostileNpc(
+          this.tanjaCombat,
+          this.tanjaNpc,
           player,
-          'Henrik',
-          'Santa? Perfect you can play with Asta!!'
+          dtSeconds,
+          ctx
         );
-        return;
-      }
-
-      if (this.tanjaCone.checkDetection(player)) {
-        this.triggerDetection(
-          ctx,
-          player,
-          'Tanja',
-          'I like your suit, red like the color of wine.'
-        );
-        return;
+      } else {
+        if (!this.tanjaCone) {
+          this.tanjaCone = new ConeOfSight(
+            { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
+            -Math.PI / 2,
+            undefined,
+            this.map
+          );
+        }
+        this.tanjaCombat.aimYaw = this.tanjaCone.direction;
+        if (this.tanjaCone.checkDetection(player)) {
+          this.tanjaCombat.mode = 'hostile';
+          this.tanjaCombat.unseenTimer = 0;
+          const aimYaw = Math.atan2(playerCy - (this.tanjaNpc.y + 6), playerCx - (this.tanjaNpc.x + 6));
+          this.tanjaCombat.aimYaw = aimYaw;
+          this.tanjaCone = new ConeOfSight(
+            { x: this.tanjaNpc.x + 6, y: this.tanjaNpc.y + 6 },
+            aimYaw,
+            undefined,
+            this.map
+          );
+        }
       }
     }
 
     // 3. Diana & Simon in living room
-    if (this.dianaCone && this.dianaCone.checkDetection(player)) {
-      this.triggerDetection(
-        ctx,
+    updateNpcHealthAndTimers(this.dianaCombat, dtSeconds);
+    if (this.dianaCombat.mode === 'dead') {
+      this.dianaCone = null;
+    } else if (this.dianaCombat.mode === 'hostile') {
+      this.dianaCone = this.updateHostileNpc(
+        this.dianaCombat,
+        this.dianaNpc,
         player,
-        'Diana',
-        'Do you have any destilleries on the North pole?'
+        dtSeconds,
+        ctx,
+        DEFAULT_CONE_OF_SIGHT_FOV * 1.5
       );
-      return;
+      if ((this.dianaCombat.mode as string) === 'passive') {
+        if (player.states.get(DIANA_DISTRACTED_KEY)) {
+          this.dianaCone = null;
+        } else {
+          const dianaTreeAngle = Math.atan2(
+            15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
+            3.0 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
+          );
+          this.dianaCombat.aimYaw = dianaTreeAngle;
+          this.dianaCone = new ConeOfSight(
+            { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
+            dianaTreeAngle,
+            DEFAULT_CONE_OF_SIGHT_DISTANCE,
+            this.map,
+            DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+          );
+        }
+      }
+    } else if (this.dianaCone && this.dianaCone.checkDetection(player)) {
+      this.dianaCombat.mode = 'hostile';
+      this.dianaCombat.unseenTimer = 0;
+      const aimYaw = Math.atan2(playerCy - (this.dianaNpc.y + 6), playerCx - (this.dianaNpc.x + 6));
+      this.dianaCombat.aimYaw = aimYaw;
+      this.dianaCone = new ConeOfSight(
+        { x: this.dianaNpc.x + 6, y: this.dianaNpc.y + 6 },
+        aimYaw,
+        DEFAULT_CONE_OF_SIGHT_DISTANCE,
+        this.map,
+        DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+      );
     }
 
-    if (this.simonCone && this.simonCone.checkDetection(player)) {
-      this.triggerDetection(
-        ctx,
+    updateNpcHealthAndTimers(this.simonCombat, dtSeconds);
+    if (this.simonCombat.mode === 'dead') {
+      this.simonCone = null;
+    } else if (this.simonCombat.mode === 'hostile') {
+      this.simonCone = this.updateHostileNpc(
+        this.simonCombat,
+        this.simonNpc,
         player,
-        'Simon',
-        'If I knew you were around here, I would have moved back to Sweden a long time ago.'
+        dtSeconds,
+        ctx,
+        DEFAULT_CONE_OF_SIGHT_FOV * 1.5
       );
-      return;
+      if ((this.simonCombat.mode as string) === 'passive') {
+        if (player.states.get(SIMON_DISTRACTED_KEY)) {
+          this.simonCone = null;
+        } else {
+          const simonTreeAngle = Math.atan2(
+            15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
+            3.0 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
+          );
+          this.simonCombat.aimYaw = simonTreeAngle;
+          this.simonCone = new ConeOfSight(
+            { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
+            simonTreeAngle,
+            DEFAULT_CONE_OF_SIGHT_DISTANCE,
+            this.map,
+            DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+          );
+        }
+      }
+    } else if (this.simonCone && this.simonCone.checkDetection(player)) {
+      this.simonCombat.mode = 'hostile';
+      this.simonCombat.unseenTimer = 0;
+      const aimYaw = Math.atan2(playerCy - (this.simonNpc.y + 6), playerCx - (this.simonNpc.x + 6));
+      this.simonCombat.aimYaw = aimYaw;
+      this.simonCone = new ConeOfSight(
+        { x: this.simonNpc.x + 6, y: this.simonNpc.y + 6 },
+        aimYaw,
+        DEFAULT_CONE_OF_SIGHT_DISTANCE,
+        this.map,
+        DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+      );
     }
 
     // 4. Anne-Marie in bedroom (only if bedroom door is open!)
     const isBedroomDoorOpen = !this.doors.some(
       (d) => d.id === 'upstairs-bedroom-door'
     );
+    updateNpcHealthAndTimers(this.anneMarieCombat, dtSeconds);
     if (isBedroomDoorOpen) {
-      this.anneMarieTimer += dtSeconds;
-      if (this.anneMarieTimer >= 1.0) {
-        this.anneMarieTimer -= 1.0;
-        // rotates 45 degrees
-        this.anneMarieAngle += Math.PI / 4;
-        this.anneMarieCone = new ConeOfSight(
-          { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
-          this.anneMarieAngle,
-          undefined,
-          this.map
-        );
-      }
-
-      if (this.anneMarieCone.checkDetection(player)) {
-        this.triggerDetection(
-          ctx,
+      if (this.anneMarieCombat.mode === 'dead') {
+        this.anneMarieCone = null;
+      } else if (this.anneMarieCombat.mode === 'hostile') {
+        this.anneMarieCone = this.updateHostileNpc(
+          this.anneMarieCombat,
+          this.anneMarieNpc,
           player,
-          'Anne-Marie',
-          'What a coincidence, I was just reading a story about you.'
+          dtSeconds,
+          ctx
         );
-        return;
+      } else {
+        this.anneMarieTimer += dtSeconds;
+        if (this.anneMarieTimer >= 1.0) {
+          this.anneMarieTimer -= 1.0;
+          this.anneMarieAngle += Math.PI / 4;
+          this.anneMarieCone = new ConeOfSight(
+            { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
+            this.anneMarieAngle,
+            undefined,
+            this.map
+          );
+        }
+        this.anneMarieCombat.aimYaw = this.anneMarieCone?.direction ?? this.anneMarieAngle;
+        if (this.anneMarieCone?.checkDetection(player)) {
+          this.anneMarieCombat.mode = 'hostile';
+          this.anneMarieCombat.unseenTimer = 0;
+          const aimYaw = Math.atan2(playerCy - (this.anneMarieNpc.y + 6), playerCx - (this.anneMarieNpc.x + 6));
+          this.anneMarieCombat.aimYaw = aimYaw;
+          this.anneMarieCone = new ConeOfSight(
+            { x: this.anneMarieNpc.x + 6, y: this.anneMarieNpc.y + 6 },
+            aimYaw,
+            undefined,
+            this.map
+          );
+        }
       }
     }
-  }
-
-  private triggerDetection(
-    ctx: LevelTransitionContext,
-    player: Player,
-    speaker: string,
-    dialogue: string
-  ): void {
-    this.intruderDetected = true;
-    player.isMoving = false;
-    ctx.openDialogue(
-      [dialogue],
-      () => {
-        ctx.loadLevel('level-upstairs');
-        player.blinkTimer = 2.0; // HIT_BLINK_DURATION_SECONDS
-        ctx.damagePlayer?.(30);
-      },
-      speaker
-    );
   }
 }

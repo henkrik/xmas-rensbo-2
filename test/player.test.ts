@@ -108,7 +108,6 @@ import {
   SIMON_DISTRACTED_KEY,
   SIMON_PRESENT_TAKEN_KEY,
   UPSTAIRS_ALBIN_START_Y,
-  UPSTAIRS_ALBIN_X,
   UPSTAIRS_BEDROOM_DOOR_BOUNDS,
   UPSTAIRS_BEDROOM_HIDDEN_MASK,
   UPSTAIRS_COMPUTER_BOUNDS,
@@ -154,6 +153,15 @@ import {
   TILE_SIZE,
   TileType,
 } from '../src/world/tilemap';
+import {
+  isNpcBillboardVisible,
+  MAX_NPC_HEALTH,
+  NPC_HOSTILE_LOSE_SIGHT_SECONDS,
+  NPC_UZI_BULLET_DAMAGE,
+  NPC_UZI_MAGAZINE_SIZE,
+  NPC_UZI_RELOAD_SECONDS,
+} from '../src/entities/npcCombat';
+import { AStarPathfinder } from '../src/world/pathfinding';
 import {
   OUTSIDE_ALEX_NPC,
   RUDOLPH_INSPECTED_KEY,
@@ -1636,9 +1644,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     // 1. Initially looking north (-Math.PI / 2 radians, or 90 degrees absolute)
     expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2);
     // Distance increased by +50%: 5 tiles * 1.5 = 7.5 tiles
-    expect(basement.coneOfSight.distance).toBe(7.5 * 16);
-    expect(basement.coneOfSight.lines.length).toBe(5);
-    expect(basement.coneOfSight.sightPolygon.length).toBe(6);
+    expect(basement.coneOfSight!.distance).toBe(7.5 * 16);
+    expect(basement.coneOfSight!.lines.length).toBe(5);
+    expect(basement.coneOfSight!.sightPolygon.length).toBe(6);
 
     // Every 2 seconds it deletes old cone of sight and spawns new one +45 degrees
     updateGameState(state, input, 1.0);
@@ -1650,27 +1658,16 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 2.0); // total 4.1s
     expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2 + (2 * Math.PI) / 4);
 
-    // 2. Test player detection: place Santa in the NPC's cone of sight
-    const targetBox = basement.coneOfSight.getAllBoxes()[5];
+    // 2. Test player detection: place Santa in Arjan's cone of sight -> enters hostile mode and shoots Uzi (no dialog/reset)
+    const targetBox = basement.coneOfSight!.getAllBoxes()[5];
     state.player.x = targetBox.x - 2;
     state.player.y = targetBox.y - 2;
     updateGameState(state, input, 0.01);
 
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe(
-      "You're not supposed to be here! Check-mate."
-    );
-    expect(state.activeDialogue?.speakerPortrait).toBe('Arjan');
-    expect(basement.intruderDetected).toBe(true);
-
-    // 3. Closing the dialogue triggers player damage (reloads level-basement and starts blinking)
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
     expect(state.activeDialogue).toBeNull();
-    expect(state.currentLevelId).toBe('level-basement');
-    expect(state.player.blinkTimer).toBeGreaterThan(0);
+    expect(basement.arjanCombat.mode).toBe('hostile');
+    updateGameState(state, input, 0.05);
+    expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan')).toBe(true);
   });
 
   it('supports the people level (?level=people), spawning 11 NPCs and talking to each with their portrait', () => {
@@ -1742,33 +1739,22 @@ describe('Player walking & 2x Rensbo map layout', () => {
     const basement = state.levels['level-basement'] as LevelBasement;
 
     // Olexa is 1 tile south of the chess board, cone of sight looking north (-Math.PI / 2)
-    expect(basement.olexaConeOfSight.lines.length).toBe(5);
-    expect(basement.olexaConeOfSight.direction).toBeCloseTo(-Math.PI / 2);
+    expect(basement.olexaConeOfSight!.lines.length).toBe(5);
+    expect(basement.olexaConeOfSight!.direction).toBeCloseTo(-Math.PI / 2);
 
     // Check that the chess board table (cols 8..9, row 17) is floor and not collidable
     expect(basement.map.tiles[17][8]).toBe(TileType.WoodFloor);
     expect(basement.map.tiles[17][9]).toBe(TileType.WoodFloor);
 
-    // Place Santa inside Olexa's cone of sight (north of Olexa, right at the chess table)
+    // Place Santa inside Olexa's cone of sight -> turns hostile & fires Uzi without dialogue/reset
     state.player.x = 8.5 * TILE_SIZE;
     state.player.y = 17 * TILE_SIZE;
     updateGameState(state, input, 0.01);
 
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe(
-      'Nobody believed me when I said you were real...'
-    );
-    expect(state.activeDialogue?.speakerPortrait).toBe('Olexa');
-    expect(basement.intruderDetected).toBe(true);
-
-    // Close dialogue with KeyZ -> reloads level-basement and starts blinking
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
     expect(state.activeDialogue).toBeNull();
-    expect(state.currentLevelId).toBe('level-basement');
-    expect(state.player.blinkTimer).toBeGreaterThan(0);
+    expect(basement.olexaCombat.mode).toBe('hostile');
+    updateGameState(state, input, 0.05);
+    expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Olexa')).toBe(true);
   });
 
   it('patrols upstairs Albin in dining room with reversing cone of sight and damages Santa on detection', () => {
@@ -1781,34 +1767,23 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
     expect(upstairs.albinY).toBe(UPSTAIRS_ALBIN_START_Y);
     expect(upstairs.albinDir).toBe(1); // Walking south
-    expect(upstairs.albinCone.direction).toBeCloseTo(Math.PI / 2);
+    expect(upstairs.albinCone!.direction).toBeCloseTo(Math.PI / 2);
 
     // Advance 6 seconds: Albin moves at 15 px/s, travels > 64px, reaches end, reverses to walking north (-Math.PI / 2)
     updateGameState(state, input, 6.0);
     expect(upstairs.albinDir).toBe(-1);
-    expect(upstairs.albinCone.direction).toBeCloseTo(-Math.PI / 2);
+    expect(upstairs.albinCone!.direction).toBeCloseTo(-Math.PI / 2);
 
-    // Place Santa in Albin's cone of sight
-    const targetBox = upstairs.albinCone.getAllBoxes()[5];
+    // Place Santa in Albin's cone of sight -> turns hostile & shoots Uzi
+    const targetBox = upstairs.albinCone!.getAllBoxes()[5];
     state.player.x = targetBox.x - 2;
     state.player.y = targetBox.y - 2;
     updateGameState(state, input, 0.01);
 
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe(
-      'I was looking for Rosanna... but instead I found you!!'
-    );
-    expect(state.activeDialogue?.speakerPortrait).toBe('Albin');
-    expect(upstairs.intruderDetected).toBe(true);
-
-    // Dismiss dialogue -> damages Santa & reloads level-upstairs
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
     expect(state.activeDialogue).toBeNull();
-    expect(state.currentLevelId).toBe('level-upstairs');
-    expect(state.player.blinkTimer).toBeGreaterThan(0);
+    expect(upstairs.albinCombat.mode).toBe('hostile');
+    updateGameState(state, input, 0.05);
+    expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'upstairs:Albin')).toBe(true);
   });
 
   it('handles upstairs Henrik and Tanja in table room after opening door', () => {
@@ -1824,11 +1799,11 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(upstairs.henrikAngle).toBeCloseTo(Math.PI / 2);
 
     // Place Santa where Henrik would see him if door was open
-    const targetBoxClosed = upstairs.henrikCone.getAllBoxes()[5];
+    const targetBoxClosed = upstairs.henrikCone!.getAllBoxes()[5];
     state.player.x = targetBoxClosed.x - 2;
     state.player.y = targetBoxClosed.y - 2;
     updateGameState(state, input, 0.01);
-    expect(state.activeDialogue).toBeNull(); // Door is closed, inactive
+    expect(upstairs.henrikCombat.mode).toBe('passive'); // Door is closed, inactive
 
     // 2. Open table room door
     const tableRoomDoor = upstairs.doors.find(
@@ -1852,26 +1827,14 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.6); // Total 1.1s -> rotates by -Math.PI / 4
     expect(upstairs.henrikAngle).toBeCloseTo(Math.PI / 2 - Math.PI / 4);
 
-    // 4. Henrik detects Santa
-    const henrikBox = upstairs.henrikCone.getAllBoxes()[5];
+    // 4. Henrik detects Santa -> turns hostile
+    const henrikBox = upstairs.henrikCone!.getAllBoxes()[5];
     state.player.x = henrikBox.x - 2;
     state.player.y = henrikBox.y - 2;
     updateGameState(state, input, 0.01);
+    expect(upstairs.henrikCombat.mode).toBe('hostile');
 
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe(
-      'Santa? Perfect you can play with Asta!!'
-    );
-    expect(state.activeDialogue?.speakerPortrait).toBe('Henrik');
-
-    // Dismiss dialogue -> damages Santa & reloads
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.currentLevelId).toBe('level-upstairs');
-    expect(state.player.blinkTimer).toBeGreaterThan(0);
-
-    // 5. Tanja detection (always facing north)
+    // 5. Tanja detection (always facing north) -> turns hostile
     const state2 = createGameState({
       initialLevelId: 'level-upstairs',
       showIntroDialogue: false,
@@ -1881,22 +1844,17 @@ describe('Player walking & 2x Rensbo map layout', () => {
     upstairs2.doors = upstairs2.doors.filter(
       (d) => d.id !== 'upstairs-table-room-door'
     );
-    expect(upstairs2.tanjaCone.direction).toBeCloseTo(-Math.PI / 2);
+    expect(upstairs2.tanjaCone!.direction).toBeCloseTo(-Math.PI / 2);
 
-    const tanjaBox = upstairs2.tanjaCone.getAllBoxes()[5];
+    const tanjaBox = upstairs2.tanjaCone!.getAllBoxes()[5];
     state2.player.x = tanjaBox.x - 2;
     state2.player.y = tanjaBox.y - 2;
     updateGameState(state2, input, 0.01);
-
-    expect(state2.activeDialogue).not.toBeNull();
-    expect(state2.activeDialogue?.lines[0]).toBe(
-      'I like your suit, red like the color of wine.'
-    );
-    expect(state2.activeDialogue?.speakerPortrait).toBe('Tanja');
+    expect(upstairs2.tanjaCombat.mode).toBe('hostile');
   });
 
   it('detects Santa in upstairs living room via Diana and Simon cones of sight', () => {
-    // 1. Diana detection (looking towards Christmas tree)
+    // 1. Diana detection (looking towards Christmas tree) -> turns hostile
     const stateDiana = createGameState({
       initialLevelId: 'level-upstairs',
       showIntroDialogue: false,
@@ -1908,20 +1866,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
     stateDiana.player.x = dianaBox.x - 2;
     stateDiana.player.y = dianaBox.y - 2;
     updateGameState(stateDiana, input, 0.01);
+    expect(upstairsDiana.dianaCombat.mode).toBe('hostile');
 
-    expect(stateDiana.activeDialogue).not.toBeNull();
-    expect(stateDiana.activeDialogue?.lines[0]).toBe(
-      'Do you have any destilleries on the North pole?'
-    );
-    expect(stateDiana.activeDialogue?.speakerPortrait).toBe('Diana');
-
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(stateDiana, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(stateDiana.currentLevelId).toBe('level-upstairs');
-    expect(stateDiana.player.blinkTimer).toBeGreaterThan(0);
-
-    // 2. Simon detection (looking towards Christmas tree)
+    // 2. Simon detection (looking towards Christmas tree) -> turns hostile
     const stateSimon = createGameState({
       initialLevelId: 'level-upstairs',
       showIntroDialogue: false,
@@ -1932,18 +1879,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     stateSimon.player.x = simonBox.x - 2;
     stateSimon.player.y = simonBox.y - 2;
     updateGameState(stateSimon, input, 0.01);
-
-    expect(stateSimon.activeDialogue).not.toBeNull();
-    expect(stateSimon.activeDialogue?.lines[0]).toBe(
-      'If I knew you were around here, I would have moved back to Sweden a long time ago.'
-    );
-    expect(stateSimon.activeDialogue?.speakerPortrait).toBe('Simon');
-
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(stateSimon, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(stateSimon.currentLevelId).toBe('level-upstairs');
-    expect(stateSimon.player.blinkTimer).toBeGreaterThan(0);
+    expect(upstairsSimon.simonCombat.mode).toBe('hostile');
   });
 
   it('handles upstairs Anne-Marie in bedroom after opening door', () => {
@@ -1955,11 +1891,11 @@ describe('Player walking & 2x Rensbo map layout', () => {
     const upstairs = state.levels['level-upstairs'] as LevelUpstairs;
 
     // 1. Inactive when door is closed
-    const targetBoxClosed = upstairs.anneMarieCone.getAllBoxes()[5];
+    const targetBoxClosed = upstairs.anneMarieCone!.getAllBoxes()[5];
     state.player.x = targetBoxClosed.x - 2;
     state.player.y = targetBoxClosed.y - 2;
     updateGameState(state, input, 0.01);
-    expect(state.activeDialogue).toBeNull();
+    expect(upstairs.anneMarieCombat.mode).toBe('passive');
 
     // 2. Open bedroom door
     upstairs.doors = upstairs.doors.filter(
@@ -1971,24 +1907,12 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 1.1);
     expect(upstairs.anneMarieAngle).toBeCloseTo(-Math.PI / 2 + Math.PI / 4);
 
-    // 4. Detects Santa
-    const targetBoxOpen = upstairs.anneMarieCone.getAllBoxes()[5];
+    // 4. Detects Santa -> turns hostile
+    const targetBoxOpen = upstairs.anneMarieCone!.getAllBoxes()[5];
     state.player.x = targetBoxOpen.x - 2;
     state.player.y = targetBoxOpen.y - 2;
     updateGameState(state, input, 0.01);
-
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe(
-      'What a coincidence, I was just reading a story about you.'
-    );
-    expect(state.activeDialogue?.speakerPortrait).toBe('Anne-Marie');
-
-    // Dismiss dialogue -> damages Santa & reloads
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.currentLevelId).toBe('level-upstairs');
-    expect(state.player.blinkTimer).toBeGreaterThan(0);
+    expect(upstairs.anneMarieCombat.mode).toBe('hostile');
   });
 
   it('supports inspecting, picking up presents, and distracting Diana and Simon', () => {
@@ -3348,7 +3272,7 @@ Tanja -> Alex
     updateGameState(state, input, 0.5);
     expect(state.player.delayedHealth).toBeCloseTo(65, 4);
 
-    // 2. Respawn hazards deal 30 hp (snowball/outdoor reset, basement NPCs, upstairs NPCs)
+    // 2. Respawn hazards deal 30 hp (snowball/outdoor reset) and hostile NPC Uzi bullets deal 5 hp
     const outsideRespawn = createGameState({ showIntroDialogue: false });
     resetAfterSnowballHit(outsideRespawn);
     expect(outsideRespawn.player.health).toBe(70);
@@ -3357,42 +3281,32 @@ Tanja -> Alex
     const basement = basementState.levels['level-basement'];
     basementState.player.x = basement.windowNpc.x;
     basementState.player.y = basement.windowNpc.y - TILE_SIZE;
-    updateGameState(basementState, createEmptyInput(), 0.01);
-    expect(basementState.activeDialogue?.speakerPortrait).toBe('Arjan');
-    const spaceInput = createEmptyInput();
-    applyKeyEvent(spaceInput, 'Space', true);
-    updateGameState(basementState, spaceInput, 0.01);
-    applyKeyEvent(spaceInput, 'Space', false);
-    expect(basementState.player.health).toBe(70);
-
-    const upstairsState = createGameState({ initialLevelId: 'level-upstairs' });
-    upstairsState.player.x = UPSTAIRS_ALBIN_X;
-    upstairsState.player.y = UPSTAIRS_ALBIN_START_Y + TILE_SIZE;
-    updateGameState(upstairsState, createEmptyInput(), 0.01);
-    expect(upstairsState.activeDialogue?.speakerPortrait).toBe('Albin');
-    applyKeyEvent(spaceInput, 'Space', true);
-    updateGameState(upstairsState, spaceInput, 0.01);
-    applyKeyEvent(spaceInput, 'Space', false);
-    expect(upstairsState.player.health).toBe(70);
+    // Arjan detects Santa -> becomes hostile and fires 5hp Uzi bullets
+    for (let i = 0; i < 12; i++) {
+      updateGameState(basementState, createEmptyInput(), 0.05);
+    }
+    expect(basement.arjanCombat.mode).toBe('hostile');
+    expect(basementState.player.health).toBeLessThan(100);
+    expect((100 - basementState.player.health) % NPC_UZI_BULLET_DAMAGE).toBe(0);
 
     // 3. Reaching <= 0 hp triggers Game Over ("Try again?") and advancing restarts from level-outside
-    damagePlayer(basementState, 30); // 40
-    damagePlayer(basementState, 30); // 10
-    damagePlayer(basementState, 30); // 0
-    expect(basementState.player.health).toBe(0);
-    expect(basementState.gameOver).toBe(true);
-    expect(basementState.activeDialogue?.variant).toBe('gameover');
-    expect(basementState.activeDialogue?.lines).toEqual(['Try again?']);
-
-    // Advancing Game Over dialogue restarts the entire game from outside with 100 HP
+    damagePlayer(outsideRespawn, 30); // 40
+    damagePlayer(outsideRespawn, 30); // 10
+    damagePlayer(outsideRespawn, 30); // 0
+    expect(outsideRespawn.player.health).toBe(0);
+    expect(outsideRespawn.gameOver).toBe(true);
+    expect(outsideRespawn.activeDialogue?.variant).toBe('gameover');
+    expect(outsideRespawn.activeDialogue?.lines).toEqual(['Try again?']);
+    // Advance Game Over dialog -> restarts from level-outside with full 100 hp
+    const spaceInput = createEmptyInput();
     applyKeyEvent(spaceInput, 'Space', true);
-    updateGameState(basementState, spaceInput, 0.01);
+    updateGameState(outsideRespawn, spaceInput, 0.01);
     applyKeyEvent(spaceInput, 'Space', false);
-    expect(basementState.gameOver).toBe(false);
-    expect(basementState.currentLevelId).toBe('level-outside');
-    expect(basementState.player.health).toBe(MAX_PLAYER_HEALTH);
-    expect(basementState.player.delayedHealth).toBe(MAX_PLAYER_HEALTH);
-    expect(basementState.activeDialogue).toBeNull();
+    expect(outsideRespawn.currentLevelId).toBe('level-outside');
+    expect(outsideRespawn.player.health).toBe(MAX_PLAYER_HEALTH);
+    expect(outsideRespawn.player.delayedHealth).toBe(MAX_PLAYER_HEALTH);
+    expect(outsideRespawn.gameOver).toBe(false);
+    expect(outsideRespawn.activeDialogue).toBeNull();
 
     // 4. With ?cheat enabled, running out of health does NOT trigger Game Over
     const cheatState = createGameState({ cheat: true });
@@ -4087,5 +4001,153 @@ Tanja -> Alex
     expect(state.player.y + state.player.height).toBeLessThanOrEqual(
       BASEMENT_STAIRS_SIDE_NORTH_BOUNDS.y
     );
+  });
+
+  it('computes shortest tile paths using AStarPathfinder around walls and obstacles', () => {
+    const state = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-basement',
+    });
+    const basement = state.levels['level-basement'];
+    const pathfinder = new AStarPathfinder(basement.map);
+
+    // Path from library floor (col 8, row 10) to hallway (col 15, row 16) navigating around the fireplace & dividing wall
+    const path = pathfinder.findPath({ col: 8, row: 10 }, { col: 15, row: 16 });
+    expect(path.length).toBeGreaterThan(8);
+    expect(path[0]).toEqual({ col: 8, row: 10 });
+    expect(path[path.length - 1]).toEqual({ col: 15, row: 16 });
+    // Every consecutive step is 1 tile apart (Manhattan distance = 1) and walkable
+    for (let i = 1; i < path.length; i++) {
+      const dist = Math.abs(path[i].col - path[i - 1].col) + Math.abs(path[i].row - path[i - 1].row);
+      expect(dist).toBe(1);
+      expect(pathfinder.isTileWalkable(path[i].col, path[i].row)).toBe(true);
+    }
+
+    // Unreachable solid wall tile returns []
+    expect(pathfinder.findPath({ col: 8, row: 10 }, { col: 0, row: 0 })).toEqual([]);
+  });
+
+  it('arms indoor NPCs with Uzis, 100 HP billboards, 5s return-to-passive, and death in blood pool', () => {
+    const state = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-basement',
+    });
+    const basement = state.levels['level-basement'];
+    const arjan = basement.arjanCombat;
+    const input = createEmptyInput();
+
+    // 1. Starts passive with 100 HP and hidden billboard
+    expect(arjan.mode).toBe('passive');
+    expect(arjan.health).toBe(MAX_NPC_HEALTH);
+    expect(arjan.delayedHealth).toBe(MAX_NPC_HEALTH);
+    expect(isNpcBillboardVisible(arjan)).toBe(false);
+
+    // 2. Taking damage from player triggers hostile mode + delayedHealth lag + visible billboard + A* walking toward player
+    const startArjanY = basement.windowNpc.y;
+    state.player.unlockedUzi = true;
+    state.player.equippedItem = 'uzi';
+    state.player.x = basement.windowNpc.x;
+    state.player.y = basement.windowNpc.y - 3 * TILE_SIZE;
+    state.player.yaw = Math.PI / 2; // facing south toward Arjan
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.05);
+    applyKeyEvent(input, 'Space', false);
+    // Advance bullets to hit Arjan and let him pathfind & walk north toward Santa
+    for (let i = 0; i < 12; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    expect(arjan.health).toBeLessThan(MAX_NPC_HEALTH);
+    expect(arjan.delayedHealth).toBeGreaterThan(arjan.health);
+    expect(arjan.mode).toBe('hostile');
+    expect(isNpcBillboardVisible(arjan)).toBe(true);
+    expect(arjan.weaponVibrationTimer).toBeGreaterThan(0);
+    expect(basement.windowNpc.y).toBeLessThan(startArjanY); // walked north along A* path toward player!
+
+    // 3. Move player behind the closed Spa Room doors (truly out of sight & unreachable) for 5+ seconds -> returns to passive, billboard stays visible because HP < 100
+    state.player.x = 15 * TILE_SIZE;
+    state.player.y = 7 * TILE_SIZE;
+    for (let i = 0; i < 60; i++) {
+      updateGameState(state, input, 0.1);
+    }
+    expect(arjan.unseenTimer).toBe(0);
+    expect(arjan.mode).toBe('passive');
+    expect(arjan.delayedHealth).toBe(arjan.health); // caught up over 1s
+    expect(isNpcBillboardVisible(arjan)).toBe(true); // remains visible while HP < 100
+
+    // 4. Killing Arjan (HP <= 0) sets dead mode, clears cone, spawns blood pool, removes solid obstacle
+    state.player.x = basement.windowNpc.x;
+    state.player.y = basement.windowNpc.y - TILE_SIZE;
+    state.player.yaw = Math.PI / 2;
+    const poolsBefore = state.bloodPools.length;
+    applyKeyEvent(input, 'Space', true);
+    for (let i = 0; i < 30 && arjan.mode !== 'dead'; i++) {
+      updateGameState(state, input, 0.1);
+    }
+    applyKeyEvent(input, 'Space', false);
+    expect(arjan.mode).toBe('dead');
+    expect(arjan.health).toBe(0);
+    expect(basement.coneOfSight).toBeNull();
+    expect(state.bloodPools.length).toBeGreaterThan(poolsBefore);
+    expect(basement.getSolidObstacles(state.player)).not.toContain(basement.windowNpc);
+    // Advance death fall animation
+    updateGameState(state, input, 0.5);
+    expect(arjan.deadFallProgress).toBe(1);
+    expect(isNpcBillboardVisible(arjan)).toBe(false);
+    expect(NPC_HOSTILE_LOSE_SIGHT_SECONDS).toBe(5.0);
+  });
+
+  it('triggers a 2.5-second reload animation every 30 shots fired by a hostile NPC', () => {
+    const state = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-basement',
+    });
+    const basement = state.levels['level-basement'];
+    const arjan = basement.arjanCombat;
+    const input = createEmptyInput();
+
+    // Put Santa in front of Arjan and make Arjan hostile
+    state.player.x = basement.windowNpc.x;
+    state.player.y = basement.windowNpc.y - 3 * TILE_SIZE;
+    arjan.mode = 'hostile';
+
+    let shotsFired = 0;
+    // Step in 0.1s increments until Arjan fires 30 shots and enters reload
+    for (let i = 0; i < 40 && arjan.reloadTimer <= 0; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      state.projectiles = [];
+      updateGameState(state, input, 0.1);
+      shotsFired += state.projectiles.filter(
+        (p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan'
+      ).length;
+    }
+    expect(shotsFired).toBe(NPC_UZI_MAGAZINE_SIZE);
+    expect(arjan.reloadTimer).toBeCloseTo(NPC_UZI_RELOAD_SECONDS, 2);
+
+    // 3D reload mesh builds cleanly during reload
+    const reloadScene = buildDynamicSceneMeshes(state, 40);
+    expect(reloadScene.opaque.vertexCount).toBeGreaterThan(0);
+
+    // During the 2.5s reload window, Arjan must NOT fire any new bullets
+    let shotsDuringReload = 0;
+    for (let i = 0; i < 20; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      state.projectiles = [];
+      updateGameState(state, input, 0.1); // 2.0s elapsed
+      shotsDuringReload += state.projectiles.filter(
+        (p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan'
+      ).length;
+    }
+    expect(shotsDuringReload).toBe(0);
+    expect(arjan.reloadTimer).toBeGreaterThan(0);
+
+    // After the remaining 0.5s+ elapses, reload completes and Arjan resumes firing
+    state.player.health = MAX_PLAYER_HEALTH;
+    state.projectiles = [];
+    updateGameState(state, input, 0.6);
+    expect(arjan.reloadTimer).toBe(0);
+    const resumedShots = state.projectiles.filter(
+      (p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan'
+    ).length;
+    expect(resumedShots).toBeGreaterThan(0);
   });
 });

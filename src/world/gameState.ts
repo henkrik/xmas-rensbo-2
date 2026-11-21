@@ -8,6 +8,15 @@ import {
 } from '../core/input';
 import { updateCat } from '../entities/cat';
 import { createDog, Dog, updateDog } from '../entities/dog';
+import {
+  applyNpcDamage,
+  ArmedNpcState,
+  NPC_BURN_DAMAGE_PER_SECOND,
+  NPC_UZI_BULLET_DAMAGE,
+  PLAYER_FIREBALL_NPC_DAMAGE,
+  PLAYER_PUNCH_NPC_DAMAGE,
+  PLAYER_UZI_NPC_DAMAGE,
+} from '../entities/npcCombat';
 import { ConeOfSight } from '../entities/sight';
 import {
   applyPlayerDamage,
@@ -59,7 +68,6 @@ import {
 } from './levels/levelBasement';
 import {
   LevelUpstairs,
-  UPSTAIRS_ALBIN_X,
   UPSTAIRS_INTRO_STATE_KEY,
   UPSTAIRS_STAIRS_TRIGGER_BOUNDS,
 } from './levels/levelUpstairs';
@@ -105,6 +113,8 @@ export const BLOOD_POOL_DURATION_SECONDS = 20;
 
 export interface Projectile {
   kind?: 'bullet' | 'fireball';
+  owner?: 'player' | 'npc';
+  sourceNpcKey?: string;
   x: number;
   y: number;
   z: number;
@@ -776,22 +786,30 @@ function getLevelNpcTargets(state: GameState): NpcTarget[] {
     addTarget('outside:Alex', state.levels['level-outside'].alexNpc);
   } else if (state.currentLevelId === 'level-basement') {
     const basement = state.levels['level-basement'];
-    addTarget('basement:Arjan', basement.windowNpc);
-    addTarget('basement:Olexa', basement.olexaNpc);
+    if (basement.arjanCombat.mode !== 'dead') {
+      addTarget('basement:Arjan', basement.windowNpc);
+    }
+    if (basement.olexaCombat.mode !== 'dead') {
+      addTarget('basement:Olexa', basement.olexaNpc);
+    }
     addTarget('basement:Hanneloes', basement.toiletNpc);
   } else if (state.currentLevelId === 'level-upstairs') {
     const upstairs = state.levels['level-upstairs'];
-    addTarget('upstairs:Albin', {
-      x: UPSTAIRS_ALBIN_X,
-      y: upstairs.albinY,
-      width: 12,
-      height: 12,
-    });
-    addTarget('upstairs:Henrik', upstairs.henrikNpc);
-    addTarget('upstairs:Tanja', upstairs.tanjaNpc);
-    addTarget('upstairs:Diana', upstairs.dianaNpc);
-    addTarget('upstairs:Simon', upstairs.simonNpc);
-    addTarget('upstairs:Anne-Marie', upstairs.anneMarieNpc);
+    if (upstairs.albinCombat.mode !== 'dead') {
+      addTarget('upstairs:Albin', {
+        x: upstairs.albinX,
+        y: upstairs.albinY,
+        width: 12,
+        height: 12,
+      });
+    }
+    if (upstairs.henrikCombat.mode !== 'dead') addTarget('upstairs:Henrik', upstairs.henrikNpc);
+    if (upstairs.tanjaCombat.mode !== 'dead') addTarget('upstairs:Tanja', upstairs.tanjaNpc);
+    if (upstairs.dianaCombat.mode !== 'dead') addTarget('upstairs:Diana', upstairs.dianaNpc);
+    if (upstairs.simonCombat.mode !== 'dead') addTarget('upstairs:Simon', upstairs.simonNpc);
+    if (upstairs.anneMarieCombat.mode !== 'dead') {
+      addTarget('upstairs:Anne-Marie', upstairs.anneMarieNpc);
+    }
   } else if (state.currentLevelId === 'level-people') {
     for (const npc of state.levels['level-people'].npcs) {
       addTarget(`people:${npc.name}`, npc.bounds);
@@ -825,6 +843,77 @@ function spawnNpcBlood(
   }
 }
 
+function getArmedNpcByKey(state: GameState, key: string): ArmedNpcState | undefined {
+  if (state.currentLevelId === 'level-basement') {
+    return state.levels['level-basement'].getArmedNpcByKey(key);
+  }
+  if (state.currentLevelId === 'level-upstairs') {
+    return state.levels['level-upstairs'].getArmedNpcByKey(key);
+  }
+  return undefined;
+}
+
+function damageArmedNpc(
+  state: GameState,
+  key: string,
+  damage: number,
+  hitX: number,
+  hitY: number,
+  groundZ: number
+): void {
+  const npc = getArmedNpcByKey(state, key);
+  if (!npc) return;
+  const died = applyNpcDamage(npc, damage);
+  if (died) {
+    state.burningNpcs.delete(key);
+    spawnNpcBlood(state, hitX, hitY, groundZ);
+    state.bloodPools.push({
+      levelId: state.currentLevelId,
+      x: hitX,
+      y: hitY,
+      z: groundZ,
+      age: 0,
+      maxAge: 999999,
+    });
+  }
+}
+
+function fireNpcUziProjectile(
+  state: GameState,
+  npc: ArmedNpcState,
+  originX: number,
+  originY: number,
+  aimYaw: number
+): void {
+  const rightAngle = aimYaw + Math.PI / 2;
+  const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+
+  const yawSpread = (Math.random() * 2 - 1) * ((10 * Math.PI) / 180);
+  const shotYaw = aimYaw + yawSpread;
+  const pitchSpread = (Math.random() * 2 - 1) * ((5 * Math.PI) / 180);
+
+  const spawnX =
+    originX + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
+  const spawnY =
+    originY + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
+  const spawnZ = groundZ + 10.0;
+
+  state.projectiles.push({
+    kind: 'bullet',
+    owner: 'npc',
+    sourceNpcKey: npc.key,
+    x: spawnX,
+    y: spawnY,
+    z: spawnZ,
+    vx: Math.cos(shotYaw) * UZI_PROJECTILE_SPEED,
+    vy: Math.sin(shotYaw) * UZI_PROJECTILE_SPEED,
+    vz: UZI_PROJECTILE_SPEED * Math.tan(pitchSpread),
+    yaw: shotYaw,
+    distanceTraveled: 0,
+    fromRoof: false,
+  });
+}
+
 function checkPunchNpcHit(state: GameState): void {
   const player = state.player;
   const aimYaw =
@@ -845,6 +934,7 @@ function checkPunchNpcHit(state: GameState): void {
       const ncx = target.rect.x + target.rect.width * 0.5;
       const ncy = target.rect.y + target.rect.height * 0.5;
       spawnNpcBlood(state, ncx, ncy, target.groundZ);
+      damageArmedNpc(state, target.key, PLAYER_PUNCH_NPC_DAMAGE, ncx, ncy, target.groundZ);
     }
   }
 }
@@ -863,6 +953,24 @@ function updateEffectTimers(state: GameState, dtSeconds: number): void {
     state.bloodPools[i].age += dtSeconds;
     if (state.bloodPools[i].age >= state.bloodPools[i].maxAge) {
       state.bloodPools.splice(i, 1);
+    }
+  }
+
+  // Apply burn damage over time to burning armed NPCs
+  if (state.burningNpcs.size > 0) {
+    const npcTargets = getLevelNpcTargets(state);
+    for (const key of Array.from(state.burningNpcs)) {
+      const target = npcTargets.find((t) => t.key === key);
+      if (target) {
+        damageArmedNpc(
+          state,
+          key,
+          NPC_BURN_DAMAGE_PER_SECOND * dtSeconds,
+          target.rect.x + target.rect.width * 0.5,
+          target.rect.y + target.rect.height * 0.5,
+          target.groundZ
+        );
+      }
     }
   }
 
@@ -946,13 +1054,43 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         }
       }
 
-      // Check NPC hits (skip stairs wood burn, check human NPCs)
-      const hitNpc = npcTargets.find((t) => rectsIntersect(projRect, t.rect));
+      // NPC-fired projectiles damage the player (5 HP) without resetting the map
+      if (p.owner === 'npc') {
+        if (rectsIntersect(projRect, state.player)) {
+          damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
+          removed = true;
+          break;
+        }
+      }
+
+      // Check NPC hits (skip self-hit for NPC projectiles)
+      const hitNpc = npcTargets.find(
+        (t) =>
+          t.key !== p.sourceNpcKey && rectsIntersect(projRect, t.rect)
+      );
       if (hitNpc) {
         if (isFireball) {
           state.burningNpcs.add(hitNpc.key);
+          damageArmedNpc(
+            state,
+            hitNpc.key,
+            PLAYER_FIREBALL_NPC_DAMAGE,
+            p.x,
+            p.y,
+            hitNpc.groundZ
+          );
         } else {
           spawnNpcBlood(state, p.x, p.y, hitNpc.groundZ);
+          if (p.owner !== 'npc') {
+            damageArmedNpc(
+              state,
+              hitNpc.key,
+              PLAYER_UZI_NPC_DAMAGE,
+              p.x,
+              p.y,
+              hitNpc.groundZ
+            );
+          }
         }
         removed = true;
         break;
@@ -999,7 +1137,21 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         projRect.height,
         true
       );
-      const hitObstacle = obstacles.some((obs) => rectsIntersect(projRect, obs));
+      const sourceNpcTarget = p.sourceNpcKey
+        ? npcTargets.find((t) => t.key === p.sourceNpcKey)
+        : undefined;
+      const hitObstacle = obstacles.some((obs) => {
+        if (
+          sourceNpcTarget &&
+          obs.x === sourceNpcTarget.rect.x &&
+          obs.y === sourceNpcTarget.rect.y &&
+          obs.width === sourceNpcTarget.rect.width &&
+          obs.height === sourceNpcTarget.rect.height
+        ) {
+          return false;
+        }
+        return rectsIntersect(projRect, obs);
+      });
       const hitOutsideDynamic =
         state.currentLevelId === 'level-outside' &&
         (rectsIntersect(projRect, state.dog) ||
@@ -1273,6 +1425,12 @@ export function updateGameState(
       };
     },
     damagePlayer: (amount: number) => damagePlayer(state, amount),
+    fireNpcUzi: (
+      npc: ArmedNpcState,
+      originX: number,
+      originY: number,
+      aimYaw: number
+    ) => fireNpcUziProjectile(state, npc, originX, originY, aimYaw),
     getSecretSantaReceiver: () => {
       if (!state.secretSantaDB) return undefined;
       const playerName = state.secretSantaDB.playerName;

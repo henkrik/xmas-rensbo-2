@@ -1,4 +1,12 @@
 import {
+  ArmedNpcState,
+  createArmedNpcState,
+  NPC_HOSTILE_LOSE_SIGHT_SECONDS,
+  stepHostileNpcAlongPath,
+  tryFireHostileNpcUzi,
+  updateNpcHealthAndTimers,
+} from '../../entities/npcCombat';
+import {
   Direction,
   Player,
   Rect,
@@ -285,8 +293,10 @@ export class LevelBasement implements GameLevel {
   public readonly olexaNpc = { ...BASEMENT_OLEXA_NPC };
   public readonly toiletNpc = { ...BASEMENT_TOILET_NPC };
   public toiletCutscene: ToiletCutsceneState | null = null;
-  public coneOfSight: ConeOfSight;
-  public olexaConeOfSight: ConeOfSight;
+  public coneOfSight: ConeOfSight | null;
+  public olexaConeOfSight: ConeOfSight | null;
+  public arjanCombat: ArmedNpcState;
+  public olexaCombat: ArmedNpcState;
   public npcSightAngle: number = -Math.PI / 2; // North is -90 degrees in screen Y coordinates
   public npcSightTimer: number = 0;
   public intruderDetected: boolean = false;
@@ -299,6 +309,8 @@ export class LevelBasement implements GameLevel {
         hiddenRegions: [],
       },
     ];
+    this.arjanCombat = createArmedNpcState('basement:Arjan', 'Arjan', -Math.PI / 2);
+    this.olexaCombat = createArmedNpcState('basement:Olexa', 'Olexa', -Math.PI / 2);
     this.coneOfSight = new ConeOfSight(
       { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
       this.npcSightAngle,
@@ -311,6 +323,19 @@ export class LevelBasement implements GameLevel {
       undefined,
       this.map
     );
+  }
+
+  public getArmedNpcs(): Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> {
+    return [
+      { state: this.arjanCombat, bounds: this.windowNpc, visible: true },
+      { state: this.olexaCombat, bounds: this.olexaNpc, visible: true },
+    ];
+  }
+
+  public getArmedNpcByKey(key: string): ArmedNpcState | undefined {
+    if (key === this.arjanCombat.key) return this.arjanCombat;
+    if (key === this.olexaCombat.key) return this.olexaCombat;
+    return undefined;
   }
 
   public enter(player: Player): void {
@@ -344,32 +369,50 @@ export class LevelBasement implements GameLevel {
       this.openedDoors = [];
     }
 
-    // Reset NPC sight to looking north
+    // Reset passive NPC sight to looking north (preserve dead NPCs)
     this.npcSightAngle = -Math.PI / 2;
     this.npcSightTimer = 0;
     this.intruderDetected = false;
-    this.coneOfSight = new ConeOfSight(
-      { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-      this.npcSightAngle,
-      undefined,
-      this.map
-    );
-    this.olexaConeOfSight = new ConeOfSight(
-      { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
-      -Math.PI / 2,
-      undefined,
-      this.map
-    );
+    if (this.arjanCombat.mode !== 'dead') {
+      this.arjanCombat.mode = 'passive';
+      this.arjanCombat.unseenTimer = 0;
+      this.arjanCombat.aimYaw = this.npcSightAngle;
+      this.coneOfSight = new ConeOfSight(
+        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+        this.npcSightAngle,
+        undefined,
+        this.map
+      );
+    } else {
+      this.coneOfSight = null;
+    }
+    if (this.olexaCombat.mode !== 'dead') {
+      this.olexaCombat.mode = 'passive';
+      this.olexaCombat.unseenTimer = 0;
+      this.olexaCombat.aimYaw = -Math.PI / 2;
+      this.olexaConeOfSight = new ConeOfSight(
+        { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+        -Math.PI / 2,
+        undefined,
+        this.map
+      );
+    } else {
+      this.olexaConeOfSight = null;
+    }
   }
 
   public getSolidObstacles(player?: Player): readonly Rect[] {
     const obs: Rect[] = [
-      this.windowNpc,
-      this.olexaNpc,
       BASEMENT_SPA_TUB_BOUNDS,
       BASEMENT_STAIRS_TRIGGER_BOUNDS,
       ...this.doors.map((d) => d.bounds),
     ];
+    if (this.arjanCombat.mode !== 'dead') {
+      obs.push(this.windowNpc);
+    }
+    if (this.olexaCombat.mode !== 'dead') {
+      obs.push(this.olexaNpc);
+    }
     if (this.spaDoorClosed) {
       obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
     }
@@ -515,57 +558,126 @@ export class LevelBasement implements GameLevel {
     player: Player,
     ctx: LevelTransitionContext
   ): void {
-    if (this.intruderDetected) {
-      return;
+    const playerCx = player.x + player.width * 0.5;
+    const playerCy = player.y + player.height * 0.5;
+
+    // 1. Arjan (windowNpc)
+    updateNpcHealthAndTimers(this.arjanCombat, dtSeconds);
+    if (this.arjanCombat.mode === 'dead') {
+      this.coneOfSight = null;
+    } else if (this.arjanCombat.mode === 'hostile') {
+      stepHostileNpcAlongPath(
+        this.arjanCombat,
+        this.windowNpc,
+        player,
+        this.map,
+        this.getSolidObstacles(player),
+        dtSeconds
+      );
+      const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
+      const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
+      const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
+      this.arjanCombat.aimYaw = aimYaw;
+      this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, undefined, this.map);
+      if (this.coneOfSight.checkDetection(player)) {
+        this.arjanCombat.unseenTimer = 0;
+      } else {
+        this.arjanCombat.unseenTimer += dtSeconds;
+      }
+      if (this.arjanCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+        this.arjanCombat.mode = 'passive';
+        this.arjanCombat.unseenTimer = 0;
+        this.arjanCombat.isMoving = false;
+        this.arjanCombat.path = [];
+        this.arjanCombat.pathTimer = 0;
+        this.arjanCombat.aimYaw = this.npcSightAngle;
+        this.coneOfSight = new ConeOfSight(
+          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+          this.npcSightAngle,
+          undefined,
+          this.map
+        );
+      } else {
+        tryFireHostileNpcUzi(this.arjanCombat, ax, ay, aimYaw, ctx.fireNpcUzi);
+      }
+    } else {
+      this.arjanCombat.isMoving = false;
+      this.npcSightTimer += dtSeconds;
+      if (this.npcSightTimer >= 2.0) {
+        this.npcSightTimer -= 2.0;
+        this.npcSightAngle += Math.PI / 4;
+        this.coneOfSight = new ConeOfSight(
+          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+          this.npcSightAngle,
+          undefined,
+          this.map
+        );
+      }
+      this.arjanCombat.aimYaw = this.coneOfSight?.direction ?? this.npcSightAngle;
+      if (this.coneOfSight?.checkDetection(player)) {
+        this.arjanCombat.mode = 'hostile';
+        this.arjanCombat.unseenTimer = 0;
+        this.arjanCombat.pathTimer = 0;
+        const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
+        const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
+        const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
+        this.arjanCombat.aimYaw = aimYaw;
+        this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, undefined, this.map);
+      }
     }
 
-    this.npcSightTimer += dtSeconds;
-    if (this.npcSightTimer >= 2.0) {
-      this.npcSightTimer -= 2.0;
-      // Spawn new cone of sight that is +45 degrees from where the NPC was looking previously
-      this.npcSightAngle += Math.PI / 4;
-      this.coneOfSight = new ConeOfSight(
-        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-        this.npcSightAngle,
-        undefined,
-        this.map
+    // 2. Olexa (olexaNpc)
+    updateNpcHealthAndTimers(this.olexaCombat, dtSeconds);
+    if (this.olexaCombat.mode === 'dead') {
+      this.olexaConeOfSight = null;
+    } else if (this.olexaCombat.mode === 'hostile') {
+      stepHostileNpcAlongPath(
+        this.olexaCombat,
+        this.olexaNpc,
+        player,
+        this.map,
+        this.getSolidObstacles(player),
+        dtSeconds
       );
-    }
-
-    // Check if player is detected in Arjan's cone of sight
-    const detectedArjan = this.coneOfSight.checkDetection(player);
-    if (detectedArjan) {
-      this.intruderDetected = true;
-      player.isMoving = false;
-      ctx.openDialogue(
-        ["You're not supposed to be here! Check-mate."],
-        () => {
-          // Player takes damage: reload current level, make Santa blink
-          ctx.loadLevel('level-basement');
-          player.blinkTimer = 2.0; // HIT_BLINK_DURATION_SECONDS
-          ctx.damagePlayer?.(30);
-        },
-        'Arjan'
-      );
-      return;
-    }
-
-    // Check if player is detected in Olexa's cone of sight
-    const detectedOlexa = this.olexaConeOfSight.checkDetection(player);
-    if (detectedOlexa) {
-      this.intruderDetected = true;
-      player.isMoving = false;
-      ctx.openDialogue(
-        ['Nobody believed me when I said you were real...'],
-        () => {
-          // Player takes damage: reload current level, make Santa blink
-          ctx.loadLevel('level-basement');
-          player.blinkTimer = 2.0; // HIT_BLINK_DURATION_SECONDS
-          ctx.damagePlayer?.(30);
-        },
-        'Olexa'
-      );
-      return;
+      const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
+      const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
+      const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
+      this.olexaCombat.aimYaw = aimYaw;
+      this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, undefined, this.map);
+      if (this.olexaConeOfSight.checkDetection(player)) {
+        this.olexaCombat.unseenTimer = 0;
+      } else {
+        this.olexaCombat.unseenTimer += dtSeconds;
+      }
+      if (this.olexaCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+        this.olexaCombat.mode = 'passive';
+        this.olexaCombat.unseenTimer = 0;
+        this.olexaCombat.isMoving = false;
+        this.olexaCombat.path = [];
+        this.olexaCombat.pathTimer = 0;
+        this.olexaCombat.aimYaw = -Math.PI / 2;
+        this.olexaConeOfSight = new ConeOfSight(
+          { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+          -Math.PI / 2,
+          undefined,
+          this.map
+        );
+      } else {
+        tryFireHostileNpcUzi(this.olexaCombat, ox, oy, aimYaw, ctx.fireNpcUzi);
+      }
+    } else {
+      this.olexaCombat.isMoving = false;
+      this.olexaCombat.aimYaw = this.olexaConeOfSight?.direction ?? -Math.PI / 2;
+      if (this.olexaConeOfSight?.checkDetection(player)) {
+        this.olexaCombat.mode = 'hostile';
+        this.olexaCombat.unseenTimer = 0;
+        this.olexaCombat.pathTimer = 0;
+        const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
+        const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
+        const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
+        this.olexaCombat.aimYaw = aimYaw;
+        this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, undefined, this.map);
+      }
     }
   }
 

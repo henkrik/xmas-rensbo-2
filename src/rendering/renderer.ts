@@ -173,6 +173,11 @@ function drawInteractionPrompt(
   ctx.restore();
 }
 
+import {
+  ArmedNpcState,
+  isNpcBillboardVisible,
+  MAX_NPC_HEALTH,
+} from '../entities/npcCombat';
 import { PersonNpc } from '../world/levels/levelPeople';
 
 const PORTRAIT_ORDER = [
@@ -372,6 +377,149 @@ function drawDialogueBox(
     );
   }
   ctx.restore();
+}
+
+function drawNpcBillboards3D(
+  ctx: CanvasRenderingContext2D,
+  state: GameState,
+  cam: Camera3D,
+  assets: GameAssets
+): void {
+  let entries: Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> = [];
+  if (state.currentLevelId === 'level-basement') {
+    entries = state.levels['level-basement'].getArmedNpcs();
+  } else if (state.currentLevelId === 'level-upstairs') {
+    entries = state.levels['level-upstairs'].getArmedNpcs();
+  } else {
+    return;
+  }
+
+  const m = cam.viewProjMatrix;
+  const canvasW = ctx.canvas.width;
+  const canvasH = ctx.canvas.height;
+  const projected: Array<{
+    npc: ArmedNpcState;
+    sx: number;
+    sy: number;
+    clipW: number;
+    scale: number;
+  }> = [];
+
+  for (const entry of entries) {
+    if (!entry.visible || !isNpcBillboardVisible(entry.state)) continue;
+    const wx = entry.bounds.x + entry.bounds.width * 0.5;
+    const wy = 20.5;
+    const wz = entry.bounds.y + entry.bounds.height * 0.5;
+
+    const clipX = m[0] * wx + m[4] * wy + m[8] * wz + m[12];
+    const clipY = m[1] * wx + m[5] * wy + m[9] * wz + m[13];
+    const clipZ = m[2] * wx + m[6] * wy + m[10] * wz + m[14];
+    const clipW = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
+
+    if (clipW <= 0.5) continue;
+    const ndcX = clipX / clipW;
+    const ndcY = clipY / clipW;
+    const ndcZ = clipZ / clipW;
+    if (ndcZ < -1 || ndcZ > 1 || ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2) {
+      continue;
+    }
+
+    const sx = (ndcX * 0.5 + 0.5) * canvasW;
+    const sy = (1 - (ndcY * 0.5 + 0.5)) * canvasH;
+    const scale = Math.max(0.55, Math.min(1.2, 46 / clipW));
+    projected.push({ npc: entry.state, sx, sy, clipW, scale });
+  }
+
+  // Draw farthest billboards first so nearer ones overlap cleanly
+  projected.sort((a, b) => b.clipW - a.clipW);
+
+  for (const item of projected) {
+    const { npc, sx, sy, scale } = item;
+    const portraitSize = Math.max(10, Math.round(16 * scale));
+    const barInnerW = Math.max(22, Math.round(36 * scale));
+    const barInnerH = Math.max(4, Math.round(6 * scale));
+    const barOuterW = barInnerW + 2;
+    const barOuterH = barInnerH + 2;
+    const gap = Math.max(2, Math.round(3 * scale));
+    const pad = Math.max(2, Math.round(2 * scale));
+    const cardW = pad * 2 + portraitSize + gap + barOuterW;
+    const cardH = pad * 2 + Math.max(portraitSize, barOuterH);
+    const cardX = Math.round(sx - cardW * 0.5);
+    const cardY = Math.round(sy - cardH);
+
+    ctx.save();
+    // Billboard backing card (flat camera-facing rectangle)
+    ctx.fillStyle = 'rgba(8, 12, 20, 0.78)';
+    ctx.fillRect(cardX + 1, cardY + 1, cardW, cardH);
+    ctx.fillStyle = '#18080e';
+    ctx.fillRect(cardX, cardY, cardW, cardH);
+    ctx.strokeStyle = '#e8f0ff';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
+
+    // Portrait icon on left
+    const px = cardX + pad;
+    const py = cardY + Math.round((cardH - portraitSize) * 0.5);
+    const pIdx = PORTRAIT_ORDER.indexOf(npc.name.toLowerCase());
+    if (pIdx !== -1 && assets.portraitsAtlas) {
+      ctx.drawImage(
+        assets.portraitsAtlas,
+        pIdx * 40,
+        0,
+        40,
+        40,
+        px,
+        py,
+        portraitSize,
+        portraitSize
+      );
+    }
+
+    // Health bar on right (same red + dark-red delayedHealth style as player HUD)
+    const bx = px + portraitSize + gap;
+    const by = cardY + Math.round((cardH - barOuterH) * 0.5);
+    ctx.fillStyle = '#18080e';
+    ctx.fillRect(bx, by, barOuterW, barOuterH);
+    ctx.strokeStyle = '#e8f0ff';
+    ctx.strokeRect(bx + 0.5, by + 0.5, barOuterW - 1, barOuterH - 1);
+
+    const innerX = bx + 1;
+    const innerY = by + 1;
+    const healthRatio = Math.max(0, Math.min(1, npc.health / MAX_NPC_HEALTH));
+    const delayedRatio = Math.max(
+      0,
+      Math.min(1, npc.delayedHealth / MAX_NPC_HEALTH)
+    );
+    const healthPx =
+      npc.health > 0 ? Math.max(1, Math.round(barInnerW * healthRatio)) : 0;
+    const delayedPx =
+      npc.delayedHealth > 0
+        ? Math.max(1, Math.round(barInnerW * delayedRatio))
+        : 0;
+
+    if (healthPx > 0) {
+      ctx.fillStyle = '#ef233c';
+      ctx.fillRect(innerX, innerY, healthPx, barInnerH);
+      ctx.fillStyle = '#ff6b6b';
+      ctx.fillRect(innerX, innerY, healthPx, Math.max(1, Math.round(barInnerH * 0.25)));
+    }
+    if (npc.delayedHealth !== npc.health) {
+      const startPx = Math.min(healthPx, delayedPx);
+      const endPx = Math.max(healthPx, delayedPx);
+      const deltaW = Math.max(1, endPx - startPx);
+      ctx.fillStyle = '#7f0b18';
+      ctx.fillRect(innerX + startPx, innerY, deltaW, barInnerH);
+      ctx.fillStyle = '#a41623';
+      ctx.fillRect(
+        innerX + startPx,
+        innerY,
+        deltaW,
+        Math.max(1, Math.round(barInnerH * 0.25))
+      );
+    }
+
+    ctx.restore();
+  }
 }
 
 function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
@@ -1675,8 +1823,9 @@ export function renderGame(
       renderSoftware3DScene(ctx, state, cam);
     }
 
-    // 2D HUD overlay on top of the 3D scene (Health Bar, Equipped Item, Dialogue, Interaction Prompts)
+    // 2D HUD overlay on top of the 3D scene (NPC Billboards, Health Bar, Equipped Item, Dialogue, Interaction Prompts)
     if (!state.worldFadedToBlack) {
+      drawNpcBillboards3D(ctx, state, cam, assets);
       drawHealthBar(ctx, player);
       drawEquippedItemHud(ctx, player);
     }
@@ -1872,7 +2021,7 @@ export function renderGame(
     // Sight polygons of Arjan and Olexa
     const basementCones = [basement.coneOfSight, basement.olexaConeOfSight];
     for (const cone of basementCones) {
-      if (cone?.sightPolygon.length > 2) {
+      if (cone && cone.sightPolygon.length > 2) {
         ctx.save();
         ctx.fillStyle = 'rgba(255, 250, 180, 0.48)'; // Clearly visible yellowish sight cone
         ctx.beginPath();

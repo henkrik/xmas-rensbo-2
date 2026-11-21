@@ -1790,6 +1790,358 @@
     cam.viewProjMatrix = mat4Multiply(cam.projMatrix, cam.viewMatrix);
   }
 
+  // src/world/pathfinding.ts
+  var AStarPathfinder = class {
+    constructor(map, options) {
+      __publicField(this, "map");
+      __publicField(this, "allowDiagonal");
+      __publicField(this, "obstacles");
+      __publicField(this, "customWalkable");
+      this.map = map;
+      this.allowDiagonal = options?.allowDiagonal ?? false;
+      this.obstacles = options?.obstacles ?? [];
+      this.customWalkable = options?.isWalkable;
+    }
+    isTileWalkable(col, row) {
+      if (col < 0 || row < 0 || col >= this.map.cols || row >= this.map.rows) {
+        return false;
+      }
+      if (this.customWalkable) {
+        return this.customWalkable(col, row);
+      }
+      if (isSolidTile(this.map, col, row)) {
+        return false;
+      }
+      if (this.obstacles.length > 0) {
+        const ts = this.map.tileSize;
+        const tileRect = {
+          x: col * ts + 1,
+          y: row * ts + 1,
+          width: ts - 2,
+          height: ts - 2
+        };
+        for (const obs of this.obstacles) {
+          if (rectsIntersect(tileRect, obs)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+    heuristic(a, b) {
+      const dx = Math.abs(a.col - b.col);
+      const dy = Math.abs(a.row - b.row);
+      if (this.allowDiagonal) {
+        const min = Math.min(dx, dy);
+        const max = Math.max(dx, dy);
+        return min * Math.SQRT2 + (max - min);
+      }
+      return dx + dy;
+    }
+    keyOf(col, row) {
+      return row * this.map.cols + col;
+    }
+    /**
+     * Returns the shortest path of tiles from `start` to `goal` (inclusive),
+     * or an empty array if no valid path exists.
+     */
+    findPath(start, goal) {
+      if (start.col < 0 || start.row < 0 || start.col >= this.map.cols || start.row >= this.map.rows || goal.col < 0 || goal.row < 0 || goal.col >= this.map.cols || goal.row >= this.map.rows) {
+        return [];
+      }
+      if (!this.isTileWalkable(goal.col, goal.row)) {
+        return [];
+      }
+      if (start.col === goal.col && start.row === goal.row) {
+        return [{ col: start.col, row: start.row }];
+      }
+      const startKey = this.keyOf(start.col, start.row);
+      const goalKey = this.keyOf(goal.col, goal.row);
+      const openSet = /* @__PURE__ */ new Set([startKey]);
+      const closedSet = /* @__PURE__ */ new Set();
+      const cameFrom = /* @__PURE__ */ new Map();
+      const gScore = /* @__PURE__ */ new Map([[startKey, 0]]);
+      const fScore = /* @__PURE__ */ new Map([
+        [startKey, this.heuristic(start, goal)]
+      ]);
+      const cardinalDirs = [
+        [0, -1, 1],
+        [1, 0, 1],
+        [0, 1, 1],
+        [-1, 0, 1]
+      ];
+      const diagonalDirs = [
+        [1, -1, Math.SQRT2],
+        [1, 1, Math.SQRT2],
+        [-1, 1, Math.SQRT2],
+        [-1, -1, Math.SQRT2]
+      ];
+      while (openSet.size > 0) {
+        let currentKey = -1;
+        let bestF = Infinity;
+        for (const k of openSet) {
+          const f = fScore.get(k) ?? Infinity;
+          if (f < bestF) {
+            bestF = f;
+            currentKey = k;
+          }
+        }
+        if (currentKey === goalKey) {
+          const path = [];
+          let trace = currentKey;
+          while (trace !== void 0) {
+            const r = Math.floor(trace / this.map.cols);
+            const c = trace % this.map.cols;
+            path.push({ col: c, row: r });
+            trace = cameFrom.get(trace);
+          }
+          path.reverse();
+          return path;
+        }
+        openSet.delete(currentKey);
+        closedSet.add(currentKey);
+        const curRow = Math.floor(currentKey / this.map.cols);
+        const curCol = currentKey % this.map.cols;
+        const curG = gScore.get(currentKey) ?? Infinity;
+        const dirs = this.allowDiagonal ? [...cardinalDirs, ...diagonalDirs] : cardinalDirs;
+        for (const [dc, dr, stepCost] of dirs) {
+          const nc = curCol + dc;
+          const nr = curRow + dr;
+          if (!this.isTileWalkable(nc, nr)) {
+            continue;
+          }
+          if (dc !== 0 && dr !== 0) {
+            if (!this.isTileWalkable(curCol + dc, curRow) || !this.isTileWalkable(curCol, curRow + dr)) {
+              continue;
+            }
+          }
+          const neighborKey = this.keyOf(nc, nr);
+          if (closedSet.has(neighborKey)) {
+            continue;
+          }
+          const tentativeG = curG + stepCost;
+          if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
+            cameFrom.set(neighborKey, currentKey);
+            gScore.set(neighborKey, tentativeG);
+            fScore.set(
+              neighborKey,
+              tentativeG + this.heuristic({ col: nc, row: nr }, goal)
+            );
+            openSet.add(neighborKey);
+          }
+        }
+      }
+      return [];
+    }
+    /**
+     * Convenience wrapper accepting world pixel coordinates.
+     */
+    findPathWorld(startX, startY, goalX, goalY) {
+      const ts = this.map.tileSize;
+      return this.findPath(
+        { col: Math.floor(startX / ts), row: Math.floor(startY / ts) },
+        { col: Math.floor(goalX / ts), row: Math.floor(goalY / ts) }
+      );
+    }
+  };
+
+  // src/entities/npcCombat.ts
+  var MAX_NPC_HEALTH = 100;
+  var NPC_HOSTILE_LOSE_SIGHT_SECONDS = 5;
+  var NPC_HOSTILE_PATH_RECALC_SECONDS = 1;
+  var NPC_HOSTILE_WALK_SPEED = 24;
+  var NPC_HOSTILE_STOP_DISTANCE = 18;
+  var NPC_UZI_BULLET_DAMAGE = 5;
+  var NPC_UZI_MAGAZINE_SIZE = 30;
+  var NPC_UZI_RELOAD_SECONDS = 2.5;
+  var PLAYER_UZI_NPC_DAMAGE = 10;
+  var PLAYER_PUNCH_NPC_DAMAGE = 15;
+  var PLAYER_FIREBALL_NPC_DAMAGE = 15;
+  var NPC_BURN_DAMAGE_PER_SECOND = 12;
+  var NPC_DEATH_FALL_DURATION = 0.45;
+  function createArmedNpcState(key, name, initialAimYaw) {
+    return {
+      key,
+      name,
+      mode: "passive",
+      health: MAX_NPC_HEALTH,
+      delayedHealth: MAX_NPC_HEALTH,
+      delayedHealthRate: 0,
+      unseenTimer: 0,
+      fireCooldown: 0,
+      shotsFiredInMag: 0,
+      reloadTimer: 0,
+      weaponVibrationTimer: 0,
+      aimYaw: initialAimYaw,
+      deadFallProgress: 0,
+      path: [],
+      pathTimer: 0,
+      isMoving: false
+    };
+  }
+  function applyNpcDamage(npc, damage) {
+    if (npc.mode === "dead" || damage <= 0) {
+      return false;
+    }
+    const nextHealth = Math.max(0, Math.min(MAX_NPC_HEALTH, npc.health - damage));
+    npc.health = nextHealth;
+    npc.delayedHealthRate = Math.abs(npc.delayedHealth - npc.health);
+    if (npc.health <= 0) {
+      npc.mode = "dead";
+      npc.fireCooldown = 0;
+      npc.reloadTimer = 0;
+      npc.weaponVibrationTimer = 0;
+      npc.unseenTimer = 0;
+      npc.deadFallProgress = 0;
+      npc.isMoving = false;
+      npc.path = [];
+      npc.pathTimer = 0;
+      return true;
+    }
+    if (npc.mode !== "hostile") {
+      npc.pathTimer = 0;
+    }
+    npc.mode = "hostile";
+    npc.unseenTimer = 0;
+    return false;
+  }
+  function updateNpcHealthAndTimers(npc, dtSeconds) {
+    if (dtSeconds <= 0) return;
+    if (npc.delayedHealth !== npc.health) {
+      const step = npc.delayedHealthRate * dtSeconds;
+      if (npc.delayedHealth > npc.health) {
+        npc.delayedHealth = Math.max(npc.health, npc.delayedHealth - step);
+      } else {
+        npc.delayedHealth = Math.min(npc.health, npc.delayedHealth + step);
+      }
+      if (npc.delayedHealth === npc.health) {
+        npc.delayedHealthRate = 0;
+      }
+    }
+    if (npc.weaponVibrationTimer > 0) {
+      npc.weaponVibrationTimer = Math.max(0, npc.weaponVibrationTimer - dtSeconds);
+    }
+    if (npc.fireCooldown > 0) {
+      npc.fireCooldown = Math.max(0, npc.fireCooldown - dtSeconds);
+    }
+    if (npc.reloadTimer > 0) {
+      npc.reloadTimer = Math.max(0, npc.reloadTimer - dtSeconds);
+      if (npc.reloadTimer === 0) {
+        npc.shotsFiredInMag = 0;
+      }
+    }
+    if (npc.mode === "dead" && npc.deadFallProgress < 1) {
+      npc.deadFallProgress = Math.min(
+        1,
+        npc.deadFallProgress + dtSeconds / NPC_DEATH_FALL_DURATION
+      );
+    }
+  }
+  function tryFireHostileNpcUzi(npc, originX, originY, aimYaw, fireNpcUzi) {
+    if (npc.mode !== "hostile" || npc.reloadTimer > 0 || npc.fireCooldown > 0) {
+      return false;
+    }
+    fireNpcUzi?.(npc, originX, originY, aimYaw);
+    npc.fireCooldown = UZI_FIRE_INTERVAL_SECONDS;
+    npc.weaponVibrationTimer = Math.max(
+      npc.weaponVibrationTimer,
+      UZI_FIRE_INTERVAL_SECONDS + 0.05
+    );
+    npc.shotsFiredInMag += 1;
+    if (npc.shotsFiredInMag >= NPC_UZI_MAGAZINE_SIZE) {
+      npc.shotsFiredInMag = 0;
+      npc.reloadTimer = NPC_UZI_RELOAD_SECONDS;
+    }
+    return true;
+  }
+  function isNpcBillboardVisible(npc) {
+    return npc.mode !== "dead" && (npc.mode === "hostile" || npc.health < MAX_NPC_HEALTH);
+  }
+  function stepHostileNpcAlongPath(npc, bounds, player, map, solidObstacles, dtSeconds) {
+    if (npc.mode !== "hostile" || dtSeconds <= 0) {
+      npc.isMoving = false;
+      return;
+    }
+    const ts = map.tileSize;
+    const npcCx = bounds.x + bounds.width * 0.5;
+    const npcCy = bounds.y + bounds.height * 0.5;
+    const playerCx = player.x + player.width * 0.5;
+    const playerCy = player.y + player.height * 0.5;
+    const otherObstacles = solidObstacles.filter(
+      (obs) => !(obs.x === bounds.x && obs.y === bounds.y && obs.width === bounds.width && obs.height === bounds.height)
+    );
+    npc.pathTimer -= dtSeconds;
+    if (npc.pathTimer <= 0) {
+      npc.pathTimer = NPC_HOSTILE_PATH_RECALC_SECONDS;
+      const pathfinder = new AStarPathfinder(map, { obstacles: otherObstacles });
+      const fullPath = pathfinder.findPathWorld(npcCx, npcCy, playerCx, playerCy);
+      if (fullPath.length > 1) {
+        npc.path = fullPath.slice(1);
+      } else {
+        npc.path = fullPath;
+      }
+    }
+    const distToPlayer = Math.hypot(playerCx - npcCx, playerCy - npcCy);
+    if (distToPlayer <= NPC_HOSTILE_STOP_DISTANCE || npc.path.length === 0) {
+      npc.isMoving = false;
+      return;
+    }
+    const nextTile = npc.path[0];
+    const targetX = nextTile.col * ts + ts * 0.5;
+    const targetY = nextTile.row * ts + ts * 0.5;
+    const dx = targetX - npcCx;
+    const dy = targetY - npcCy;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= 2) {
+      npc.path.shift();
+      if (npc.path.length === 0) {
+        npc.isMoving = false;
+        return;
+      }
+    }
+    const activeTile = npc.path[0];
+    const ax = activeTile.col * ts + ts * 0.5 - npcCx;
+    const ay = activeTile.row * ts + ts * 0.5 - npcCy;
+    const adist = Math.hypot(ax, ay);
+    if (adist <= 1e-3) {
+      npc.isMoving = false;
+      return;
+    }
+    const step = Math.min(adist, NPC_HOSTILE_WALK_SPEED * dtSeconds);
+    const vx = ax / adist * step;
+    const vy = ay / adist * step;
+    const canMoveTo = (nx, ny) => {
+      const candidate = {
+        x: nx,
+        y: ny,
+        width: bounds.width,
+        height: bounds.height
+      };
+      if (isRectCollidingWithMap(map, nx, ny, bounds.width, bounds.height, true)) {
+        return false;
+      }
+      if (rectsIntersect(candidate, player)) {
+        return false;
+      }
+      for (const obs of otherObstacles) {
+        if (rectsIntersect(candidate, obs)) {
+          return false;
+        }
+      }
+      return true;
+    };
+    let moved = false;
+    if (Math.abs(vx) > 1e-4 && canMoveTo(bounds.x + vx, bounds.y)) {
+      bounds.x += vx;
+      moved = true;
+    }
+    if (Math.abs(vy) > 1e-4 && canMoveTo(bounds.x, bounds.y + vy)) {
+      bounds.y += vy;
+      moved = true;
+    }
+    npc.isMoving = moved;
+  }
+
   // src/entities/cat.ts
   var CAT_START_X = 26.5 * TILE_SIZE;
   var CAT_START_Y = 17 * TILE_SIZE;
@@ -2194,26 +2546,33 @@
       __publicField(this, "rosannaCutscene", null);
       __publicField(this, "cat");
       // Upstairs NPCs
+      __publicField(this, "albinX", UPSTAIRS_ALBIN_X);
       __publicField(this, "albinY", UPSTAIRS_ALBIN_START_Y);
       __publicField(this, "albinDir", 1);
       // 1 = walking down (south), -1 = walking up (north)
       __publicField(this, "albinCone");
+      __publicField(this, "albinCombat");
       __publicField(this, "henrikNpc", { ...UPSTAIRS_HENRIK_NPC });
       __publicField(this, "henrikAngle", Math.PI / 2);
       // Facing south initially
       __publicField(this, "henrikTimer", 0);
       __publicField(this, "henrikCone");
+      __publicField(this, "henrikCombat");
       __publicField(this, "tanjaNpc", { ...UPSTAIRS_TANJA_NPC });
       __publicField(this, "tanjaCone");
+      __publicField(this, "tanjaCombat");
       __publicField(this, "dianaNpc", { ...UPSTAIRS_DIANA_NPC });
       __publicField(this, "dianaCone", null);
+      __publicField(this, "dianaCombat");
       __publicField(this, "simonNpc", { ...UPSTAIRS_SIMON_NPC });
       __publicField(this, "simonCone", null);
+      __publicField(this, "simonCombat");
       __publicField(this, "anneMarieNpc", { ...UPSTAIRS_ANNE_MARIE_NPC });
       __publicField(this, "anneMarieAngle", -Math.PI / 2);
       // Facing north initially
       __publicField(this, "anneMarieTimer", 0);
       __publicField(this, "anneMarieCone");
+      __publicField(this, "anneMarieCombat");
       __publicField(this, "intruderDetected", false);
       this.cat = createCat();
       this.doors = [
@@ -2238,6 +2597,9 @@
           hiddenRegions: UPSTAIRS_TABLE_ROOM_HIDDEN_MASKS.map((r) => ({ ...r }))
         }
       ];
+      this.albinCombat = createArmedNpcState("upstairs:Albin", "Albin", Math.PI / 2);
+      this.henrikCombat = createArmedNpcState("upstairs:Henrik", "Henrik", this.henrikAngle);
+      this.tanjaCombat = createArmedNpcState("upstairs:Tanja", "Tanja", -Math.PI / 2);
       this.albinCone = new ConeOfSight(
         { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
         Math.PI / 2,
@@ -2262,6 +2624,7 @@
         15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
         3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
       );
+      this.dianaCombat = createArmedNpcState("upstairs:Diana", "Diana", dianaTreeAngle);
       this.dianaCone = new ConeOfSight(
         { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
         dianaTreeAngle,
@@ -2273,6 +2636,7 @@
         15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
         3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
       );
+      this.simonCombat = createArmedNpcState("upstairs:Simon", "Simon", simonTreeAngle);
       this.simonCone = new ConeOfSight(
         { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
         simonTreeAngle,
@@ -2280,12 +2644,43 @@
         this.map,
         DEFAULT_CONE_OF_SIGHT_FOV * 1.5
       );
+      this.anneMarieCombat = createArmedNpcState(
+        "upstairs:Anne-Marie",
+        "Anne-Marie",
+        this.anneMarieAngle
+      );
       this.anneMarieCone = new ConeOfSight(
         { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
         this.anneMarieAngle,
         void 0,
         this.map
       );
+    }
+    getArmedNpcs() {
+      const isTableRoomDoorOpen = !this.doors.some(
+        (d) => d.id === "upstairs-table-room-door"
+      );
+      const isBedroomDoorOpen = !this.doors.some(
+        (d) => d.id === "upstairs-bedroom-door"
+      );
+      return [
+        {
+          state: this.albinCombat,
+          bounds: { x: this.albinX, y: this.albinY, width: 12, height: 12 },
+          visible: true
+        },
+        { state: this.henrikCombat, bounds: this.henrikNpc, visible: isTableRoomDoorOpen },
+        { state: this.tanjaCombat, bounds: this.tanjaNpc, visible: isTableRoomDoorOpen },
+        { state: this.dianaCombat, bounds: this.dianaNpc, visible: true },
+        { state: this.simonCombat, bounds: this.simonNpc, visible: true },
+        { state: this.anneMarieCombat, bounds: this.anneMarieNpc, visible: isBedroomDoorOpen }
+      ];
+    }
+    getArmedNpcByKey(key) {
+      for (const entry of this.getArmedNpcs()) {
+        if (entry.state.key === key) return entry.state;
+      }
+      return void 0;
     }
     enter(player) {
       player.x = UPSTAIRS_STAIRS_SPAWN.x;
@@ -2298,33 +2693,57 @@
       player.isMoving = false;
       player.walkTimer = 0;
       this.intruderDetected = false;
-      this.albinY = UPSTAIRS_ALBIN_START_Y;
-      this.albinDir = 1;
-      this.albinCone = new ConeOfSight(
-        { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
-        Math.PI / 2,
-        void 0,
-        this.map
-      );
-      this.henrikAngle = Math.PI / 2;
-      this.henrikTimer = 0;
-      this.henrikCone = new ConeOfSight(
-        { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
-        this.henrikAngle,
-        void 0,
-        this.map
-      );
-      this.tanjaCone = new ConeOfSight(
-        { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
-        -Math.PI / 2,
-        void 0,
-        this.map
-      );
-      if (!player.states.get(DIANA_DISTRACTED_KEY)) {
+      if (this.albinCombat.mode !== "dead") {
+        this.albinCombat.mode = "passive";
+        this.albinCombat.unseenTimer = 0;
+        this.albinY = UPSTAIRS_ALBIN_START_Y;
+        this.albinDir = 1;
+        this.albinCombat.aimYaw = Math.PI / 2;
+        this.albinCone = new ConeOfSight(
+          { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
+          Math.PI / 2,
+          void 0,
+          this.map
+        );
+      } else {
+        this.albinCone = null;
+      }
+      if (this.henrikCombat.mode !== "dead") {
+        this.henrikCombat.mode = "passive";
+        this.henrikCombat.unseenTimer = 0;
+        this.henrikAngle = Math.PI / 2;
+        this.henrikTimer = 0;
+        this.henrikCombat.aimYaw = this.henrikAngle;
+        this.henrikCone = new ConeOfSight(
+          { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
+          this.henrikAngle,
+          void 0,
+          this.map
+        );
+      } else {
+        this.henrikCone = null;
+      }
+      if (this.tanjaCombat.mode !== "dead") {
+        this.tanjaCombat.mode = "passive";
+        this.tanjaCombat.unseenTimer = 0;
+        this.tanjaCombat.aimYaw = -Math.PI / 2;
+        this.tanjaCone = new ConeOfSight(
+          { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
+          -Math.PI / 2,
+          void 0,
+          this.map
+        );
+      } else {
+        this.tanjaCone = null;
+      }
+      if (this.dianaCombat.mode !== "dead" && !player.states.get(DIANA_DISTRACTED_KEY)) {
+        this.dianaCombat.mode = "passive";
+        this.dianaCombat.unseenTimer = 0;
         const dianaTreeAngle = Math.atan2(
           15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
           3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
         );
+        this.dianaCombat.aimYaw = dianaTreeAngle;
         this.dianaCone = new ConeOfSight(
           { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
           dianaTreeAngle,
@@ -2335,11 +2754,14 @@
       } else {
         this.dianaCone = null;
       }
-      if (!player.states.get(SIMON_DISTRACTED_KEY)) {
+      if (this.simonCombat.mode !== "dead" && !player.states.get(SIMON_DISTRACTED_KEY)) {
+        this.simonCombat.mode = "passive";
+        this.simonCombat.unseenTimer = 0;
         const simonTreeAngle = Math.atan2(
           15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
           3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
         );
+        this.simonCombat.aimYaw = simonTreeAngle;
         this.simonCone = new ConeOfSight(
           { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
           simonTreeAngle,
@@ -2350,26 +2772,36 @@
       } else {
         this.simonCone = null;
       }
-      this.anneMarieAngle = -Math.PI / 2;
-      this.anneMarieTimer = 0;
-      this.anneMarieCone = new ConeOfSight(
-        { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
-        this.anneMarieAngle,
-        void 0,
-        this.map
-      );
+      if (this.anneMarieCombat.mode !== "dead") {
+        this.anneMarieCombat.mode = "passive";
+        this.anneMarieCombat.unseenTimer = 0;
+        this.anneMarieAngle = -Math.PI / 2;
+        this.anneMarieTimer = 0;
+        this.anneMarieCombat.aimYaw = this.anneMarieAngle;
+        this.anneMarieCone = new ConeOfSight(
+          { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
+          this.anneMarieAngle,
+          void 0,
+          this.map
+        );
+      } else {
+        this.anneMarieCone = null;
+      }
     }
     getSolidObstacles() {
-      return [
+      const obs = [
         UPSTAIRS_STAIRS_TRIGGER_BOUNDS,
-        { x: UPSTAIRS_ALBIN_X, y: this.albinY, width: 12, height: 12 },
-        this.henrikNpc,
-        this.tanjaNpc,
-        this.dianaNpc,
-        this.simonNpc,
-        this.anneMarieNpc,
         ...this.doors.map((d) => d.bounds)
       ];
+      if (this.albinCombat.mode !== "dead") {
+        obs.push({ x: this.albinX, y: this.albinY, width: 12, height: 12 });
+      }
+      if (this.henrikCombat.mode !== "dead") obs.push(this.henrikNpc);
+      if (this.tanjaCombat.mode !== "dead") obs.push(this.tanjaNpc);
+      if (this.dianaCombat.mode !== "dead") obs.push(this.dianaNpc);
+      if (this.simonCombat.mode !== "dead") obs.push(this.simonNpc);
+      if (this.anneMarieCombat.mode !== "dead") obs.push(this.anneMarieNpc);
+      return obs;
     }
     getInteractables(player) {
       const list = [
@@ -2580,127 +3012,299 @@
       }
       return false;
     }
+    updateHostileNpc(combat, bounds, player, dtSeconds, ctx, fov = DEFAULT_CONE_OF_SIGHT_FOV) {
+      stepHostileNpcAlongPath(
+        combat,
+        bounds,
+        player,
+        this.map,
+        this.getSolidObstacles(),
+        dtSeconds
+      );
+      const originX = bounds.x + bounds.width * 0.5;
+      const originY = bounds.y + bounds.height * 0.5;
+      const playerCx = player.x + player.width * 0.5;
+      const playerCy = player.y + player.height * 0.5;
+      const aimYaw = Math.atan2(playerCy - originY, playerCx - originX);
+      combat.aimYaw = aimYaw;
+      const cone = new ConeOfSight(
+        { x: originX, y: originY },
+        aimYaw,
+        DEFAULT_CONE_OF_SIGHT_DISTANCE,
+        this.map,
+        fov
+      );
+      if (cone.checkDetection(player)) {
+        combat.unseenTimer = 0;
+      } else {
+        combat.unseenTimer += dtSeconds;
+      }
+      if (combat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+        combat.mode = "passive";
+        combat.unseenTimer = 0;
+        combat.isMoving = false;
+        combat.path = [];
+        combat.pathTimer = 0;
+      } else {
+        tryFireHostileNpcUzi(combat, originX, originY, aimYaw, ctx.fireNpcUzi);
+      }
+      return cone;
+    }
     /**
-     * Updates all Upstairs NPCs movement, rotation, and line/cone of sight detection.
+     * Updates all Upstairs NPCs' patrol, cones of sight, and hostile Uzi combat.
      */
     updateNpcSight(dtSeconds, player, ctx) {
-      if (this.intruderDetected) {
-        return;
-      }
-      this.albinY += this.albinDir * UPSTAIRS_ALBIN_SPEED * dtSeconds;
-      if (this.albinDir === 1 && this.albinY >= UPSTAIRS_ALBIN_END_Y) {
-        this.albinY = UPSTAIRS_ALBIN_END_Y;
-        this.albinDir = -1;
-      } else if (this.albinDir === -1 && this.albinY <= UPSTAIRS_ALBIN_START_Y) {
-        this.albinY = UPSTAIRS_ALBIN_START_Y;
-        this.albinDir = 1;
-      }
-      const albinAngle = this.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2;
-      this.albinCone = new ConeOfSight(
-        { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
-        albinAngle,
-        void 0,
-        this.map
-      );
-      if (this.albinCone.checkDetection(player)) {
-        this.triggerDetection(
-          ctx,
+      const playerCx = player.x + player.width * 0.5;
+      const playerCy = player.y + player.height * 0.5;
+      updateNpcHealthAndTimers(this.albinCombat, dtSeconds);
+      if (this.albinCombat.mode === "dead") {
+        this.albinCone = null;
+      } else if (this.albinCombat.mode === "hostile") {
+        const albinBounds = { x: this.albinX, y: this.albinY, width: 12, height: 12 };
+        this.albinCone = this.updateHostileNpc(
+          this.albinCombat,
+          albinBounds,
           player,
-          "Albin",
-          "I was looking for Rosanna... but instead I found you!!"
+          dtSeconds,
+          ctx
         );
-        return;
+        this.albinX = albinBounds.x;
+        this.albinY = albinBounds.y;
+      } else {
+        this.albinY += this.albinDir * UPSTAIRS_ALBIN_SPEED * dtSeconds;
+        if (this.albinDir === 1 && this.albinY >= UPSTAIRS_ALBIN_END_Y) {
+          this.albinY = UPSTAIRS_ALBIN_END_Y;
+          this.albinDir = -1;
+        } else if (this.albinDir === -1 && this.albinY <= UPSTAIRS_ALBIN_START_Y) {
+          this.albinY = UPSTAIRS_ALBIN_START_Y;
+          this.albinDir = 1;
+        }
+        const albinAngle = this.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2;
+        this.albinCombat.aimYaw = albinAngle;
+        this.albinCone = new ConeOfSight(
+          { x: this.albinX + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
+          albinAngle,
+          void 0,
+          this.map
+        );
+        if (this.albinCone.checkDetection(player)) {
+          this.albinCombat.mode = "hostile";
+          this.albinCombat.unseenTimer = 0;
+          this.albinCombat.pathTimer = 0;
+          const aimYaw = Math.atan2(playerCy - (this.albinY + 6), playerCx - (this.albinX + 6));
+          this.albinCombat.aimYaw = aimYaw;
+          this.albinCone = new ConeOfSight(
+            { x: this.albinX + 6, y: this.albinY + 6 },
+            aimYaw,
+            void 0,
+            this.map
+          );
+        }
       }
       const isTableRoomDoorOpen = !this.doors.some(
         (d) => d.id === "upstairs-table-room-door"
       );
+      updateNpcHealthAndTimers(this.henrikCombat, dtSeconds);
+      updateNpcHealthAndTimers(this.tanjaCombat, dtSeconds);
       if (isTableRoomDoorOpen) {
-        this.henrikTimer += dtSeconds;
-        if (this.henrikTimer >= 1) {
-          this.henrikTimer -= 1;
-          this.henrikAngle -= Math.PI / 4;
-          this.henrikCone = new ConeOfSight(
-            { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
-            this.henrikAngle,
-            void 0,
-            this.map
-          );
-        }
-        if (this.henrikCone.checkDetection(player)) {
-          this.triggerDetection(
-            ctx,
+        if (this.henrikCombat.mode === "dead") {
+          this.henrikCone = null;
+        } else if (this.henrikCombat.mode === "hostile") {
+          this.henrikCone = this.updateHostileNpc(
+            this.henrikCombat,
+            this.henrikNpc,
             player,
-            "Henrik",
-            "Santa? Perfect you can play with Asta!!"
+            dtSeconds,
+            ctx
           );
-          return;
+        } else {
+          this.henrikTimer += dtSeconds;
+          if (this.henrikTimer >= 1) {
+            this.henrikTimer -= 1;
+            this.henrikAngle -= Math.PI / 4;
+            this.henrikCone = new ConeOfSight(
+              { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
+              this.henrikAngle,
+              void 0,
+              this.map
+            );
+          }
+          this.henrikCombat.aimYaw = this.henrikCone?.direction ?? this.henrikAngle;
+          if (this.henrikCone?.checkDetection(player)) {
+            this.henrikCombat.mode = "hostile";
+            this.henrikCombat.unseenTimer = 0;
+            const aimYaw = Math.atan2(playerCy - (this.henrikNpc.y + 6), playerCx - (this.henrikNpc.x + 6));
+            this.henrikCombat.aimYaw = aimYaw;
+            this.henrikCone = new ConeOfSight(
+              { x: this.henrikNpc.x + 6, y: this.henrikNpc.y + 6 },
+              aimYaw,
+              void 0,
+              this.map
+            );
+          }
         }
-        if (this.tanjaCone.checkDetection(player)) {
-          this.triggerDetection(
-            ctx,
+        if (this.tanjaCombat.mode === "dead") {
+          this.tanjaCone = null;
+        } else if (this.tanjaCombat.mode === "hostile") {
+          this.tanjaCone = this.updateHostileNpc(
+            this.tanjaCombat,
+            this.tanjaNpc,
             player,
-            "Tanja",
-            "I like your suit, red like the color of wine."
+            dtSeconds,
+            ctx
           );
-          return;
+        } else {
+          if (!this.tanjaCone) {
+            this.tanjaCone = new ConeOfSight(
+              { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
+              -Math.PI / 2,
+              void 0,
+              this.map
+            );
+          }
+          this.tanjaCombat.aimYaw = this.tanjaCone.direction;
+          if (this.tanjaCone.checkDetection(player)) {
+            this.tanjaCombat.mode = "hostile";
+            this.tanjaCombat.unseenTimer = 0;
+            const aimYaw = Math.atan2(playerCy - (this.tanjaNpc.y + 6), playerCx - (this.tanjaNpc.x + 6));
+            this.tanjaCombat.aimYaw = aimYaw;
+            this.tanjaCone = new ConeOfSight(
+              { x: this.tanjaNpc.x + 6, y: this.tanjaNpc.y + 6 },
+              aimYaw,
+              void 0,
+              this.map
+            );
+          }
         }
       }
-      if (this.dianaCone && this.dianaCone.checkDetection(player)) {
-        this.triggerDetection(
-          ctx,
+      updateNpcHealthAndTimers(this.dianaCombat, dtSeconds);
+      if (this.dianaCombat.mode === "dead") {
+        this.dianaCone = null;
+      } else if (this.dianaCombat.mode === "hostile") {
+        this.dianaCone = this.updateHostileNpc(
+          this.dianaCombat,
+          this.dianaNpc,
           player,
-          "Diana",
-          "Do you have any destilleries on the North pole?"
+          dtSeconds,
+          ctx,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
         );
-        return;
+        if (this.dianaCombat.mode === "passive") {
+          if (player.states.get(DIANA_DISTRACTED_KEY)) {
+            this.dianaCone = null;
+          } else {
+            const dianaTreeAngle = Math.atan2(
+              15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
+              3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
+            );
+            this.dianaCombat.aimYaw = dianaTreeAngle;
+            this.dianaCone = new ConeOfSight(
+              { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
+              dianaTreeAngle,
+              DEFAULT_CONE_OF_SIGHT_DISTANCE,
+              this.map,
+              DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+            );
+          }
+        }
+      } else if (this.dianaCone && this.dianaCone.checkDetection(player)) {
+        this.dianaCombat.mode = "hostile";
+        this.dianaCombat.unseenTimer = 0;
+        const aimYaw = Math.atan2(playerCy - (this.dianaNpc.y + 6), playerCx - (this.dianaNpc.x + 6));
+        this.dianaCombat.aimYaw = aimYaw;
+        this.dianaCone = new ConeOfSight(
+          { x: this.dianaNpc.x + 6, y: this.dianaNpc.y + 6 },
+          aimYaw,
+          DEFAULT_CONE_OF_SIGHT_DISTANCE,
+          this.map,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+        );
       }
-      if (this.simonCone && this.simonCone.checkDetection(player)) {
-        this.triggerDetection(
-          ctx,
+      updateNpcHealthAndTimers(this.simonCombat, dtSeconds);
+      if (this.simonCombat.mode === "dead") {
+        this.simonCone = null;
+      } else if (this.simonCombat.mode === "hostile") {
+        this.simonCone = this.updateHostileNpc(
+          this.simonCombat,
+          this.simonNpc,
           player,
-          "Simon",
-          "If I knew you were around here, I would have moved back to Sweden a long time ago."
+          dtSeconds,
+          ctx,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
         );
-        return;
+        if (this.simonCombat.mode === "passive") {
+          if (player.states.get(SIMON_DISTRACTED_KEY)) {
+            this.simonCone = null;
+          } else {
+            const simonTreeAngle = Math.atan2(
+              15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
+              3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
+            );
+            this.simonCombat.aimYaw = simonTreeAngle;
+            this.simonCone = new ConeOfSight(
+              { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
+              simonTreeAngle,
+              DEFAULT_CONE_OF_SIGHT_DISTANCE,
+              this.map,
+              DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+            );
+          }
+        }
+      } else if (this.simonCone && this.simonCone.checkDetection(player)) {
+        this.simonCombat.mode = "hostile";
+        this.simonCombat.unseenTimer = 0;
+        const aimYaw = Math.atan2(playerCy - (this.simonNpc.y + 6), playerCx - (this.simonNpc.x + 6));
+        this.simonCombat.aimYaw = aimYaw;
+        this.simonCone = new ConeOfSight(
+          { x: this.simonNpc.x + 6, y: this.simonNpc.y + 6 },
+          aimYaw,
+          DEFAULT_CONE_OF_SIGHT_DISTANCE,
+          this.map,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+        );
       }
       const isBedroomDoorOpen = !this.doors.some(
         (d) => d.id === "upstairs-bedroom-door"
       );
+      updateNpcHealthAndTimers(this.anneMarieCombat, dtSeconds);
       if (isBedroomDoorOpen) {
-        this.anneMarieTimer += dtSeconds;
-        if (this.anneMarieTimer >= 1) {
-          this.anneMarieTimer -= 1;
-          this.anneMarieAngle += Math.PI / 4;
-          this.anneMarieCone = new ConeOfSight(
-            { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
-            this.anneMarieAngle,
-            void 0,
-            this.map
-          );
-        }
-        if (this.anneMarieCone.checkDetection(player)) {
-          this.triggerDetection(
-            ctx,
+        if (this.anneMarieCombat.mode === "dead") {
+          this.anneMarieCone = null;
+        } else if (this.anneMarieCombat.mode === "hostile") {
+          this.anneMarieCone = this.updateHostileNpc(
+            this.anneMarieCombat,
+            this.anneMarieNpc,
             player,
-            "Anne-Marie",
-            "What a coincidence, I was just reading a story about you."
+            dtSeconds,
+            ctx
           );
-          return;
+        } else {
+          this.anneMarieTimer += dtSeconds;
+          if (this.anneMarieTimer >= 1) {
+            this.anneMarieTimer -= 1;
+            this.anneMarieAngle += Math.PI / 4;
+            this.anneMarieCone = new ConeOfSight(
+              { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
+              this.anneMarieAngle,
+              void 0,
+              this.map
+            );
+          }
+          this.anneMarieCombat.aimYaw = this.anneMarieCone?.direction ?? this.anneMarieAngle;
+          if (this.anneMarieCone?.checkDetection(player)) {
+            this.anneMarieCombat.mode = "hostile";
+            this.anneMarieCombat.unseenTimer = 0;
+            const aimYaw = Math.atan2(playerCy - (this.anneMarieNpc.y + 6), playerCx - (this.anneMarieNpc.x + 6));
+            this.anneMarieCombat.aimYaw = aimYaw;
+            this.anneMarieCone = new ConeOfSight(
+              { x: this.anneMarieNpc.x + 6, y: this.anneMarieNpc.y + 6 },
+              aimYaw,
+              void 0,
+              this.map
+            );
+          }
         }
       }
-    }
-    triggerDetection(ctx, player, speaker, dialogue) {
-      this.intruderDetected = true;
-      player.isMoving = false;
-      ctx.openDialogue(
-        [dialogue],
-        () => {
-          ctx.loadLevel("level-upstairs");
-          player.blinkTimer = 2;
-          ctx.damagePlayer?.(30);
-        },
-        speaker
-      );
     }
   };
 
@@ -2931,6 +3535,8 @@
       __publicField(this, "toiletCutscene", null);
       __publicField(this, "coneOfSight");
       __publicField(this, "olexaConeOfSight");
+      __publicField(this, "arjanCombat");
+      __publicField(this, "olexaCombat");
       __publicField(this, "npcSightAngle", -Math.PI / 2);
       // North is -90 degrees in screen Y coordinates
       __publicField(this, "npcSightTimer", 0);
@@ -2942,6 +3548,8 @@
           hiddenRegions: []
         }
       ];
+      this.arjanCombat = createArmedNpcState("basement:Arjan", "Arjan", -Math.PI / 2);
+      this.olexaCombat = createArmedNpcState("basement:Olexa", "Olexa", -Math.PI / 2);
       this.coneOfSight = new ConeOfSight(
         { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
         this.npcSightAngle,
@@ -2955,6 +3563,17 @@
         void 0,
         this.map
       );
+    }
+    getArmedNpcs() {
+      return [
+        { state: this.arjanCombat, bounds: this.windowNpc, visible: true },
+        { state: this.olexaCombat, bounds: this.olexaNpc, visible: true }
+      ];
+    }
+    getArmedNpcByKey(key) {
+      if (key === this.arjanCombat.key) return this.arjanCombat;
+      if (key === this.olexaCombat.key) return this.olexaCombat;
+      return void 0;
     }
     enter(player) {
       const hasUsedStairs = Boolean(player.states.get(USED_STAIRS_STATE_KEY));
@@ -2980,27 +3599,45 @@
       this.npcSightAngle = -Math.PI / 2;
       this.npcSightTimer = 0;
       this.intruderDetected = false;
-      this.coneOfSight = new ConeOfSight(
-        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-        this.npcSightAngle,
-        void 0,
-        this.map
-      );
-      this.olexaConeOfSight = new ConeOfSight(
-        { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
-        -Math.PI / 2,
-        void 0,
-        this.map
-      );
+      if (this.arjanCombat.mode !== "dead") {
+        this.arjanCombat.mode = "passive";
+        this.arjanCombat.unseenTimer = 0;
+        this.arjanCombat.aimYaw = this.npcSightAngle;
+        this.coneOfSight = new ConeOfSight(
+          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+          this.npcSightAngle,
+          void 0,
+          this.map
+        );
+      } else {
+        this.coneOfSight = null;
+      }
+      if (this.olexaCombat.mode !== "dead") {
+        this.olexaCombat.mode = "passive";
+        this.olexaCombat.unseenTimer = 0;
+        this.olexaCombat.aimYaw = -Math.PI / 2;
+        this.olexaConeOfSight = new ConeOfSight(
+          { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+          -Math.PI / 2,
+          void 0,
+          this.map
+        );
+      } else {
+        this.olexaConeOfSight = null;
+      }
     }
     getSolidObstacles(player) {
       const obs = [
-        this.windowNpc,
-        this.olexaNpc,
         BASEMENT_SPA_TUB_BOUNDS,
         BASEMENT_STAIRS_TRIGGER_BOUNDS,
         ...this.doors.map((d) => d.bounds)
       ];
+      if (this.arjanCombat.mode !== "dead") {
+        obs.push(this.windowNpc);
+      }
+      if (this.olexaCombat.mode !== "dead") {
+        obs.push(this.olexaNpc);
+      }
       if (this.spaDoorClosed) {
         obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
       }
@@ -3119,49 +3756,122 @@
       };
     }
     updateNpcSight(dtSeconds, player, ctx) {
-      if (this.intruderDetected) {
-        return;
-      }
-      this.npcSightTimer += dtSeconds;
-      if (this.npcSightTimer >= 2) {
-        this.npcSightTimer -= 2;
-        this.npcSightAngle += Math.PI / 4;
-        this.coneOfSight = new ConeOfSight(
-          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-          this.npcSightAngle,
-          void 0,
-          this.map
+      const playerCx = player.x + player.width * 0.5;
+      const playerCy = player.y + player.height * 0.5;
+      updateNpcHealthAndTimers(this.arjanCombat, dtSeconds);
+      if (this.arjanCombat.mode === "dead") {
+        this.coneOfSight = null;
+      } else if (this.arjanCombat.mode === "hostile") {
+        stepHostileNpcAlongPath(
+          this.arjanCombat,
+          this.windowNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds
         );
+        const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
+        const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
+        const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
+        this.arjanCombat.aimYaw = aimYaw;
+        this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, void 0, this.map);
+        if (this.coneOfSight.checkDetection(player)) {
+          this.arjanCombat.unseenTimer = 0;
+        } else {
+          this.arjanCombat.unseenTimer += dtSeconds;
+        }
+        if (this.arjanCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+          this.arjanCombat.mode = "passive";
+          this.arjanCombat.unseenTimer = 0;
+          this.arjanCombat.isMoving = false;
+          this.arjanCombat.path = [];
+          this.arjanCombat.pathTimer = 0;
+          this.arjanCombat.aimYaw = this.npcSightAngle;
+          this.coneOfSight = new ConeOfSight(
+            { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+            this.npcSightAngle,
+            void 0,
+            this.map
+          );
+        } else {
+          tryFireHostileNpcUzi(this.arjanCombat, ax, ay, aimYaw, ctx.fireNpcUzi);
+        }
+      } else {
+        this.arjanCombat.isMoving = false;
+        this.npcSightTimer += dtSeconds;
+        if (this.npcSightTimer >= 2) {
+          this.npcSightTimer -= 2;
+          this.npcSightAngle += Math.PI / 4;
+          this.coneOfSight = new ConeOfSight(
+            { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+            this.npcSightAngle,
+            void 0,
+            this.map
+          );
+        }
+        this.arjanCombat.aimYaw = this.coneOfSight?.direction ?? this.npcSightAngle;
+        if (this.coneOfSight?.checkDetection(player)) {
+          this.arjanCombat.mode = "hostile";
+          this.arjanCombat.unseenTimer = 0;
+          this.arjanCombat.pathTimer = 0;
+          const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
+          const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
+          const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
+          this.arjanCombat.aimYaw = aimYaw;
+          this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, void 0, this.map);
+        }
       }
-      const detectedArjan = this.coneOfSight.checkDetection(player);
-      if (detectedArjan) {
-        this.intruderDetected = true;
-        player.isMoving = false;
-        ctx.openDialogue(
-          ["You're not supposed to be here! Check-mate."],
-          () => {
-            ctx.loadLevel("level-basement");
-            player.blinkTimer = 2;
-            ctx.damagePlayer?.(30);
-          },
-          "Arjan"
+      updateNpcHealthAndTimers(this.olexaCombat, dtSeconds);
+      if (this.olexaCombat.mode === "dead") {
+        this.olexaConeOfSight = null;
+      } else if (this.olexaCombat.mode === "hostile") {
+        stepHostileNpcAlongPath(
+          this.olexaCombat,
+          this.olexaNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds
         );
-        return;
-      }
-      const detectedOlexa = this.olexaConeOfSight.checkDetection(player);
-      if (detectedOlexa) {
-        this.intruderDetected = true;
-        player.isMoving = false;
-        ctx.openDialogue(
-          ["Nobody believed me when I said you were real..."],
-          () => {
-            ctx.loadLevel("level-basement");
-            player.blinkTimer = 2;
-            ctx.damagePlayer?.(30);
-          },
-          "Olexa"
-        );
-        return;
+        const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
+        const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
+        const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
+        this.olexaCombat.aimYaw = aimYaw;
+        this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, void 0, this.map);
+        if (this.olexaConeOfSight.checkDetection(player)) {
+          this.olexaCombat.unseenTimer = 0;
+        } else {
+          this.olexaCombat.unseenTimer += dtSeconds;
+        }
+        if (this.olexaCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+          this.olexaCombat.mode = "passive";
+          this.olexaCombat.unseenTimer = 0;
+          this.olexaCombat.isMoving = false;
+          this.olexaCombat.path = [];
+          this.olexaCombat.pathTimer = 0;
+          this.olexaCombat.aimYaw = -Math.PI / 2;
+          this.olexaConeOfSight = new ConeOfSight(
+            { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+            -Math.PI / 2,
+            void 0,
+            this.map
+          );
+        } else {
+          tryFireHostileNpcUzi(this.olexaCombat, ox, oy, aimYaw, ctx.fireNpcUzi);
+        }
+      } else {
+        this.olexaCombat.isMoving = false;
+        this.olexaCombat.aimYaw = this.olexaConeOfSight?.direction ?? -Math.PI / 2;
+        if (this.olexaConeOfSight?.checkDetection(player)) {
+          this.olexaCombat.mode = "hostile";
+          this.olexaCombat.unseenTimer = 0;
+          this.olexaCombat.pathTimer = 0;
+          const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
+          const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
+          const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
+          this.olexaCombat.aimYaw = aimYaw;
+          this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, void 0, this.map);
+        }
       }
     }
     updateCutscene(dtSeconds, player, ctx) {
@@ -5433,6 +6143,99 @@
     const fz = syaw;
     const rx = -syaw;
     const rz = cyaw;
+    const deadT = Math.max(0, Math.min(1, style.deadFallProgress ?? 0));
+    if (deadT > 0) {
+      const fallPitch = deadT * (Math.PI * 0.48);
+      const sinF = Math.sin(fallPitch);
+      const cosF = Math.cos(fallPitch);
+      const poolR = 3.5 + 5.5 * deadT;
+      mb.addCylinder(
+        cx - fx * 3.5 * deadT,
+        baseY + 0.08,
+        cz - fz * 3.5 * deadT,
+        poolR,
+        poolR,
+        0.16,
+        14,
+        rgb(138, 12, 18),
+        TexId.SOLID,
+        0
+      );
+      const torsoOff = 5.5 * sinF;
+      const torsoY = baseY + 1.8 + 4.5 * cosF;
+      mb.addOrientedBox(
+        cx - fx * torsoOff,
+        torsoY,
+        cz - fz * torsoOff,
+        4.4,
+        6.8,
+        5.2,
+        yaw,
+        -fallPitch,
+        style.coat,
+        TexId.FABRIC,
+        0.65
+      );
+      const legsOff = 1.2 * sinF;
+      const legsY = baseY + 1.2 + 1.8 * cosF;
+      for (const side of [1, -1]) {
+        mb.addOrientedBox(
+          cx - fx * legsOff + rx * 1.6 * side,
+          legsY,
+          cz - fz * legsOff + rz * 1.6 * side,
+          2.1,
+          4.4,
+          2.1,
+          yaw,
+          -fallPitch,
+          style.pants,
+          TexId.SOLID,
+          0.5
+        );
+      }
+      const headOff = 10.2 * sinF;
+      const headY2 = baseY + 2 + 9.2 * cosF;
+      mb.addSphere(
+        cx - fx * headOff,
+        headY2,
+        cz - fz * headOff,
+        2.65,
+        2.65,
+        2.65,
+        8,
+        10,
+        style.skin,
+        TexId.SOLID,
+        0.55
+      );
+      mb.addSphere(
+        cx - fx * (headOff + 0.6),
+        headY2 + 0.8 * cosF,
+        cz - fz * (headOff + 0.6),
+        2.75,
+        1.8,
+        2.75,
+        8,
+        8,
+        style.hair,
+        TexId.SOLID,
+        0.45
+      );
+      mb.addOrientedBox(
+        cx + rx * 5.2,
+        baseY + 0.9,
+        cz + rz * 5.2,
+        5,
+        1.4,
+        1.3,
+        yaw + 0.4,
+        0,
+        rgb(38, 42, 50),
+        TexId.SOLID,
+        0.45
+      );
+      return;
+    }
     const swing = isMoving ? Math.sin(walkPhase * 11) * 0.58 : 0;
     const bob = isMoving ? Math.abs(Math.sin(walkPhase * 11)) * 0.85 : 0;
     const y0 = baseY + bob;
@@ -5480,6 +6283,8 @@
     const activePunchSide = style.punchHand === "left" ? -1 : 1;
     const isHoldingUzi = equippedItem === "uzi";
     const isHoldingFlamethrower = equippedItem === "flamethrower";
+    const isReloadingUzi = isHoldingUzi && (style.uziReloadTimer ?? 0) > 0;
+    const reloadProgress = isReloadingUzi ? 1 - Math.max(0, Math.min(1, (style.uziReloadTimer ?? 0) / NPC_UZI_RELOAD_SECONDS)) : 0;
     const isDroppingUzi = (style.uziDropTimer ?? 0) > 0 && !isHoldingUzi && !isHoldingFlamethrower;
     const vibeActive = (isHoldingUzi || isHoldingFlamethrower) && (style.weaponVibrationTimer ?? 0) > 0;
     const vibeTime = style.elapsedTime ?? walkPhase;
@@ -5530,17 +6335,75 @@
         );
         continue;
       }
+      if (isReloadingUzi && side === -1) {
+        const env = Math.sin(reloadProgress * Math.PI);
+        const reachAcross = env * 3.8;
+        let magLift = 0;
+        let showSpareMag = false;
+        if (reloadProgress < 0.35) {
+          magLift = -(reloadProgress / 0.35) * 2.4;
+          showSpareMag = true;
+        } else if (reloadProgress < 0.75) {
+          const tIns = (reloadProgress - 0.35) / 0.4;
+          magLift = -2.4 + tIns * 2.6;
+          showSpareMag = true;
+        } else {
+          const tBolt = (reloadProgress - 0.75) / 0.25;
+          magLift = 0.8 + Math.sin(tBolt * Math.PI) * 1.1;
+        }
+        const reloadTheta = Math.PI * 0.5 * env;
+        const st = Math.sin(reloadTheta);
+        const ct = Math.cos(reloadTheta);
+        const ax0 = cx + rx * (armSpread * side + reachAcross);
+        const az0 = cz + rz * (armSpread * side + reachAcross);
+        const syReload = shoulderY + magLift * 0.45;
+        mb.addOrientedBox(
+          ax0 + fx * st * 2.2,
+          syReload - ct * 2.2,
+          az0 + fz * st * 2.2,
+          2,
+          4.4,
+          2,
+          yaw,
+          reloadTheta,
+          style.coat,
+          TexId.FABRIC,
+          0.65
+        );
+        const lhx = ax0 + fx * st * 4.4;
+        const lhy = syReload - ct * 4.4 + magLift * 0.55;
+        const lhz = az0 + fz * st * 4.4;
+        mb.addSphere(lhx, lhy, lhz, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
+        if (showSpareMag) {
+          mb.addOrientedBox(
+            lhx + fx * 0.6,
+            lhy - 0.8,
+            lhz + fz * 0.6,
+            0.9,
+            2.6,
+            0.7,
+            yaw,
+            0,
+            rgb(28, 32, 40),
+            TexId.SOLID,
+            0.35
+          );
+        }
+        continue;
+      }
       if ((isHoldingUzi || isHoldingFlamethrower) && side === 1) {
         const equipTimer = isHoldingUzi ? Math.max(0, style.uziEquipTimer ?? 0) : 0;
         const tEquip = equipTimer > 0 ? 1 - Math.min(1, equipTimer / UZI_EQUIP_DURATION_SECONDS) : 1;
-        const theta = Math.PI - tEquip * (Math.PI * 0.5);
+        const reloadTilt = isReloadingUzi ? Math.sin(reloadProgress * Math.PI) * 0.42 : 0;
+        const reloadInward = isReloadingUzi ? -Math.sin(reloadProgress * Math.PI) * 1.35 : 0;
+        const theta = Math.PI - tEquip * (Math.PI * 0.5) + reloadTilt;
         const st = Math.sin(theta);
         const ct = Math.cos(theta);
         const dirX = st * fx;
         const dirY = -ct;
         const dirZ = st * fz;
-        const ax0 = cx + rx * (armSpread * side + vibeSide) + fx * vibeFwd;
-        const az0 = cz + rz * (armSpread * side + vibeSide) + fz * vibeFwd;
+        const ax0 = cx + rx * (armSpread * side + reloadInward + vibeSide) + fx * vibeFwd;
+        const az0 = cz + rz * (armSpread * side + reloadInward + vibeSide) + fz * vibeFwd;
         const syVibe = shoulderY + vibeUp;
         mb.addOrientedBox(
           ax0 + dirX * 2.2,
@@ -6243,15 +7106,20 @@
         arjanX,
         0,
         arjanZ,
-        basement.coneOfSight ? basement.coneOfSight.direction : directionToYaw(basement.windowNpc.facing),
+        basement.arjanCombat.aimYaw,
         t,
-        false,
+        basement.arjanCombat.isMoving,
         {
           coat: hexToColor4("#423933"),
           trim: rgb(224, 220, 214),
           pants: rgb(44, 52, 68),
           skin: rgb(248, 206, 174),
-          hair: hexToColor4("#4e433c")
+          hair: hexToColor4("#4e433c"),
+          equippedItem: "uzi",
+          uziReloadTimer: basement.arjanCombat.reloadTimer,
+          weaponVibrationTimer: basement.arjanCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress: basement.arjanCombat.mode === "dead" ? Math.max(0.05, basement.arjanCombat.deadFallProgress) : 0
         },
         false,
         false,
@@ -6265,15 +7133,20 @@
         olexaX,
         0,
         olexaZ,
-        basement.olexaConeOfSight ? basement.olexaConeOfSight.direction : directionToYaw(basement.olexaNpc.facing),
+        basement.olexaCombat.aimYaw,
         t,
-        false,
+        basement.olexaCombat.isMoving,
         {
           coat: hexToColor4("#52446a"),
           trim: rgb(232, 228, 240),
           pants: rgb(44, 52, 68),
           skin: rgb(248, 206, 174),
-          hair: hexToColor4("#342618")
+          hair: hexToColor4("#342618"),
+          equippedItem: "uzi",
+          uziReloadTimer: basement.olexaCombat.reloadTimer,
+          weaponVibrationTimer: basement.olexaCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress: basement.olexaCombat.mode === "dead" ? Math.max(0.05, basement.olexaCombat.deadFallProgress) : 0
         },
         false,
         false,
@@ -6589,25 +7462,30 @@
       }
       addHumanoid3D(
         opaque,
-        UPSTAIRS_ALBIN_X + 6,
+        upstairs.albinX + 6,
         0,
         upstairs.albinY + 6,
-        upstairs.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2,
+        upstairs.albinCombat.aimYaw,
         t,
-        true,
+        upstairs.albinCombat.mode === "passive" || upstairs.albinCombat.isMoving,
         {
           coat: hexToColor4("#285890"),
           trim: rgb(236, 240, 248),
           pants: rgb(42, 48, 62),
           skin: rgb(248, 206, 174),
-          hair: hexToColor4("#7a421c")
+          hair: hexToColor4("#7a421c"),
+          equippedItem: "uzi",
+          uziReloadTimer: upstairs.albinCombat.reloadTimer,
+          weaponVibrationTimer: upstairs.albinCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress: upstairs.albinCombat.mode === "dead" ? Math.max(0.05, upstairs.albinCombat.deadFallProgress) : 0
         },
         false,
         false,
         translucent
       );
       maybeBurnNpc("upstairs:Albin", UPSTAIRS_ALBIN_X + 6, 0, upstairs.albinY + 6);
-      const isDianaDistracted = Boolean(state.player.states.get(DIANA_DISTRACTED_KEY));
+      const isDianaDistracted = Boolean(state.player.states.get(DIANA_DISTRACTED_KEY)) && upstairs.dianaCombat.mode === "passive";
       const dianaX = upstairs.dianaNpc.x + upstairs.dianaNpc.width * 0.5;
       const dianaZ = upstairs.dianaNpc.y + upstairs.dianaNpc.height * 0.5;
       addHumanoid3D(
@@ -6615,9 +7493,9 @@
         dianaX,
         0,
         dianaZ,
-        upstairs.dianaCone ? upstairs.dianaCone.direction : Math.PI / 2,
+        upstairs.dianaCombat.aimYaw,
         t,
-        false,
+        upstairs.dianaCombat.isMoving,
         {
           coat: hexToColor4("#3a6288"),
           trim: rgb(238, 242, 248),
@@ -6625,14 +7503,19 @@
           skin: rgb(250, 208, 176),
           hair: hexToColor4("#2a1a14"),
           sitting: isDianaDistracted,
-          hasPresentInLap: isDianaDistracted
+          hasPresentInLap: isDianaDistracted,
+          equippedItem: "uzi",
+          uziReloadTimer: upstairs.dianaCombat.reloadTimer,
+          weaponVibrationTimer: upstairs.dianaCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress: upstairs.dianaCombat.mode === "dead" ? Math.max(0.05, upstairs.dianaCombat.deadFallProgress) : 0
         },
         false,
         false,
         translucent
       );
       maybeBurnNpc("upstairs:Diana", dianaX, 0, dianaZ);
-      const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY));
+      const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY)) && upstairs.simonCombat.mode === "passive";
       const simonX = upstairs.simonNpc.x + upstairs.simonNpc.width * 0.5;
       const simonZ = upstairs.simonNpc.y + upstairs.simonNpc.height * 0.5;
       addHumanoid3D(
@@ -6640,9 +7523,9 @@
         simonX,
         0,
         simonZ,
-        upstairs.simonCone ? upstairs.simonCone.direction : Math.PI,
+        upstairs.simonCombat.aimYaw,
         t,
-        false,
+        upstairs.simonCombat.isMoving,
         {
           coat: hexToColor4("#647038"),
           trim: rgb(238, 242, 232),
@@ -6650,7 +7533,12 @@
           skin: rgb(248, 204, 172),
           hair: hexToColor4("#583822"),
           sitting: isSimonDistracted,
-          hasPresentInLap: isSimonDistracted
+          hasPresentInLap: isSimonDistracted,
+          equippedItem: "uzi",
+          uziReloadTimer: upstairs.simonCombat.reloadTimer,
+          weaponVibrationTimer: upstairs.simonCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress: upstairs.simonCombat.mode === "dead" ? Math.max(0.05, upstairs.simonCombat.deadFallProgress) : 0
         },
         false,
         false,
@@ -6665,15 +7553,20 @@
           henrikX,
           0,
           henrikZ,
-          upstairs.henrikCone ? upstairs.henrikCone.direction : Math.PI / 2,
+          upstairs.henrikCombat.aimYaw,
           t,
-          false,
+          upstairs.henrikCombat.isMoving,
           {
             coat: hexToColor4("#324a78"),
             trim: rgb(236, 240, 248),
             pants: rgb(42, 48, 62),
             skin: rgb(248, 206, 174),
-            hair: hexToColor4("#6e4624")
+            hair: hexToColor4("#6e4624"),
+            equippedItem: "uzi",
+            uziReloadTimer: upstairs.henrikCombat.reloadTimer,
+            weaponVibrationTimer: upstairs.henrikCombat.weaponVibrationTimer,
+            elapsedTime: t,
+            deadFallProgress: upstairs.henrikCombat.mode === "dead" ? Math.max(0.05, upstairs.henrikCombat.deadFallProgress) : 0
           },
           false,
           false,
@@ -6687,15 +7580,20 @@
           tanjaX,
           0,
           tanjaZ,
-          upstairs.tanjaCone ? upstairs.tanjaCone.direction : -Math.PI / 2,
+          upstairs.tanjaCombat.aimYaw,
           t,
-          false,
+          upstairs.tanjaCombat.isMoving,
           {
             coat: hexToColor4("#783858"),
             trim: rgb(246, 236, 242),
             pants: rgb(44, 50, 64),
             skin: rgb(250, 208, 176),
-            hair: hexToColor4("#743c20")
+            hair: hexToColor4("#743c20"),
+            equippedItem: "uzi",
+            uziReloadTimer: upstairs.tanjaCombat.reloadTimer,
+            weaponVibrationTimer: upstairs.tanjaCombat.weaponVibrationTimer,
+            elapsedTime: t,
+            deadFallProgress: upstairs.tanjaCombat.mode === "dead" ? Math.max(0.05, upstairs.tanjaCombat.deadFallProgress) : 0
           },
           false,
           false,
@@ -6711,16 +7609,20 @@
           amX,
           0,
           amZ,
-          upstairs.anneMarieCone ? upstairs.anneMarieCone.direction : -Math.PI / 2,
+          upstairs.anneMarieCombat.aimYaw,
           t,
-          false,
+          upstairs.anneMarieCombat.isMoving,
           {
             coat: hexToColor4("#428860"),
             trim: rgb(238, 246, 240),
             pants: rgb(46, 52, 66),
             skin: rgb(250, 212, 182),
             hair: hexToColor4("#c88642"),
-            holdingBook: true
+            equippedItem: "uzi",
+            uziReloadTimer: upstairs.anneMarieCombat.reloadTimer,
+            weaponVibrationTimer: upstairs.anneMarieCombat.weaponVibrationTimer,
+            elapsedTime: t,
+            deadFallProgress: upstairs.anneMarieCombat.mode === "dead" ? Math.max(0.05, upstairs.anneMarieCombat.deadFallProgress) : 0
           },
           false,
           false,
@@ -7119,6 +8021,116 @@
       );
     }
     ctx.restore();
+  }
+  function drawNpcBillboards3D(ctx, state, cam, assets) {
+    let entries = [];
+    if (state.currentLevelId === "level-basement") {
+      entries = state.levels["level-basement"].getArmedNpcs();
+    } else if (state.currentLevelId === "level-upstairs") {
+      entries = state.levels["level-upstairs"].getArmedNpcs();
+    } else {
+      return;
+    }
+    const m = cam.viewProjMatrix;
+    const canvasW = ctx.canvas.width;
+    const canvasH = ctx.canvas.height;
+    const projected = [];
+    for (const entry of entries) {
+      if (!entry.visible || !isNpcBillboardVisible(entry.state)) continue;
+      const wx = entry.bounds.x + entry.bounds.width * 0.5;
+      const wy = 20.5;
+      const wz = entry.bounds.y + entry.bounds.height * 0.5;
+      const clipX = m[0] * wx + m[4] * wy + m[8] * wz + m[12];
+      const clipY = m[1] * wx + m[5] * wy + m[9] * wz + m[13];
+      const clipZ = m[2] * wx + m[6] * wy + m[10] * wz + m[14];
+      const clipW = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
+      if (clipW <= 0.5) continue;
+      const ndcX = clipX / clipW;
+      const ndcY = clipY / clipW;
+      const ndcZ = clipZ / clipW;
+      if (ndcZ < -1 || ndcZ > 1 || ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2) {
+        continue;
+      }
+      const sx = (ndcX * 0.5 + 0.5) * canvasW;
+      const sy = (1 - (ndcY * 0.5 + 0.5)) * canvasH;
+      const scale = Math.max(0.55, Math.min(1.2, 46 / clipW));
+      projected.push({ npc: entry.state, sx, sy, clipW, scale });
+    }
+    projected.sort((a, b) => b.clipW - a.clipW);
+    for (const item of projected) {
+      const { npc, sx, sy, scale } = item;
+      const portraitSize = Math.max(10, Math.round(16 * scale));
+      const barInnerW = Math.max(22, Math.round(36 * scale));
+      const barInnerH = Math.max(4, Math.round(6 * scale));
+      const barOuterW = barInnerW + 2;
+      const barOuterH = barInnerH + 2;
+      const gap = Math.max(2, Math.round(3 * scale));
+      const pad = Math.max(2, Math.round(2 * scale));
+      const cardW = pad * 2 + portraitSize + gap + barOuterW;
+      const cardH = pad * 2 + Math.max(portraitSize, barOuterH);
+      const cardX = Math.round(sx - cardW * 0.5);
+      const cardY = Math.round(sy - cardH);
+      ctx.save();
+      ctx.fillStyle = "rgba(8, 12, 20, 0.78)";
+      ctx.fillRect(cardX + 1, cardY + 1, cardW, cardH);
+      ctx.fillStyle = "#18080e";
+      ctx.fillRect(cardX, cardY, cardW, cardH);
+      ctx.strokeStyle = "#e8f0ff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
+      const px = cardX + pad;
+      const py = cardY + Math.round((cardH - portraitSize) * 0.5);
+      const pIdx = PORTRAIT_ORDER.indexOf(npc.name.toLowerCase());
+      if (pIdx !== -1 && assets.portraitsAtlas) {
+        ctx.drawImage(
+          assets.portraitsAtlas,
+          pIdx * 40,
+          0,
+          40,
+          40,
+          px,
+          py,
+          portraitSize,
+          portraitSize
+        );
+      }
+      const bx = px + portraitSize + gap;
+      const by = cardY + Math.round((cardH - barOuterH) * 0.5);
+      ctx.fillStyle = "#18080e";
+      ctx.fillRect(bx, by, barOuterW, barOuterH);
+      ctx.strokeStyle = "#e8f0ff";
+      ctx.strokeRect(bx + 0.5, by + 0.5, barOuterW - 1, barOuterH - 1);
+      const innerX = bx + 1;
+      const innerY = by + 1;
+      const healthRatio = Math.max(0, Math.min(1, npc.health / MAX_NPC_HEALTH));
+      const delayedRatio = Math.max(
+        0,
+        Math.min(1, npc.delayedHealth / MAX_NPC_HEALTH)
+      );
+      const healthPx = npc.health > 0 ? Math.max(1, Math.round(barInnerW * healthRatio)) : 0;
+      const delayedPx = npc.delayedHealth > 0 ? Math.max(1, Math.round(barInnerW * delayedRatio)) : 0;
+      if (healthPx > 0) {
+        ctx.fillStyle = "#ef233c";
+        ctx.fillRect(innerX, innerY, healthPx, barInnerH);
+        ctx.fillStyle = "#ff6b6b";
+        ctx.fillRect(innerX, innerY, healthPx, Math.max(1, Math.round(barInnerH * 0.25)));
+      }
+      if (npc.delayedHealth !== npc.health) {
+        const startPx = Math.min(healthPx, delayedPx);
+        const endPx = Math.max(healthPx, delayedPx);
+        const deltaW = Math.max(1, endPx - startPx);
+        ctx.fillStyle = "#7f0b18";
+        ctx.fillRect(innerX + startPx, innerY, deltaW, barInnerH);
+        ctx.fillStyle = "#a41623";
+        ctx.fillRect(
+          innerX + startPx,
+          innerY,
+          deltaW,
+          Math.max(1, Math.round(barInnerH * 0.25))
+        );
+      }
+      ctx.restore();
+    }
   }
   function drawHealthBar(ctx, player) {
     const x = 8;
@@ -8057,6 +9069,7 @@
         renderSoftware3DScene(ctx, state, cam);
       }
       if (!state.worldFadedToBlack) {
+        drawNpcBillboards3D(ctx, state, cam, assets);
         drawHealthBar(ctx, player);
         drawEquippedItemHud(ctx, player);
       }
@@ -8206,7 +9219,7 @@
       drawToiletNpc(ctx, basement.toiletNpc);
       const basementCones = [basement.coneOfSight, basement.olexaConeOfSight];
       for (const cone of basementCones) {
-        if (cone?.sightPolygon.length > 2) {
+        if (cone && cone.sightPolygon.length > 2) {
           ctx.save();
           ctx.fillStyle = "rgba(255, 250, 180, 0.48)";
           ctx.beginPath();
@@ -10895,22 +11908,30 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       addTarget("outside:Alex", state.levels["level-outside"].alexNpc);
     } else if (state.currentLevelId === "level-basement") {
       const basement = state.levels["level-basement"];
-      addTarget("basement:Arjan", basement.windowNpc);
-      addTarget("basement:Olexa", basement.olexaNpc);
+      if (basement.arjanCombat.mode !== "dead") {
+        addTarget("basement:Arjan", basement.windowNpc);
+      }
+      if (basement.olexaCombat.mode !== "dead") {
+        addTarget("basement:Olexa", basement.olexaNpc);
+      }
       addTarget("basement:Hanneloes", basement.toiletNpc);
     } else if (state.currentLevelId === "level-upstairs") {
       const upstairs = state.levels["level-upstairs"];
-      addTarget("upstairs:Albin", {
-        x: UPSTAIRS_ALBIN_X,
-        y: upstairs.albinY,
-        width: 12,
-        height: 12
-      });
-      addTarget("upstairs:Henrik", upstairs.henrikNpc);
-      addTarget("upstairs:Tanja", upstairs.tanjaNpc);
-      addTarget("upstairs:Diana", upstairs.dianaNpc);
-      addTarget("upstairs:Simon", upstairs.simonNpc);
-      addTarget("upstairs:Anne-Marie", upstairs.anneMarieNpc);
+      if (upstairs.albinCombat.mode !== "dead") {
+        addTarget("upstairs:Albin", {
+          x: upstairs.albinX,
+          y: upstairs.albinY,
+          width: 12,
+          height: 12
+        });
+      }
+      if (upstairs.henrikCombat.mode !== "dead") addTarget("upstairs:Henrik", upstairs.henrikNpc);
+      if (upstairs.tanjaCombat.mode !== "dead") addTarget("upstairs:Tanja", upstairs.tanjaNpc);
+      if (upstairs.dianaCombat.mode !== "dead") addTarget("upstairs:Diana", upstairs.dianaNpc);
+      if (upstairs.simonCombat.mode !== "dead") addTarget("upstairs:Simon", upstairs.simonNpc);
+      if (upstairs.anneMarieCombat.mode !== "dead") {
+        addTarget("upstairs:Anne-Marie", upstairs.anneMarieNpc);
+      }
     } else if (state.currentLevelId === "level-people") {
       for (const npc of state.levels["level-people"].npcs) {
         addTarget(`people:${npc.name}`, npc.bounds);
@@ -10937,6 +11958,56 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       });
     }
   }
+  function getArmedNpcByKey(state, key) {
+    if (state.currentLevelId === "level-basement") {
+      return state.levels["level-basement"].getArmedNpcByKey(key);
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      return state.levels["level-upstairs"].getArmedNpcByKey(key);
+    }
+    return void 0;
+  }
+  function damageArmedNpc(state, key, damage, hitX, hitY, groundZ) {
+    const npc = getArmedNpcByKey(state, key);
+    if (!npc) return;
+    const died = applyNpcDamage(npc, damage);
+    if (died) {
+      state.burningNpcs.delete(key);
+      spawnNpcBlood(state, hitX, hitY, groundZ);
+      state.bloodPools.push({
+        levelId: state.currentLevelId,
+        x: hitX,
+        y: hitY,
+        z: groundZ,
+        age: 0,
+        maxAge: 999999
+      });
+    }
+  }
+  function fireNpcUziProjectile(state, npc, originX, originY, aimYaw) {
+    const rightAngle = aimYaw + Math.PI / 2;
+    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180);
+    const shotYaw = aimYaw + yawSpread;
+    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180);
+    const spawnX = originX + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
+    const spawnY = originY + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
+    const spawnZ = groundZ + 10;
+    state.projectiles.push({
+      kind: "bullet",
+      owner: "npc",
+      sourceNpcKey: npc.key,
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(shotYaw) * UZI_PROJECTILE_SPEED,
+      vy: Math.sin(shotYaw) * UZI_PROJECTILE_SPEED,
+      vz: UZI_PROJECTILE_SPEED * Math.tan(pitchSpread),
+      yaw: shotYaw,
+      distanceTraveled: 0,
+      fromRoof: false
+    });
+  }
   function checkPunchNpcHit(state) {
     const player = state.player;
     const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
@@ -10953,6 +12024,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         const ncx = target.rect.x + target.rect.width * 0.5;
         const ncy = target.rect.y + target.rect.height * 0.5;
         spawnNpcBlood(state, ncx, ncy, target.groundZ);
+        damageArmedNpc(state, target.key, PLAYER_PUNCH_NPC_DAMAGE, ncx, ncy, target.groundZ);
       }
     }
   }
@@ -10968,6 +12040,22 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       state.bloodPools[i].age += dtSeconds;
       if (state.bloodPools[i].age >= state.bloodPools[i].maxAge) {
         state.bloodPools.splice(i, 1);
+      }
+    }
+    if (state.burningNpcs.size > 0) {
+      const npcTargets = getLevelNpcTargets(state);
+      for (const key of Array.from(state.burningNpcs)) {
+        const target = npcTargets.find((t) => t.key === key);
+        if (target) {
+          damageArmedNpc(
+            state,
+            key,
+            NPC_BURN_DAMAGE_PER_SECOND * dtSeconds,
+            target.rect.x + target.rect.width * 0.5,
+            target.rect.y + target.rect.height * 0.5,
+            target.groundZ
+          );
+        }
       }
     }
     for (let i = state.bloodParticles.length - 1; i >= 0; i--) {
@@ -11035,12 +12123,39 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
             break;
           }
         }
-        const hitNpc = npcTargets.find((t) => rectsIntersect(projRect, t.rect));
+        if (p.owner === "npc") {
+          if (rectsIntersect(projRect, state.player)) {
+            damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
+            removed = true;
+            break;
+          }
+        }
+        const hitNpc = npcTargets.find(
+          (t) => t.key !== p.sourceNpcKey && rectsIntersect(projRect, t.rect)
+        );
         if (hitNpc) {
           if (isFireball) {
             state.burningNpcs.add(hitNpc.key);
+            damageArmedNpc(
+              state,
+              hitNpc.key,
+              PLAYER_FIREBALL_NPC_DAMAGE,
+              p.x,
+              p.y,
+              hitNpc.groundZ
+            );
           } else {
             spawnNpcBlood(state, p.x, p.y, hitNpc.groundZ);
+            if (p.owner !== "npc") {
+              damageArmedNpc(
+                state,
+                hitNpc.key,
+                PLAYER_UZI_NPC_DAMAGE,
+                p.x,
+                p.y,
+                hitNpc.groundZ
+              );
+            }
           }
           removed = true;
           break;
@@ -11080,7 +12195,13 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           projRect.height,
           true
         );
-        const hitObstacle = obstacles.some((obs) => rectsIntersect(projRect, obs));
+        const sourceNpcTarget = p.sourceNpcKey ? npcTargets.find((t) => t.key === p.sourceNpcKey) : void 0;
+        const hitObstacle = obstacles.some((obs) => {
+          if (sourceNpcTarget && obs.x === sourceNpcTarget.rect.x && obs.y === sourceNpcTarget.rect.y && obs.width === sourceNpcTarget.rect.width && obs.height === sourceNpcTarget.rect.height) {
+            return false;
+          }
+          return rectsIntersect(projRect, obs);
+        });
         const hitOutsideDynamic = state.currentLevelId === "level-outside" && (rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle));
         if (hitMap || hitObstacle || hitOutsideDynamic) {
           if (!isFireball && (hitMap || hitObstacle)) {
@@ -11285,6 +12406,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         };
       },
       damagePlayer: (amount) => damagePlayer(state, amount),
+      fireNpcUzi: (npc, originX, originY, aimYaw) => fireNpcUziProjectile(state, npc, originX, originY, aimYaw),
       getSecretSantaReceiver: () => {
         if (!state.secretSantaDB) return void 0;
         const playerName = state.secretSantaDB.playerName;

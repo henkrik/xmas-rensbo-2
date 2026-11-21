@@ -1,3 +1,4 @@
+import { ArmedNpcState } from '../../entities/npcCombat';
 import { Player, Rect } from '../../entities/player';
 import { DialogueVariant, Interactable } from '../interaction';
 import { TileMap } from '../tilemap';
@@ -28,6 +29,12 @@ export interface LevelTransitionContext {
     variant?: DialogueVariant
   ) => void;
   damagePlayer?: (amount: number) => void;
+  fireNpcUzi?: (
+    npc: ArmedNpcState,
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void;
   getSecretSantaReceiver?: () => string | undefined;
   fadeWorldToBlack?: () => void;
 }

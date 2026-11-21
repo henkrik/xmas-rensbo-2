@@ -17,6 +17,7 @@
 
 import { Cat } from '../entities/cat';
 import { Dog } from '../entities/dog';
+import { NPC_UZI_RELOAD_SECONDS } from '../entities/npcCombat';
 import {
   EquipmentId,
   PUNCH_DURATION_SECONDS,
@@ -2463,8 +2464,10 @@ export interface CharacterColors3D {
   punchHand?: 'left' | 'right';
   uziEquipTimer?: number;
   uziDropTimer?: number;
+  uziReloadTimer?: number;
   weaponVibrationTimer?: number;
   elapsedTime?: number;
+  deadFallProgress?: number;
 }
 
 export function addHumanoid3D(
@@ -2491,6 +2494,102 @@ export function addHumanoid3D(
   const fz = syaw;
   const rx = -syaw;
   const rz = cyaw;
+
+  const deadT = Math.max(0, Math.min(1, style.deadFallProgress ?? 0));
+  if (deadT > 0) {
+    // Fallen-over dead pose in a crimson pool of blood
+    const fallPitch = deadT * (Math.PI * 0.48);
+    const sinF = Math.sin(fallPitch);
+    const cosF = Math.cos(fallPitch);
+    const poolR = 3.5 + 5.5 * deadT;
+    mb.addCylinder(
+      cx - fx * 3.5 * deadT,
+      baseY + 0.08,
+      cz - fz * 3.5 * deadT,
+      poolR,
+      poolR,
+      0.16,
+      14,
+      rgb(138, 12, 18),
+      TexId.SOLID,
+      0
+    );
+    const torsoOff = 5.5 * sinF;
+    const torsoY = baseY + 1.8 + 4.5 * cosF;
+    mb.addOrientedBox(
+      cx - fx * torsoOff,
+      torsoY,
+      cz - fz * torsoOff,
+      4.4,
+      6.8,
+      5.2,
+      yaw,
+      -fallPitch,
+      style.coat,
+      TexId.FABRIC,
+      0.65
+    );
+    const legsOff = 1.2 * sinF;
+    const legsY = baseY + 1.2 + 1.8 * cosF;
+    for (const side of [1, -1] as const) {
+      mb.addOrientedBox(
+        cx - fx * legsOff + rx * 1.6 * side,
+        legsY,
+        cz - fz * legsOff + rz * 1.6 * side,
+        2.1,
+        4.4,
+        2.1,
+        yaw,
+        -fallPitch,
+        style.pants,
+        TexId.SOLID,
+        0.5
+      );
+    }
+    const headOff = 10.2 * sinF;
+    const headY = baseY + 2.0 + 9.2 * cosF;
+    mb.addSphere(
+      cx - fx * headOff,
+      headY,
+      cz - fz * headOff,
+      2.65,
+      2.65,
+      2.65,
+      8,
+      10,
+      style.skin,
+      TexId.SOLID,
+      0.55
+    );
+    mb.addSphere(
+      cx - fx * (headOff + 0.6),
+      headY + 0.8 * cosF,
+      cz - fz * (headOff + 0.6),
+      2.75,
+      1.8,
+      2.75,
+      8,
+      8,
+      style.hair,
+      TexId.SOLID,
+      0.45
+    );
+    // Fallen Uzi beside the body
+    mb.addOrientedBox(
+      cx + rx * 5.2,
+      baseY + 0.9,
+      cz + rz * 5.2,
+      5.0,
+      1.4,
+      1.3,
+      yaw + 0.4,
+      0,
+      rgb(38, 42, 50),
+      TexId.SOLID,
+      0.45
+    );
+    return;
+  }
 
   const swing = isMoving ? Math.sin(walkPhase * 11) * 0.58 : 0;
   const bob = isMoving ? Math.abs(Math.sin(walkPhase * 11)) * 0.85 : 0;
@@ -2558,6 +2657,10 @@ export function addHumanoid3D(
   const activePunchSide = style.punchHand === 'left' ? -1 : 1;
   const isHoldingUzi = equippedItem === 'uzi';
   const isHoldingFlamethrower = equippedItem === 'flamethrower';
+  const isReloadingUzi = isHoldingUzi && (style.uziReloadTimer ?? 0) > 0;
+  const reloadProgress = isReloadingUzi
+    ? 1 - Math.max(0, Math.min(1, (style.uziReloadTimer ?? 0) / NPC_UZI_RELOAD_SECONDS))
+    : 0;
   const isDroppingUzi =
     (style.uziDropTimer ?? 0) > 0 && !isHoldingUzi && !isHoldingFlamethrower;
   const vibeActive =
@@ -2622,21 +2725,81 @@ export function addHumanoid3D(
       continue;
     }
 
+    if (isReloadingUzi && side === -1) {
+      // Left arm reload animation: pull old mag down -> lift fresh mag into grip -> rack bolt
+      const env = Math.sin(reloadProgress * Math.PI);
+      const reachAcross = env * 3.8;
+      let magLift = 0;
+      let showSpareMag = false;
+      if (reloadProgress < 0.35) {
+        magLift = -(reloadProgress / 0.35) * 2.4;
+        showSpareMag = true;
+      } else if (reloadProgress < 0.75) {
+        const tIns = (reloadProgress - 0.35) / 0.4;
+        magLift = -2.4 + tIns * 2.6;
+        showSpareMag = true;
+      } else {
+        const tBolt = (reloadProgress - 0.75) / 0.25;
+        magLift = 0.8 + Math.sin(tBolt * Math.PI) * 1.1;
+      }
+      const reloadTheta = Math.PI * 0.5 * env;
+      const st = Math.sin(reloadTheta);
+      const ct = Math.cos(reloadTheta);
+      const ax0 = cx + rx * (armSpread * side + reachAcross);
+      const az0 = cz + rz * (armSpread * side + reachAcross);
+      const syReload = shoulderY + magLift * 0.45;
+      mb.addOrientedBox(
+        ax0 + fx * st * 2.2,
+        syReload - ct * 2.2,
+        az0 + fz * st * 2.2,
+        2.0,
+        4.4,
+        2.0,
+        yaw,
+        reloadTheta,
+        style.coat,
+        TexId.FABRIC,
+        0.65
+      );
+      const lhx = ax0 + fx * st * 4.4;
+      const lhy = syReload - ct * 4.4 + magLift * 0.55;
+      const lhz = az0 + fz * st * 4.4;
+      mb.addSphere(lhx, lhy, lhz, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
+      if (showSpareMag) {
+        mb.addOrientedBox(
+          lhx + fx * 0.6,
+          lhy - 0.8,
+          lhz + fz * 0.6,
+          0.9,
+          2.6,
+          0.7,
+          yaw,
+          0,
+          rgb(28, 32, 40),
+          TexId.SOLID,
+          0.35
+        );
+      }
+      continue;
+    }
+
     if ((isHoldingUzi || isHoldingFlamethrower) && side === 1) {
-      // Right arm holding Uzi or Flamethrower: rotates forward and vibrates when firing
+      // Right arm holding Uzi or Flamethrower: rotates forward, tilts during reload, and vibrates when firing
       const equipTimer = isHoldingUzi ? Math.max(0, style.uziEquipTimer ?? 0) : 0;
       const tEquip =
         equipTimer > 0
           ? 1 - Math.min(1, equipTimer / UZI_EQUIP_DURATION_SECONDS)
           : 1;
-      const theta = Math.PI - tEquip * (Math.PI * 0.5);
+      const reloadTilt = isReloadingUzi ? Math.sin(reloadProgress * Math.PI) * 0.42 : 0;
+      const reloadInward = isReloadingUzi ? -Math.sin(reloadProgress * Math.PI) * 1.35 : 0;
+      const theta = Math.PI - tEquip * (Math.PI * 0.5) + reloadTilt;
       const st = Math.sin(theta);
       const ct = Math.cos(theta);
       const dirX = st * fx;
       const dirY = -ct;
       const dirZ = st * fz;
-      const ax0 = cx + rx * (armSpread * side + vibeSide) + fx * vibeFwd;
-      const az0 = cz + rz * (armSpread * side + vibeSide) + fz * vibeFwd;
+      const ax0 = cx + rx * (armSpread * side + reloadInward + vibeSide) + fx * vibeFwd;
+      const az0 = cz + rz * (armSpread * side + reloadInward + vibeSide) + fz * vibeFwd;
       const syVibe = shoulderY + vibeUp;
 
       mb.addOrientedBox(
@@ -3520,15 +3683,23 @@ export function buildDynamicSceneMeshes(
       arjanX,
       0,
       arjanZ,
-      basement.coneOfSight ? basement.coneOfSight.direction : directionToYaw(basement.windowNpc.facing),
+      basement.arjanCombat.aimYaw,
       t,
-      false,
+      basement.arjanCombat.isMoving,
       {
         coat: hexToColor4('#423933'),
         trim: rgb(224, 220, 214),
         pants: rgb(44, 52, 68),
         skin: rgb(248, 206, 174),
         hair: hexToColor4('#4e433c'),
+        equippedItem: 'uzi',
+        uziReloadTimer: basement.arjanCombat.reloadTimer,
+        weaponVibrationTimer: basement.arjanCombat.weaponVibrationTimer,
+        elapsedTime: t,
+        deadFallProgress:
+          basement.arjanCombat.mode === 'dead'
+            ? Math.max(0.05, basement.arjanCombat.deadFallProgress)
+            : 0,
       },
       false,
       false,
@@ -3544,15 +3715,23 @@ export function buildDynamicSceneMeshes(
       olexaX,
       0,
       olexaZ,
-      basement.olexaConeOfSight ? basement.olexaConeOfSight.direction : directionToYaw(basement.olexaNpc.facing),
+      basement.olexaCombat.aimYaw,
       t,
-      false,
+      basement.olexaCombat.isMoving,
       {
         coat: hexToColor4('#52446a'),
         trim: rgb(232, 228, 240),
         pants: rgb(44, 52, 68),
         skin: rgb(248, 206, 174),
         hair: hexToColor4('#342618'),
+        equippedItem: 'uzi',
+        uziReloadTimer: basement.olexaCombat.reloadTimer,
+        weaponVibrationTimer: basement.olexaCombat.weaponVibrationTimer,
+        elapsedTime: t,
+        deadFallProgress:
+          basement.olexaCombat.mode === 'dead'
+            ? Math.max(0.05, basement.olexaCombat.deadFallProgress)
+            : 0,
       },
       false,
       false,
@@ -3916,18 +4095,26 @@ export function buildDynamicSceneMeshes(
     // Albin pacing in Dining Room
     addHumanoid3D(
       opaque,
-      UPSTAIRS_ALBIN_X + 6,
+      upstairs.albinX + 6,
       0,
       upstairs.albinY + 6,
-      upstairs.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2,
+      upstairs.albinCombat.aimYaw,
       t,
-      true,
+      upstairs.albinCombat.mode === 'passive' || upstairs.albinCombat.isMoving,
       {
         coat: hexToColor4('#285890'),
         trim: rgb(236, 240, 248),
         pants: rgb(42, 48, 62),
         skin: rgb(248, 206, 174),
         hair: hexToColor4('#7a421c'),
+        equippedItem: 'uzi',
+        uziReloadTimer: upstairs.albinCombat.reloadTimer,
+        weaponVibrationTimer: upstairs.albinCombat.weaponVibrationTimer,
+        elapsedTime: t,
+        deadFallProgress:
+          upstairs.albinCombat.mode === 'dead'
+            ? Math.max(0.05, upstairs.albinCombat.deadFallProgress)
+            : 0,
       },
       false,
       false,
@@ -3936,7 +4123,9 @@ export function buildDynamicSceneMeshes(
     maybeBurnNpc('upstairs:Albin', UPSTAIRS_ALBIN_X + 6, 0, upstairs.albinY + 6);
 
     // Diana & Simon in Living Room
-    const isDianaDistracted = Boolean(state.player.states.get(DIANA_DISTRACTED_KEY));
+    const isDianaDistracted =
+      Boolean(state.player.states.get(DIANA_DISTRACTED_KEY)) &&
+      upstairs.dianaCombat.mode === 'passive';
     const dianaX = upstairs.dianaNpc.x + upstairs.dianaNpc.width * 0.5;
     const dianaZ = upstairs.dianaNpc.y + upstairs.dianaNpc.height * 0.5;
     addHumanoid3D(
@@ -3944,9 +4133,9 @@ export function buildDynamicSceneMeshes(
       dianaX,
       0,
       dianaZ,
-      upstairs.dianaCone ? upstairs.dianaCone.direction : Math.PI / 2,
+      upstairs.dianaCombat.aimYaw,
       t,
-      false,
+      upstairs.dianaCombat.isMoving,
       {
         coat: hexToColor4('#3a6288'),
         trim: rgb(238, 242, 248),
@@ -3955,6 +4144,14 @@ export function buildDynamicSceneMeshes(
         hair: hexToColor4('#2a1a14'),
         sitting: isDianaDistracted,
         hasPresentInLap: isDianaDistracted,
+        equippedItem: 'uzi',
+        uziReloadTimer: upstairs.dianaCombat.reloadTimer,
+        weaponVibrationTimer: upstairs.dianaCombat.weaponVibrationTimer,
+        elapsedTime: t,
+        deadFallProgress:
+          upstairs.dianaCombat.mode === 'dead'
+            ? Math.max(0.05, upstairs.dianaCombat.deadFallProgress)
+            : 0,
       },
       false,
       false,
@@ -3962,7 +4159,9 @@ export function buildDynamicSceneMeshes(
     );
     maybeBurnNpc('upstairs:Diana', dianaX, 0, dianaZ);
 
-    const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY));
+    const isSimonDistracted =
+      Boolean(state.player.states.get(SIMON_DISTRACTED_KEY)) &&
+      upstairs.simonCombat.mode === 'passive';
     const simonX = upstairs.simonNpc.x + upstairs.simonNpc.width * 0.5;
     const simonZ = upstairs.simonNpc.y + upstairs.simonNpc.height * 0.5;
     addHumanoid3D(
@@ -3970,9 +4169,9 @@ export function buildDynamicSceneMeshes(
       simonX,
       0,
       simonZ,
-      upstairs.simonCone ? upstairs.simonCone.direction : Math.PI,
+      upstairs.simonCombat.aimYaw,
       t,
-      false,
+      upstairs.simonCombat.isMoving,
       {
         coat: hexToColor4('#647038'),
         trim: rgb(238, 242, 232),
@@ -3981,6 +4180,14 @@ export function buildDynamicSceneMeshes(
         hair: hexToColor4('#583822'),
         sitting: isSimonDistracted,
         hasPresentInLap: isSimonDistracted,
+        equippedItem: 'uzi',
+        uziReloadTimer: upstairs.simonCombat.reloadTimer,
+        weaponVibrationTimer: upstairs.simonCombat.weaponVibrationTimer,
+        elapsedTime: t,
+        deadFallProgress:
+          upstairs.simonCombat.mode === 'dead'
+            ? Math.max(0.05, upstairs.simonCombat.deadFallProgress)
+            : 0,
       },
       false,
       false,
@@ -3997,15 +4204,23 @@ export function buildDynamicSceneMeshes(
         henrikX,
         0,
         henrikZ,
-        upstairs.henrikCone ? upstairs.henrikCone.direction : Math.PI / 2,
+        upstairs.henrikCombat.aimYaw,
         t,
-        false,
+        upstairs.henrikCombat.isMoving,
         {
           coat: hexToColor4('#324a78'),
           trim: rgb(236, 240, 248),
           pants: rgb(42, 48, 62),
           skin: rgb(248, 206, 174),
           hair: hexToColor4('#6e4624'),
+          equippedItem: 'uzi',
+          uziReloadTimer: upstairs.henrikCombat.reloadTimer,
+          weaponVibrationTimer: upstairs.henrikCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress:
+            upstairs.henrikCombat.mode === 'dead'
+              ? Math.max(0.05, upstairs.henrikCombat.deadFallProgress)
+              : 0,
         },
         false,
         false,
@@ -4020,15 +4235,23 @@ export function buildDynamicSceneMeshes(
         tanjaX,
         0,
         tanjaZ,
-        upstairs.tanjaCone ? upstairs.tanjaCone.direction : -Math.PI / 2,
+        upstairs.tanjaCombat.aimYaw,
         t,
-        false,
+        upstairs.tanjaCombat.isMoving,
         {
           coat: hexToColor4('#783858'),
           trim: rgb(246, 236, 242),
           pants: rgb(44, 50, 64),
           skin: rgb(250, 208, 176),
           hair: hexToColor4('#743c20'),
+          equippedItem: 'uzi',
+          uziReloadTimer: upstairs.tanjaCombat.reloadTimer,
+          weaponVibrationTimer: upstairs.tanjaCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress:
+            upstairs.tanjaCombat.mode === 'dead'
+              ? Math.max(0.05, upstairs.tanjaCombat.deadFallProgress)
+              : 0,
         },
         false,
         false,
@@ -4046,16 +4269,23 @@ export function buildDynamicSceneMeshes(
         amX,
         0,
         amZ,
-        upstairs.anneMarieCone ? upstairs.anneMarieCone.direction : -Math.PI / 2,
+        upstairs.anneMarieCombat.aimYaw,
         t,
-        false,
+        upstairs.anneMarieCombat.isMoving,
         {
           coat: hexToColor4('#428860'),
           trim: rgb(238, 246, 240),
           pants: rgb(46, 52, 66),
           skin: rgb(250, 212, 182),
           hair: hexToColor4('#c88642'),
-          holdingBook: true,
+          equippedItem: 'uzi',
+          uziReloadTimer: upstairs.anneMarieCombat.reloadTimer,
+          weaponVibrationTimer: upstairs.anneMarieCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress:
+            upstairs.anneMarieCombat.mode === 'dead'
+              ? Math.max(0.05, upstairs.anneMarieCombat.deadFallProgress)
+              : 0,
         },
         false,
         false,

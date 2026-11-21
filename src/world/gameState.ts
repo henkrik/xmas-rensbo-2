@@ -16,6 +16,7 @@ import {
   PLAYER_FIREBALL_NPC_DAMAGE,
   PLAYER_PUNCH_NPC_DAMAGE,
   PLAYER_UZI_NPC_DAMAGE,
+  propagateHostileAlert,
 } from '../entities/npcCombat';
 import { ConeOfSight } from '../entities/sight';
 import {
@@ -156,6 +157,8 @@ export interface BloodPool {
   maxAge: number;
 }
 
+export const PLAYER_DROPPED_UZI_DURATION_SECONDS = 3.0;
+
 export interface DroppedUzi {
   levelId: LevelId;
   x: number;
@@ -163,6 +166,8 @@ export interface DroppedUzi {
   z: number;
   yaw: number;
   pickupable?: boolean;
+  age?: number;
+  maxAge?: number;
 }
 
 export interface LevelRegistry {
@@ -864,7 +869,15 @@ function damageArmedNpc(
 ): void {
   const npc = getArmedNpcByKey(state, key);
   if (!npc) return;
+  const wasPassive = npc.mode === 'passive';
   const died = applyNpcDamage(npc, damage);
+  if (wasPassive && (npc.mode as string) === 'hostile') {
+    if (state.currentLevelId === 'level-basement') {
+      propagateHostileAlert(state.levels['level-basement'].getArmedNpcs(), key);
+    } else if (state.currentLevelId === 'level-upstairs') {
+      propagateHostileAlert(state.levels['level-upstairs'].getArmedNpcs(), key);
+    }
+  }
   if (died) {
     state.burningNpcs.delete(key);
     spawnNpcBlood(state, hitX, hitY, groundZ);
@@ -963,6 +976,16 @@ function updateEffectTimers(state: GameState, dtSeconds: number): void {
     state.bloodPools[i].age += dtSeconds;
     if (state.bloodPools[i].age >= state.bloodPools[i].maxAge) {
       state.bloodPools.splice(i, 1);
+    }
+  }
+
+  for (let i = state.droppedUzis.length - 1; i >= 0; i--) {
+    const drop = state.droppedUzis[i];
+    if (typeof drop.maxAge === 'number') {
+      drop.age = (drop.age ?? 0) + dtSeconds;
+      if (drop.age >= drop.maxAge) {
+        state.droppedUzis.splice(i, 1);
+      }
     }
   }
 
@@ -1239,6 +1262,8 @@ function fireUziProjectile(state: GameState): void {
       y: cy + Math.sin(rightAngle) * 7,
       z: groundZ,
       yaw: aimYaw + 0.4,
+      age: 0,
+      maxAge: PLAYER_DROPPED_UZI_DURATION_SECONDS,
     });
   }
 }

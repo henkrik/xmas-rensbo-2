@@ -1,5 +1,5 @@
 import { AStarPathfinder, TileCoord } from '../world/pathfinding';
-import { isRectCollidingWithMap, TileMap } from '../world/tilemap';
+import { isRectCollidingWithMap, TILE_SIZE, TileMap } from '../world/tilemap';
 import {
   Player,
   Rect,
@@ -9,13 +9,15 @@ import {
 
 export const MAX_NPC_HEALTH = 100;
 export const NPC_HOSTILE_LOSE_SIGHT_SECONDS = 5.0;
+export const NPC_HOSTILE_ALERT_SECONDS = 1.0;
 export const NPC_HOSTILE_PATH_RECALC_SECONDS = 1.0;
 export const NPC_HOSTILE_WALK_SPEED = 24; // pixels per second (slow menacing advance)
 export const NPC_HOSTILE_STOP_DISTANCE = 18;
+export const NPC_HOSTILE_ALERT_RADIUS = 5 * TILE_SIZE;
 export const NPC_UZI_BULLET_DAMAGE = 5;
 export const NPC_UZI_MAGAZINE_SIZE = 30;
 export const NPC_UZI_RELOAD_SECONDS = 2.5;
-export const PLAYER_UZI_NPC_DAMAGE = 10;
+export const PLAYER_UZI_NPC_DAMAGE = 30;
 export const PLAYER_PUNCH_NPC_DAMAGE = 15;
 export const PLAYER_FIREBALL_NPC_DAMAGE = 15;
 export const NPC_BURN_DAMAGE_PER_SECOND = 12;
@@ -31,6 +33,7 @@ export interface ArmedNpcState {
   delayedHealth: number;
   delayedHealthRate: number;
   unseenTimer: number;
+  hostileAlertTimer: number;
   fireCooldown: number;
   shotsFiredInMag: number;
   reloadTimer: number;
@@ -55,6 +58,7 @@ export function createArmedNpcState(
     delayedHealth: MAX_NPC_HEALTH,
     delayedHealthRate: 0,
     unseenTimer: 0,
+    hostileAlertTimer: 0,
     fireCooldown: 0,
     shotsFiredInMag: 0,
     reloadTimer: 0,
@@ -83,6 +87,7 @@ export function applyNpcDamage(npc: ArmedNpcState, damage: number): boolean {
 
   if (npc.health <= 0) {
     npc.mode = 'dead';
+    npc.hostileAlertTimer = 0;
     npc.fireCooldown = 0;
     npc.reloadTimer = 0;
     npc.weaponVibrationTimer = 0;
@@ -94,12 +99,21 @@ export function applyNpcDamage(npc: ArmedNpcState, damage: number): boolean {
     return true;
   }
 
-  if (npc.mode !== 'hostile') {
+  enterHostileMode(npc);
+  return false;
+}
+
+/**
+ * Transitions a passive NPC into hostile mode with a 1-second blinking exclamation alert before shooting.
+ */
+export function enterHostileMode(npc: ArmedNpcState): void {
+  if (npc.mode === 'dead') return;
+  if (npc.mode === 'passive') {
+    npc.mode = 'hostile';
+    npc.hostileAlertTimer = NPC_HOSTILE_ALERT_SECONDS;
     npc.pathTimer = 0;
   }
-  npc.mode = 'hostile';
   npc.unseenTimer = 0;
-  return false;
 }
 
 export function updateNpcHealthAndTimers(
@@ -120,6 +134,9 @@ export function updateNpcHealthAndTimers(
     }
   }
 
+  if (npc.hostileAlertTimer > 0) {
+    npc.hostileAlertTimer = Math.max(0, npc.hostileAlertTimer - dtSeconds);
+  }
   if (npc.weaponVibrationTimer > 0) {
     npc.weaponVibrationTimer = Math.max(0, npc.weaponVibrationTimer - dtSeconds);
   }
@@ -153,7 +170,12 @@ export function tryFireHostileNpcUzi(
     aimYaw: number
   ) => void
 ): boolean {
-  if (npc.mode !== 'hostile' || npc.reloadTimer > 0 || npc.fireCooldown > 0) {
+  if (
+    npc.mode !== 'hostile' ||
+    npc.hostileAlertTimer > 0 ||
+    npc.reloadTimer > 0 ||
+    npc.fireCooldown > 0
+  ) {
     return false;
   }
   fireNpcUzi?.(npc, originX, originY, aimYaw);
@@ -173,8 +195,33 @@ export function tryFireHostileNpcUzi(
 export function isNpcBillboardVisible(npc: ArmedNpcState): boolean {
   return (
     npc.mode !== 'dead' &&
+    npc.hostileAlertTimer <= 0 &&
     (npc.mode === 'hostile' || npc.health < MAX_NPC_HEALTH)
   );
+}
+
+/**
+ * When one armed NPC turns hostile, alerts every other visible passive NPC within 5 tiles
+ * so they also turn hostile.
+ */
+export function propagateHostileAlert(
+  entries: ReadonlyArray<{ state: ArmedNpcState; bounds: Rect; visible: boolean }>,
+  sourceKey: string
+): void {
+  const source = entries.find((e) => e.state.key === sourceKey);
+  if (!source) return;
+  const sx = source.bounds.x + source.bounds.width * 0.5;
+  const sy = source.bounds.y + source.bounds.height * 0.5;
+
+  for (const other of entries) {
+    if (other.state.key === sourceKey) continue;
+    if (!other.visible || other.state.mode !== 'passive') continue;
+    const ox = other.bounds.x + other.bounds.width * 0.5;
+    const oy = other.bounds.y + other.bounds.height * 0.5;
+    if (Math.hypot(ox - sx, oy - sy) <= NPC_HOSTILE_ALERT_RADIUS) {
+      enterHostileMode(other.state);
+    }
+  }
 }
 
 /**
@@ -189,7 +236,7 @@ export function stepHostileNpcAlongPath(
   solidObstacles: readonly Rect[],
   dtSeconds: number
 ): void {
-  if (npc.mode !== 'hostile' || dtSeconds <= 0) {
+  if (npc.mode !== 'hostile' || npc.hostileAlertTimer > 0 || dtSeconds <= 0) {
     npc.isMoving = false;
     return;
   }

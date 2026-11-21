@@ -2219,11 +2219,12 @@ function addUziGeometry3D(
   upGZ: number,
   yaw: number,
   gunPitch: number,
-  scale = 1
+  scale = 1,
+  alpha = 1
 ): void {
-  const gunDark = rgb(32, 36, 46);
-  const gunSteel = rgb(64, 72, 88);
-  const gunBarrel = rgb(20, 24, 32);
+  const gunDark = rgb(32, 36, 46, alpha);
+  const gunSteel = rgb(64, 72, 88, alpha);
+  const gunBarrel = rgb(20, 24, 32, alpha);
 
   // Receiver body
   mb.addOrientedBox(
@@ -3691,6 +3692,13 @@ export function buildDynamicSceneMeshes(
       translucent
     );
     maybeBurnNpc('basement:Arjan', arjanX, 0, arjanZ);
+    if (
+      basement.arjanCombat.mode === 'hostile' &&
+      basement.arjanCombat.hostileAlertTimer > 0 &&
+      Math.floor(basement.arjanCombat.hostileAlertTimer * 10) % 2 === 0
+    ) {
+      addExclamationBadge3D(opaque, arjanX, 0, arjanZ);
+    }
 
     // Olexa (olexaNpc)
     const olexaX = basement.olexaNpc.x + basement.olexaNpc.width * 0.5;
@@ -3723,6 +3731,13 @@ export function buildDynamicSceneMeshes(
       translucent
     );
     maybeBurnNpc('basement:Olexa', olexaX, 0, olexaZ);
+    if (
+      basement.olexaCombat.mode === 'hostile' &&
+      basement.olexaCombat.hostileAlertTimer > 0 &&
+      Math.floor(basement.olexaCombat.hostileAlertTimer * 10) % 2 === 0
+    ) {
+      addExclamationBadge3D(opaque, olexaX, 0, olexaZ);
+    }
 
     // Hanneloes in the bathroom (sitting on toilet when passive, chasing with Uzi when hostile)
     const isBathroomClosed = basement.doors.some((d) => d.id === 'basement-bathroom-door');
@@ -3761,7 +3776,12 @@ export function buildDynamicSceneMeshes(
         translucent
       );
       maybeBurnNpc('basement:Hanneloes', tx, baseY, tz);
-      if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) {
+      if (
+        (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) ||
+        (basement.hanneloesCombat.mode === 'hostile' &&
+          basement.hanneloesCombat.hostileAlertTimer > 0 &&
+          Math.floor(basement.hanneloesCombat.hostileAlertTimer * 10) % 2 === 0)
+      ) {
         addExclamationBadge3D(opaque, tx, baseY, tz);
       }
     }
@@ -4102,6 +4122,13 @@ export function buildDynamicSceneMeshes(
       translucent
     );
     maybeBurnNpc('upstairs:Albin', UPSTAIRS_ALBIN_X + 6, 0, upstairs.albinY + 6);
+    if (
+      upstairs.albinCombat.mode === 'hostile' &&
+      upstairs.albinCombat.hostileAlertTimer > 0 &&
+      Math.floor(upstairs.albinCombat.hostileAlertTimer * 10) % 2 === 0
+    ) {
+      addExclamationBadge3D(opaque, upstairs.albinX + 6, 0, upstairs.albinY + 6);
+    }
 
     // Diana & Simon in Living Room
     const isDianaDistracted =
@@ -4139,6 +4166,13 @@ export function buildDynamicSceneMeshes(
       translucent
     );
     maybeBurnNpc('upstairs:Diana', dianaX, 0, dianaZ);
+    if (
+      upstairs.dianaCombat.mode === 'hostile' &&
+      upstairs.dianaCombat.hostileAlertTimer > 0 &&
+      Math.floor(upstairs.dianaCombat.hostileAlertTimer * 10) % 2 === 0
+    ) {
+      addExclamationBadge3D(opaque, dianaX, 0, dianaZ);
+    }
 
     const isSimonDistracted =
       Boolean(state.player.states.get(SIMON_DISTRACTED_KEY)) &&
@@ -4175,6 +4209,13 @@ export function buildDynamicSceneMeshes(
       translucent
     );
     maybeBurnNpc('upstairs:Simon', simonX, 0, simonZ);
+    if (
+      upstairs.simonCombat.mode === 'hostile' &&
+      upstairs.simonCombat.hostileAlertTimer > 0 &&
+      Math.floor(upstairs.simonCombat.hostileAlertTimer * 10) % 2 === 0
+    ) {
+      addExclamationBadge3D(opaque, simonX, 0, simonZ);
+    }
 
     // Henrik & Tanja in Table Room
     if (isTableRoomDoorOpen) {
@@ -4208,6 +4249,13 @@ export function buildDynamicSceneMeshes(
         translucent
       );
       maybeBurnNpc('upstairs:Henrik', henrikX, 0, henrikZ);
+      if (
+        upstairs.henrikCombat.mode === 'hostile' &&
+        upstairs.henrikCombat.hostileAlertTimer > 0 &&
+        Math.floor(upstairs.henrikCombat.hostileAlertTimer * 10) % 2 === 0
+      ) {
+        addExclamationBadge3D(opaque, henrikX, 0, henrikZ);
+      }
 
       const tanjaX = upstairs.tanjaNpc.x + upstairs.tanjaNpc.width * 0.5;
       const tanjaZ = upstairs.tanjaNpc.y + upstairs.tanjaNpc.height * 0.5;
@@ -4239,6 +4287,13 @@ export function buildDynamicSceneMeshes(
         translucent
       );
       maybeBurnNpc('upstairs:Tanja', tanjaX, 0, tanjaZ);
+      if (
+        upstairs.tanjaCombat.mode === 'hostile' &&
+        upstairs.tanjaCombat.hostileAlertTimer > 0 &&
+        Math.floor(upstairs.tanjaCombat.hostileAlertTimer * 10) % 2 === 0
+      ) {
+        addExclamationBadge3D(opaque, tanjaX, 0, tanjaZ);
+      }
     }
 
     // Anne-Marie in Bedroom
@@ -4273,6 +4328,13 @@ export function buildDynamicSceneMeshes(
         translucent
       );
       maybeBurnNpc('upstairs:Anne-Marie', amX, 0, amZ);
+      if (
+        upstairs.anneMarieCombat.mode === 'hostile' &&
+        upstairs.anneMarieCombat.hostileAlertTimer > 0 &&
+        Math.floor(upstairs.anneMarieCombat.hostileAlertTimer * 10) % 2 === 0
+      ) {
+        addExclamationBadge3D(opaque, amX, 0, amZ);
+      }
     }
 
     addConeOfSight3D(translucent, upstairs.albinCone);
@@ -4325,11 +4387,16 @@ export function buildDynamicSceneMeshes(
   // 3. Dropped Uzis, Wall Bullet Holes, Blood Splatter/Pools & Projectiles
   for (const drop of state.droppedUzis) {
     if (drop.levelId !== levelId) continue;
+    const fade =
+      typeof drop.maxAge === 'number'
+        ? Math.max(0, Math.min(1, 1 - (drop.age ?? 0) / drop.maxAge))
+        : 1;
+    if (fade <= 0.01) continue;
     const cDrop = Math.cos(drop.yaw);
     const sDrop = Math.sin(drop.yaw);
-    translucent.addShadowDisc(drop.x, drop.z, drop.y, 3.2, 3.2, 0.28);
+    translucent.addShadowDisc(drop.x, drop.z, drop.y, 3.2, 3.2, 0.28 * fade);
     addUziGeometry3D(
-      opaque,
+      fade < 0.99 ? translucent : opaque,
       drop.x - cDrop * 1.4,
       drop.z + 2.2,
       drop.y - sDrop * 1.4,
@@ -4341,7 +4408,8 @@ export function buildDynamicSceneMeshes(
       0,
       drop.yaw,
       0,
-      0.95
+      0.95,
+      fade
     );
   }
 

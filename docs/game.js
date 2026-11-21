@@ -1949,13 +1949,15 @@
   // src/entities/npcCombat.ts
   var MAX_NPC_HEALTH = 100;
   var NPC_HOSTILE_LOSE_SIGHT_SECONDS = 5;
+  var NPC_HOSTILE_ALERT_SECONDS = 1;
   var NPC_HOSTILE_PATH_RECALC_SECONDS = 1;
   var NPC_HOSTILE_WALK_SPEED = 24;
   var NPC_HOSTILE_STOP_DISTANCE = 18;
+  var NPC_HOSTILE_ALERT_RADIUS = 5 * TILE_SIZE;
   var NPC_UZI_BULLET_DAMAGE = 5;
   var NPC_UZI_MAGAZINE_SIZE = 30;
   var NPC_UZI_RELOAD_SECONDS = 2.5;
-  var PLAYER_UZI_NPC_DAMAGE = 10;
+  var PLAYER_UZI_NPC_DAMAGE = 30;
   var PLAYER_PUNCH_NPC_DAMAGE = 15;
   var PLAYER_FIREBALL_NPC_DAMAGE = 15;
   var NPC_BURN_DAMAGE_PER_SECOND = 12;
@@ -1969,6 +1971,7 @@
       delayedHealth: MAX_NPC_HEALTH,
       delayedHealthRate: 0,
       unseenTimer: 0,
+      hostileAlertTimer: 0,
       fireCooldown: 0,
       shotsFiredInMag: 0,
       reloadTimer: 0,
@@ -1989,6 +1992,7 @@
     npc.delayedHealthRate = Math.abs(npc.delayedHealth - npc.health);
     if (npc.health <= 0) {
       npc.mode = "dead";
+      npc.hostileAlertTimer = 0;
       npc.fireCooldown = 0;
       npc.reloadTimer = 0;
       npc.weaponVibrationTimer = 0;
@@ -1999,12 +2003,17 @@
       npc.pathTimer = 0;
       return true;
     }
-    if (npc.mode !== "hostile") {
+    enterHostileMode(npc);
+    return false;
+  }
+  function enterHostileMode(npc) {
+    if (npc.mode === "dead") return;
+    if (npc.mode === "passive") {
+      npc.mode = "hostile";
+      npc.hostileAlertTimer = NPC_HOSTILE_ALERT_SECONDS;
       npc.pathTimer = 0;
     }
-    npc.mode = "hostile";
     npc.unseenTimer = 0;
-    return false;
   }
   function updateNpcHealthAndTimers(npc, dtSeconds) {
     if (dtSeconds <= 0) return;
@@ -2018,6 +2027,9 @@
       if (npc.delayedHealth === npc.health) {
         npc.delayedHealthRate = 0;
       }
+    }
+    if (npc.hostileAlertTimer > 0) {
+      npc.hostileAlertTimer = Math.max(0, npc.hostileAlertTimer - dtSeconds);
     }
     if (npc.weaponVibrationTimer > 0) {
       npc.weaponVibrationTimer = Math.max(0, npc.weaponVibrationTimer - dtSeconds);
@@ -2039,7 +2051,7 @@
     }
   }
   function tryFireHostileNpcUzi(npc, originX, originY, aimYaw, fireNpcUzi) {
-    if (npc.mode !== "hostile" || npc.reloadTimer > 0 || npc.fireCooldown > 0) {
+    if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || npc.reloadTimer > 0 || npc.fireCooldown > 0) {
       return false;
     }
     fireNpcUzi?.(npc, originX, originY, aimYaw);
@@ -2056,10 +2068,25 @@
     return true;
   }
   function isNpcBillboardVisible(npc) {
-    return npc.mode !== "dead" && (npc.mode === "hostile" || npc.health < MAX_NPC_HEALTH);
+    return npc.mode !== "dead" && npc.hostileAlertTimer <= 0 && (npc.mode === "hostile" || npc.health < MAX_NPC_HEALTH);
+  }
+  function propagateHostileAlert(entries, sourceKey) {
+    const source = entries.find((e) => e.state.key === sourceKey);
+    if (!source) return;
+    const sx = source.bounds.x + source.bounds.width * 0.5;
+    const sy = source.bounds.y + source.bounds.height * 0.5;
+    for (const other of entries) {
+      if (other.state.key === sourceKey) continue;
+      if (!other.visible || other.state.mode !== "passive") continue;
+      const ox = other.bounds.x + other.bounds.width * 0.5;
+      const oy = other.bounds.y + other.bounds.height * 0.5;
+      if (Math.hypot(ox - sx, oy - sy) <= NPC_HOSTILE_ALERT_RADIUS) {
+        enterHostileMode(other.state);
+      }
+    }
   }
   function stepHostileNpcAlongPath(npc, bounds, player, map, solidObstacles, dtSeconds) {
-    if (npc.mode !== "hostile" || dtSeconds <= 0) {
+    if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || dtSeconds <= 0) {
       npc.isMoving = false;
       return;
     }
@@ -3089,9 +3116,7 @@
           this.map
         );
         if (this.albinCone.checkDetection(player)) {
-          this.albinCombat.mode = "hostile";
-          this.albinCombat.unseenTimer = 0;
-          this.albinCombat.pathTimer = 0;
+          enterHostileMode(this.albinCombat);
           const aimYaw = Math.atan2(playerCy - (this.albinY + 6), playerCx - (this.albinX + 6));
           this.albinCombat.aimYaw = aimYaw;
           this.albinCone = new ConeOfSight(
@@ -3100,6 +3125,7 @@
             void 0,
             this.map
           );
+          propagateHostileAlert(this.getArmedNpcs(), this.albinCombat.key);
         }
       }
       const isTableRoomDoorOpen = !this.doors.some(
@@ -3132,8 +3158,7 @@
           }
           this.henrikCombat.aimYaw = this.henrikCone?.direction ?? this.henrikAngle;
           if (this.henrikCone?.checkDetection(player)) {
-            this.henrikCombat.mode = "hostile";
-            this.henrikCombat.unseenTimer = 0;
+            enterHostileMode(this.henrikCombat);
             const aimYaw = Math.atan2(playerCy - (this.henrikNpc.y + 6), playerCx - (this.henrikNpc.x + 6));
             this.henrikCombat.aimYaw = aimYaw;
             this.henrikCone = new ConeOfSight(
@@ -3142,6 +3167,7 @@
               void 0,
               this.map
             );
+            propagateHostileAlert(this.getArmedNpcs(), this.henrikCombat.key);
           }
         }
         if (this.tanjaCombat.mode === "dead") {
@@ -3165,8 +3191,7 @@
           }
           this.tanjaCombat.aimYaw = this.tanjaCone.direction;
           if (this.tanjaCone.checkDetection(player)) {
-            this.tanjaCombat.mode = "hostile";
-            this.tanjaCombat.unseenTimer = 0;
+            enterHostileMode(this.tanjaCombat);
             const aimYaw = Math.atan2(playerCy - (this.tanjaNpc.y + 6), playerCx - (this.tanjaNpc.x + 6));
             this.tanjaCombat.aimYaw = aimYaw;
             this.tanjaCone = new ConeOfSight(
@@ -3175,6 +3200,7 @@
               void 0,
               this.map
             );
+            propagateHostileAlert(this.getArmedNpcs(), this.tanjaCombat.key);
           }
         }
       }
@@ -3209,8 +3235,7 @@
           }
         }
       } else if (this.dianaCone && this.dianaCone.checkDetection(player)) {
-        this.dianaCombat.mode = "hostile";
-        this.dianaCombat.unseenTimer = 0;
+        enterHostileMode(this.dianaCombat);
         const aimYaw = Math.atan2(playerCy - (this.dianaNpc.y + 6), playerCx - (this.dianaNpc.x + 6));
         this.dianaCombat.aimYaw = aimYaw;
         this.dianaCone = new ConeOfSight(
@@ -3220,6 +3245,7 @@
           this.map,
           DEFAULT_CONE_OF_SIGHT_FOV * 1.5
         );
+        propagateHostileAlert(this.getArmedNpcs(), this.dianaCombat.key);
       }
       updateNpcHealthAndTimers(this.simonCombat, dtSeconds);
       if (this.simonCombat.mode === "dead") {
@@ -3252,8 +3278,7 @@
           }
         }
       } else if (this.simonCone && this.simonCone.checkDetection(player)) {
-        this.simonCombat.mode = "hostile";
-        this.simonCombat.unseenTimer = 0;
+        enterHostileMode(this.simonCombat);
         const aimYaw = Math.atan2(playerCy - (this.simonNpc.y + 6), playerCx - (this.simonNpc.x + 6));
         this.simonCombat.aimYaw = aimYaw;
         this.simonCone = new ConeOfSight(
@@ -3263,6 +3288,7 @@
           this.map,
           DEFAULT_CONE_OF_SIGHT_FOV * 1.5
         );
+        propagateHostileAlert(this.getArmedNpcs(), this.simonCombat.key);
       }
       const isBedroomDoorOpen = !this.doors.some(
         (d) => d.id === "upstairs-bedroom-door"
@@ -3293,8 +3319,7 @@
           }
           this.anneMarieCombat.aimYaw = this.anneMarieCone?.direction ?? this.anneMarieAngle;
           if (this.anneMarieCone?.checkDetection(player)) {
-            this.anneMarieCombat.mode = "hostile";
-            this.anneMarieCombat.unseenTimer = 0;
+            enterHostileMode(this.anneMarieCombat);
             const aimYaw = Math.atan2(playerCy - (this.anneMarieNpc.y + 6), playerCx - (this.anneMarieNpc.x + 6));
             this.anneMarieCombat.aimYaw = aimYaw;
             this.anneMarieCone = new ConeOfSight(
@@ -3303,6 +3328,7 @@
               void 0,
               this.map
             );
+            propagateHostileAlert(this.getArmedNpcs(), this.anneMarieCombat.key);
           }
         }
       }
@@ -3898,27 +3924,22 @@
         }
       } else {
         this.arjanCombat.isMoving = false;
-        this.npcSightTimer += dtSeconds;
-        if (this.npcSightTimer >= 2) {
-          this.npcSightTimer -= 2;
-          this.npcSightAngle += Math.PI / 4;
-          this.coneOfSight = new ConeOfSight(
-            { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-            this.npcSightAngle,
-            void 0,
-            this.map
-          );
-        }
-        this.arjanCombat.aimYaw = this.coneOfSight?.direction ?? this.npcSightAngle;
-        if (this.coneOfSight?.checkDetection(player)) {
-          this.arjanCombat.mode = "hostile";
-          this.arjanCombat.unseenTimer = 0;
-          this.arjanCombat.pathTimer = 0;
+        this.npcSightAngle += Math.PI / 8 * dtSeconds;
+        this.coneOfSight = new ConeOfSight(
+          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+          this.npcSightAngle,
+          void 0,
+          this.map
+        );
+        this.arjanCombat.aimYaw = this.coneOfSight.direction;
+        if (this.coneOfSight.checkDetection(player)) {
+          enterHostileMode(this.arjanCombat);
           const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
           const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
           const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
           this.arjanCombat.aimYaw = aimYaw;
           this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, void 0, this.map);
+          propagateHostileAlert(this.getArmedNpcs(), this.arjanCombat.key);
         }
       }
       updateNpcHealthAndTimers(this.olexaCombat, dtSeconds);
@@ -3963,14 +3984,13 @@
         this.olexaCombat.isMoving = false;
         this.olexaCombat.aimYaw = this.olexaConeOfSight?.direction ?? -Math.PI / 2;
         if (this.olexaConeOfSight?.checkDetection(player)) {
-          this.olexaCombat.mode = "hostile";
-          this.olexaCombat.unseenTimer = 0;
-          this.olexaCombat.pathTimer = 0;
+          enterHostileMode(this.olexaCombat);
           const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
           const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
           const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
           this.olexaCombat.aimYaw = aimYaw;
           this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, void 0, this.map);
+          propagateHostileAlert(this.getArmedNpcs(), this.olexaCombat.key);
         }
       }
       const isBathroomOpen = !this.doors.some((d) => d.id === "basement-bathroom-door");
@@ -4010,9 +4030,8 @@
           tryFireHostileNpcUzi(this.hanneloesCombat, hx, hy, aimYaw, ctx.fireNpcUzi);
         }
       } else if (isBathroomOpen && this.hanneloesCone?.checkDetection(player)) {
-        this.hanneloesCombat.mode = "hostile";
-        this.hanneloesCombat.unseenTimer = 0;
-        this.hanneloesCombat.pathTimer = 0;
+        enterHostileMode(this.hanneloesCombat);
+        propagateHostileAlert(this.getArmedNpcs(), this.hanneloesCombat.key);
       }
     }
     updateCutscene(dtSeconds, player, _ctx) {
@@ -4030,9 +4049,8 @@
           if (this.toiletNpc.x >= 21 * TILE_SIZE) {
             this.toiletNpc.x = 20 * TILE_SIZE + 2;
           }
-          this.hanneloesCombat.mode = "hostile";
-          this.hanneloesCombat.unseenTimer = 0;
-          this.hanneloesCombat.pathTimer = 0;
+          enterHostileMode(this.hanneloesCombat);
+          propagateHostileAlert(this.getArmedNpcs(), this.hanneloesCombat.key);
         }
       }
       return true;
@@ -6083,10 +6101,10 @@
     staticMeshCache.set(levelId, mesh);
     return mesh;
   }
-  function addUziGeometry3D(mb, hx, hy, hz, dirX, dirY, dirZ, upGX, upGY, upGZ, yaw, gunPitch, scale = 1) {
-    const gunDark = rgb(32, 36, 46);
-    const gunSteel = rgb(64, 72, 88);
-    const gunBarrel = rgb(20, 24, 32);
+  function addUziGeometry3D(mb, hx, hy, hz, dirX, dirY, dirZ, upGX, upGY, upGZ, yaw, gunPitch, scale = 1, alpha = 1) {
+    const gunDark = rgb(32, 36, 46, alpha);
+    const gunSteel = rgb(64, 72, 88, alpha);
+    const gunBarrel = rgb(20, 24, 32, alpha);
     mb.addOrientedBox(
       hx + dirX * 1.1 * scale + upGX * 1.35 * scale,
       hy + dirY * 1.1 * scale + upGY * 1.35 * scale,
@@ -7251,6 +7269,9 @@
         translucent
       );
       maybeBurnNpc("basement:Arjan", arjanX, 0, arjanZ);
+      if (basement.arjanCombat.mode === "hostile" && basement.arjanCombat.hostileAlertTimer > 0 && Math.floor(basement.arjanCombat.hostileAlertTimer * 10) % 2 === 0) {
+        addExclamationBadge3D(opaque, arjanX, 0, arjanZ);
+      }
       const olexaX = basement.olexaNpc.x + basement.olexaNpc.width * 0.5;
       const olexaZ = basement.olexaNpc.y + basement.olexaNpc.height * 0.5;
       addHumanoid3D(
@@ -7278,6 +7299,9 @@
         translucent
       );
       maybeBurnNpc("basement:Olexa", olexaX, 0, olexaZ);
+      if (basement.olexaCombat.mode === "hostile" && basement.olexaCombat.hostileAlertTimer > 0 && Math.floor(basement.olexaCombat.hostileAlertTimer * 10) % 2 === 0) {
+        addExclamationBadge3D(opaque, olexaX, 0, olexaZ);
+      }
       const isBathroomClosed = basement.doors.some((d) => d.id === "basement-bathroom-door");
       if (!isBathroomClosed) {
         const tx = basement.toiletNpc.x + basement.toiletNpc.width * 0.5;
@@ -7310,7 +7334,7 @@
           translucent
         );
         maybeBurnNpc("basement:Hanneloes", tx, baseY, tz);
-        if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) {
+        if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0 || basement.hanneloesCombat.mode === "hostile" && basement.hanneloesCombat.hostileAlertTimer > 0 && Math.floor(basement.hanneloesCombat.hostileAlertTimer * 10) % 2 === 0) {
           addExclamationBadge3D(opaque, tx, baseY, tz);
         }
       }
@@ -7613,6 +7637,9 @@
         translucent
       );
       maybeBurnNpc("upstairs:Albin", UPSTAIRS_ALBIN_X + 6, 0, upstairs.albinY + 6);
+      if (upstairs.albinCombat.mode === "hostile" && upstairs.albinCombat.hostileAlertTimer > 0 && Math.floor(upstairs.albinCombat.hostileAlertTimer * 10) % 2 === 0) {
+        addExclamationBadge3D(opaque, upstairs.albinX + 6, 0, upstairs.albinY + 6);
+      }
       const isDianaDistracted = Boolean(state.player.states.get(DIANA_DISTRACTED_KEY)) && upstairs.dianaCombat.mode === "passive";
       const dianaX = upstairs.dianaNpc.x + upstairs.dianaNpc.width * 0.5;
       const dianaZ = upstairs.dianaNpc.y + upstairs.dianaNpc.height * 0.5;
@@ -7643,6 +7670,9 @@
         translucent
       );
       maybeBurnNpc("upstairs:Diana", dianaX, 0, dianaZ);
+      if (upstairs.dianaCombat.mode === "hostile" && upstairs.dianaCombat.hostileAlertTimer > 0 && Math.floor(upstairs.dianaCombat.hostileAlertTimer * 10) % 2 === 0) {
+        addExclamationBadge3D(opaque, dianaX, 0, dianaZ);
+      }
       const isSimonDistracted = Boolean(state.player.states.get(SIMON_DISTRACTED_KEY)) && upstairs.simonCombat.mode === "passive";
       const simonX = upstairs.simonNpc.x + upstairs.simonNpc.width * 0.5;
       const simonZ = upstairs.simonNpc.y + upstairs.simonNpc.height * 0.5;
@@ -7673,6 +7703,9 @@
         translucent
       );
       maybeBurnNpc("upstairs:Simon", simonX, 0, simonZ);
+      if (upstairs.simonCombat.mode === "hostile" && upstairs.simonCombat.hostileAlertTimer > 0 && Math.floor(upstairs.simonCombat.hostileAlertTimer * 10) % 2 === 0) {
+        addExclamationBadge3D(opaque, simonX, 0, simonZ);
+      }
       if (isTableRoomDoorOpen) {
         const henrikX = upstairs.henrikNpc.x + upstairs.henrikNpc.width * 0.5;
         const henrikZ = upstairs.henrikNpc.y + upstairs.henrikNpc.height * 0.5;
@@ -7701,6 +7734,9 @@
           translucent
         );
         maybeBurnNpc("upstairs:Henrik", henrikX, 0, henrikZ);
+        if (upstairs.henrikCombat.mode === "hostile" && upstairs.henrikCombat.hostileAlertTimer > 0 && Math.floor(upstairs.henrikCombat.hostileAlertTimer * 10) % 2 === 0) {
+          addExclamationBadge3D(opaque, henrikX, 0, henrikZ);
+        }
         const tanjaX = upstairs.tanjaNpc.x + upstairs.tanjaNpc.width * 0.5;
         const tanjaZ = upstairs.tanjaNpc.y + upstairs.tanjaNpc.height * 0.5;
         addHumanoid3D(
@@ -7728,6 +7764,9 @@
           translucent
         );
         maybeBurnNpc("upstairs:Tanja", tanjaX, 0, tanjaZ);
+        if (upstairs.tanjaCombat.mode === "hostile" && upstairs.tanjaCombat.hostileAlertTimer > 0 && Math.floor(upstairs.tanjaCombat.hostileAlertTimer * 10) % 2 === 0) {
+          addExclamationBadge3D(opaque, tanjaX, 0, tanjaZ);
+        }
       }
       if (isBedroomDoorOpen) {
         const amX = upstairs.anneMarieNpc.x + upstairs.anneMarieNpc.width * 0.5;
@@ -7757,6 +7796,9 @@
           translucent
         );
         maybeBurnNpc("upstairs:Anne-Marie", amX, 0, amZ);
+        if (upstairs.anneMarieCombat.mode === "hostile" && upstairs.anneMarieCombat.hostileAlertTimer > 0 && Math.floor(upstairs.anneMarieCombat.hostileAlertTimer * 10) % 2 === 0) {
+          addExclamationBadge3D(opaque, amX, 0, amZ);
+        }
       }
       addConeOfSight3D(translucent, upstairs.albinCone);
       addConeOfSight3D(translucent, upstairs.dianaCone);
@@ -7805,11 +7847,13 @@
     }
     for (const drop of state.droppedUzis) {
       if (drop.levelId !== levelId) continue;
+      const fade = typeof drop.maxAge === "number" ? Math.max(0, Math.min(1, 1 - (drop.age ?? 0) / drop.maxAge)) : 1;
+      if (fade <= 0.01) continue;
       const cDrop = Math.cos(drop.yaw);
       const sDrop = Math.sin(drop.yaw);
-      translucent.addShadowDisc(drop.x, drop.z, drop.y, 3.2, 3.2, 0.28);
+      translucent.addShadowDisc(drop.x, drop.z, drop.y, 3.2, 3.2, 0.28 * fade);
       addUziGeometry3D(
-        opaque,
+        fade < 0.99 ? translucent : opaque,
         drop.x - cDrop * 1.4,
         drop.z + 2.2,
         drop.y - sDrop * 1.4,
@@ -7821,7 +7865,8 @@
         0,
         drop.yaw,
         0,
-        0.95
+        0.95,
+        fade
       );
     }
     for (const hole of state.bulletHoles) {
@@ -9628,8 +9673,13 @@
     }
     for (const drop of state.droppedUzis) {
       if (drop.levelId !== state.currentLevelId) continue;
+      const fade = typeof drop.maxAge === "number" ? Math.max(0, Math.min(1, 1 - (drop.age ?? 0) / drop.maxAge)) : 1;
+      if (fade <= 0.01) continue;
+      ctx.save();
+      ctx.globalAlpha = fade;
       ctx.fillStyle = "#334155";
       ctx.fillRect(Math.round(drop.x - 3), Math.round(drop.y - 2), 6, 4);
+      ctx.restore();
     }
     if (state.projectiles.length > 0) {
       for (const p of state.projectiles) {
@@ -11595,6 +11645,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
   // src/world/gameState.ts
   var BULLET_HOLE_DURATION_SECONDS = 10;
   var BLOOD_POOL_DURATION_SECONDS = 20;
+  var PLAYER_DROPPED_UZI_DURATION_SECONDS = 3;
   function syncOutsideToLevel(state) {
     const outside = state.levels["level-outside"];
     outside.dog = state.dog;
@@ -12099,7 +12150,15 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
   function damageArmedNpc(state, key, damage, hitX, hitY, groundZ) {
     const npc = getArmedNpcByKey(state, key);
     if (!npc) return;
+    const wasPassive = npc.mode === "passive";
     const died = applyNpcDamage(npc, damage);
+    if (wasPassive && npc.mode === "hostile") {
+      if (state.currentLevelId === "level-basement") {
+        propagateHostileAlert(state.levels["level-basement"].getArmedNpcs(), key);
+      } else if (state.currentLevelId === "level-upstairs") {
+        propagateHostileAlert(state.levels["level-upstairs"].getArmedNpcs(), key);
+      }
+    }
     if (died) {
       state.burningNpcs.delete(key);
       spawnNpcBlood(state, hitX, hitY, groundZ);
@@ -12178,6 +12237,15 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       state.bloodPools[i].age += dtSeconds;
       if (state.bloodPools[i].age >= state.bloodPools[i].maxAge) {
         state.bloodPools.splice(i, 1);
+      }
+    }
+    for (let i = state.droppedUzis.length - 1; i >= 0; i--) {
+      const drop = state.droppedUzis[i];
+      if (typeof drop.maxAge === "number") {
+        drop.age = (drop.age ?? 0) + dtSeconds;
+        if (drop.age >= drop.maxAge) {
+          state.droppedUzis.splice(i, 1);
+        }
       }
     }
     if (state.burningNpcs.size > 0) {
@@ -12400,7 +12468,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         x: cx + Math.cos(rightAngle) * 7,
         y: cy + Math.sin(rightAngle) * 7,
         z: groundZ,
-        yaw: aimYaw + 0.4
+        yaw: aimYaw + 0.4,
+        age: 0,
+        maxAge: PLAYER_DROPPED_UZI_DURATION_SECONDS
       });
     }
   }

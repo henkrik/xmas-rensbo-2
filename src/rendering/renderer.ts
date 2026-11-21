@@ -2347,8 +2347,16 @@ export function renderGame(
   }
   for (const drop of state.droppedUzis) {
     if (drop.levelId !== state.currentLevelId) continue;
+    const fade =
+      typeof drop.maxAge === 'number'
+        ? Math.max(0, Math.min(1, 1 - (drop.age ?? 0) / drop.maxAge))
+        : 1;
+    if (fade <= 0.01) continue;
+    ctx.save();
+    ctx.globalAlpha = fade;
     ctx.fillStyle = '#334155';
     ctx.fillRect(Math.round(drop.x - 3), Math.round(drop.y - 2), 6, 4);
+    ctx.restore();
   }
   if (state.projectiles.length > 0) {
     for (const p of state.projectiles) {

@@ -2,7 +2,9 @@ import { Cat, createCat } from '../../entities/cat';
 import {
   ArmedNpcState,
   createArmedNpcState,
+  enterHostileMode,
   NPC_HOSTILE_LOSE_SIGHT_SECONDS,
+  propagateHostileAlert,
   stepHostileNpcAlongPath,
   tryFireHostileNpcUzi,
   updateNpcHealthAndTimers,
@@ -951,9 +953,7 @@ export class LevelUpstairs implements GameLevel {
         this.map
       );
       if (this.albinCone.checkDetection(player)) {
-        this.albinCombat.mode = 'hostile';
-        this.albinCombat.unseenTimer = 0;
-        this.albinCombat.pathTimer = 0;
+        enterHostileMode(this.albinCombat);
         const aimYaw = Math.atan2(playerCy - (this.albinY + 6), playerCx - (this.albinX + 6));
         this.albinCombat.aimYaw = aimYaw;
         this.albinCone = new ConeOfSight(
@@ -962,6 +962,7 @@ export class LevelUpstairs implements GameLevel {
           undefined,
           this.map
         );
+        propagateHostileAlert(this.getArmedNpcs(), this.albinCombat.key);
       }
     }
 
@@ -996,8 +997,7 @@ export class LevelUpstairs implements GameLevel {
         }
         this.henrikCombat.aimYaw = this.henrikCone?.direction ?? this.henrikAngle;
         if (this.henrikCone?.checkDetection(player)) {
-          this.henrikCombat.mode = 'hostile';
-          this.henrikCombat.unseenTimer = 0;
+          enterHostileMode(this.henrikCombat);
           const aimYaw = Math.atan2(playerCy - (this.henrikNpc.y + 6), playerCx - (this.henrikNpc.x + 6));
           this.henrikCombat.aimYaw = aimYaw;
           this.henrikCone = new ConeOfSight(
@@ -1006,6 +1006,7 @@ export class LevelUpstairs implements GameLevel {
             undefined,
             this.map
           );
+          propagateHostileAlert(this.getArmedNpcs(), this.henrikCombat.key);
         }
       }
 
@@ -1030,8 +1031,7 @@ export class LevelUpstairs implements GameLevel {
         }
         this.tanjaCombat.aimYaw = this.tanjaCone.direction;
         if (this.tanjaCone.checkDetection(player)) {
-          this.tanjaCombat.mode = 'hostile';
-          this.tanjaCombat.unseenTimer = 0;
+          enterHostileMode(this.tanjaCombat);
           const aimYaw = Math.atan2(playerCy - (this.tanjaNpc.y + 6), playerCx - (this.tanjaNpc.x + 6));
           this.tanjaCombat.aimYaw = aimYaw;
           this.tanjaCone = new ConeOfSight(
@@ -1040,6 +1040,7 @@ export class LevelUpstairs implements GameLevel {
             undefined,
             this.map
           );
+          propagateHostileAlert(this.getArmedNpcs(), this.tanjaCombat.key);
         }
       }
     }
@@ -1076,8 +1077,7 @@ export class LevelUpstairs implements GameLevel {
         }
       }
     } else if (this.dianaCone && this.dianaCone.checkDetection(player)) {
-      this.dianaCombat.mode = 'hostile';
-      this.dianaCombat.unseenTimer = 0;
+      enterHostileMode(this.dianaCombat);
       const aimYaw = Math.atan2(playerCy - (this.dianaNpc.y + 6), playerCx - (this.dianaNpc.x + 6));
       this.dianaCombat.aimYaw = aimYaw;
       this.dianaCone = new ConeOfSight(
@@ -1087,6 +1087,7 @@ export class LevelUpstairs implements GameLevel {
         this.map,
         DEFAULT_CONE_OF_SIGHT_FOV * 1.5
       );
+      propagateHostileAlert(this.getArmedNpcs(), this.dianaCombat.key);
     }
 
     updateNpcHealthAndTimers(this.simonCombat, dtSeconds);
@@ -1120,8 +1121,7 @@ export class LevelUpstairs implements GameLevel {
         }
       }
     } else if (this.simonCone && this.simonCone.checkDetection(player)) {
-      this.simonCombat.mode = 'hostile';
-      this.simonCombat.unseenTimer = 0;
+      enterHostileMode(this.simonCombat);
       const aimYaw = Math.atan2(playerCy - (this.simonNpc.y + 6), playerCx - (this.simonNpc.x + 6));
       this.simonCombat.aimYaw = aimYaw;
       this.simonCone = new ConeOfSight(
@@ -1131,6 +1131,7 @@ export class LevelUpstairs implements GameLevel {
         this.map,
         DEFAULT_CONE_OF_SIGHT_FOV * 1.5
       );
+      propagateHostileAlert(this.getArmedNpcs(), this.simonCombat.key);
     }
 
     // 4. Anne-Marie in bedroom (only if bedroom door is open!)
@@ -1163,8 +1164,7 @@ export class LevelUpstairs implements GameLevel {
         }
         this.anneMarieCombat.aimYaw = this.anneMarieCone?.direction ?? this.anneMarieAngle;
         if (this.anneMarieCone?.checkDetection(player)) {
-          this.anneMarieCombat.mode = 'hostile';
-          this.anneMarieCombat.unseenTimer = 0;
+          enterHostileMode(this.anneMarieCombat);
           const aimYaw = Math.atan2(playerCy - (this.anneMarieNpc.y + 6), playerCx - (this.anneMarieNpc.x + 6));
           this.anneMarieCombat.aimYaw = aimYaw;
           this.anneMarieCone = new ConeOfSight(
@@ -1173,6 +1173,7 @@ export class LevelUpstairs implements GameLevel {
             undefined,
             this.map
           );
+          propagateHostileAlert(this.getArmedNpcs(), this.anneMarieCombat.key);
         }
       }
     }

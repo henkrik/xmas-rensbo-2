@@ -1,7 +1,9 @@
 import {
   ArmedNpcState,
   createArmedNpcState,
+  enterHostileMode,
   NPC_HOSTILE_LOSE_SIGHT_SECONDS,
+  propagateHostileAlert,
   stepHostileNpcAlongPath,
   tryFireHostileNpcUzi,
   updateNpcHealthAndTimers,
@@ -734,27 +736,22 @@ export class LevelBasement implements GameLevel {
       }
     } else {
       this.arjanCombat.isMoving = false;
-      this.npcSightTimer += dtSeconds;
-      if (this.npcSightTimer >= 2.0) {
-        this.npcSightTimer -= 2.0;
-        this.npcSightAngle += Math.PI / 4;
-        this.coneOfSight = new ConeOfSight(
-          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-          this.npcSightAngle,
-          undefined,
-          this.map
-        );
-      }
-      this.arjanCombat.aimYaw = this.coneOfSight?.direction ?? this.npcSightAngle;
-      if (this.coneOfSight?.checkDetection(player)) {
-        this.arjanCombat.mode = 'hostile';
-        this.arjanCombat.unseenTimer = 0;
-        this.arjanCombat.pathTimer = 0;
+      this.npcSightAngle += (Math.PI / 8) * dtSeconds;
+      this.coneOfSight = new ConeOfSight(
+        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+        this.npcSightAngle,
+        undefined,
+        this.map
+      );
+      this.arjanCombat.aimYaw = this.coneOfSight.direction;
+      if (this.coneOfSight.checkDetection(player)) {
+        enterHostileMode(this.arjanCombat);
         const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
         const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
         const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
         this.arjanCombat.aimYaw = aimYaw;
         this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, undefined, this.map);
+        propagateHostileAlert(this.getArmedNpcs(), this.arjanCombat.key);
       }
     }
 
@@ -801,14 +798,13 @@ export class LevelBasement implements GameLevel {
       this.olexaCombat.isMoving = false;
       this.olexaCombat.aimYaw = this.olexaConeOfSight?.direction ?? -Math.PI / 2;
       if (this.olexaConeOfSight?.checkDetection(player)) {
-        this.olexaCombat.mode = 'hostile';
-        this.olexaCombat.unseenTimer = 0;
-        this.olexaCombat.pathTimer = 0;
+        enterHostileMode(this.olexaCombat);
         const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
         const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
         const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
         this.olexaCombat.aimYaw = aimYaw;
         this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, undefined, this.map);
+        propagateHostileAlert(this.getArmedNpcs(), this.olexaCombat.key);
       }
     }
 
@@ -851,9 +847,8 @@ export class LevelBasement implements GameLevel {
         tryFireHostileNpcUzi(this.hanneloesCombat, hx, hy, aimYaw, ctx.fireNpcUzi);
       }
     } else if (isBathroomOpen && this.hanneloesCone?.checkDetection(player)) {
-      this.hanneloesCombat.mode = 'hostile';
-      this.hanneloesCombat.unseenTimer = 0;
-      this.hanneloesCombat.pathTimer = 0;
+      enterHostileMode(this.hanneloesCombat);
+      propagateHostileAlert(this.getArmedNpcs(), this.hanneloesCombat.key);
     }
   }
 
@@ -879,9 +874,8 @@ export class LevelBasement implements GameLevel {
         if (this.toiletNpc.x >= 21 * TILE_SIZE) {
           this.toiletNpc.x = 20 * TILE_SIZE + 2;
         }
-        this.hanneloesCombat.mode = 'hostile';
-        this.hanneloesCombat.unseenTimer = 0;
-        this.hanneloesCombat.pathTimer = 0;
+        enterHostileMode(this.hanneloesCombat);
+        propagateHostileAlert(this.getArmedNpcs(), this.hanneloesCombat.key);
       }
     }
 

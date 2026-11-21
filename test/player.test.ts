@@ -159,6 +159,7 @@ import {
   NPC_UZI_BULLET_DAMAGE,
   NPC_UZI_MAGAZINE_SIZE,
   NPC_UZI_RELOAD_SECONDS,
+  PLAYER_UZI_NPC_DAMAGE,
 } from '../src/entities/npcCombat';
 import { AStarPathfinder } from '../src/world/pathfinding';
 import {
@@ -1638,17 +1639,18 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(basement.coneOfSight!.lines[0].maxPoints).toBe(20);
     expect(basement.coneOfSight!.sightPolygon.length).toBe(6);
 
-    // Every 2 seconds it deletes old cone of sight and spawns new one +45 degrees
+    // Rotates smoothly every tick at Math.PI / 8 rad/s (+45 deg every 2 seconds)
     updateGameState(state, input, 1.0);
-    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2);
+    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2 + Math.PI / 8);
 
-    updateGameState(state, input, 1.1); // total 2.1s
+    updateGameState(state, input, 1.0); // total 2.0s
     expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2 + Math.PI / 4);
 
-    updateGameState(state, input, 2.0); // total 4.1s
-    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2 + (2 * Math.PI) / 4);
+    updateGameState(state, input, 2.0); // total 4.0s
+    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2 + Math.PI / 2);
 
-    // 2. Test player detection: place Santa in Arjan's cone of sight -> enters hostile mode and shoots Uzi (no dialog/reset)
+    // 2. Test player detection: place Santa in Arjan's cone of sight -> Arjan turns hostile, shoots Uzi,
+    //    and alerts Olexa (within 5 tiles) to also turn hostile!
     const targetBox = basement.coneOfSight!.getAllBoxes()[5];
     state.player.x = targetBox.x - 2;
     state.player.y = targetBox.y - 2;
@@ -1656,7 +1658,20 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
     expect(state.activeDialogue).toBeNull();
     expect(basement.arjanCombat.mode).toBe('hostile');
-    updateGameState(state, input, 0.05);
+    expect(basement.olexaCombat.mode).toBe('hostile');
+    expect(basement.arjanCombat.hostileAlertTimer).toBeCloseTo(1.0, 2);
+    expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(false);
+    expect(PLAYER_UZI_NPC_DAMAGE).toBe(30);
+    // Does not shoot, move, or show health billboard during the 1-second blinking exclamation alert
+    const arjanStartY = basement.windowNpc.y;
+    updateGameState(state, input, 0.5);
+    expect(basement.windowNpc.y).toBe(arjanStartY);
+    expect(basement.arjanCombat.isMoving).toBe(false);
+    expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(false);
+    expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan')).toBe(false);
+    // After 1s alert completes, starts shooting Uzi and shows health billboard
+    updateGameState(state, input, 0.55);
+    expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(true);
     expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan')).toBe(true);
   });
 
@@ -1743,7 +1758,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
     expect(state.activeDialogue).toBeNull();
     expect(basement.olexaCombat.mode).toBe('hostile');
-    updateGameState(state, input, 0.05);
+    expect(basement.olexaCombat.hostileAlertTimer).toBeCloseTo(1.0, 2);
+    updateGameState(state, input, 1.05);
     expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Olexa')).toBe(true);
   });
 
@@ -1772,7 +1788,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
     expect(state.activeDialogue).toBeNull();
     expect(upstairs.albinCombat.mode).toBe('hostile');
-    updateGameState(state, input, 0.05);
+    expect(upstairs.albinCombat.hostileAlertTimer).toBeCloseTo(1.0, 2);
+    updateGameState(state, input, 1.05);
     expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'upstairs:Albin')).toBe(true);
   });
 
@@ -3271,8 +3288,8 @@ Tanja -> Alex
     const basement = basementState.levels['level-basement'];
     basementState.player.x = basement.windowNpc.x;
     basementState.player.y = basement.windowNpc.y - TILE_SIZE;
-    // Arjan detects Santa -> becomes hostile and fires 5hp Uzi bullets
-    for (let i = 0; i < 12; i++) {
+    // Arjan detects Santa -> 1s alert, then becomes hostile and fires 5hp Uzi bullets
+    for (let i = 0; i < 32; i++) {
       updateGameState(basementState, createEmptyInput(), 0.05);
     }
     expect(basement.arjanCombat.mode).toBe('hostile');
@@ -3712,6 +3729,7 @@ Tanja -> Alex
     expect(state.player.equippedItem).toBe('empty');
     expect(state.player.uziDropTimer).toBeCloseTo(UZI_DROP_DURATION_SECONDS, 4);
     expect(state.droppedUzis.length).toBe(1);
+    expect(state.droppedUzis[0].maxAge).toBe(3.0);
 
     // Slot 3 now acts like 'empty' and HUD hides slot 3 (only 2 slots: x >= 269)
     applyKeyEvent(input, 'Digit3', true);
@@ -3723,7 +3741,15 @@ Tanja -> Alex
     drawEquippedItemHud(mockCtx, state.player);
     expect(rects.some((r) => r.x < 265 && r.y >= 46)).toBe(false);
 
-    // 3D scene builds cleanly with drop animation and floor Uzi
+    // 3D scene builds cleanly with drop animation and fading floor Uzi
+    updateGameState(state, input, 1.5);
+    expect(state.droppedUzis.length).toBe(1);
+    const fadingMesh = buildDynamicSceneMeshes(state, 50);
+    expect(fadingMesh.translucent.vertexCount).toBeGreaterThan(0);
+
+    // After 3 seconds total, player-dropped Uzi disappears
+    updateGameState(state, input, 1.6);
+    expect(state.droppedUzis.length).toBe(0);
     const dropMesh = buildDynamicSceneMeshes(state, 50);
     expect(dropMesh.opaque.vertexCount).toBeGreaterThan(0);
   });
@@ -4053,16 +4079,24 @@ Tanja -> Alex
       updateGameState(state, input, 0.05);
     }
     applyKeyEvent(input, 'Space', false);
-    // Advance bullets to hit Arjan and let him pathfind & walk north toward Santa
+    // Advance bullets to hit Arjan (during 1s alert -> delayedHealth lags behind health)
     for (let i = 0; i < 8; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
       updateGameState(state, input, 0.05);
     }
     expect(arjan.health).toBeLessThan(MAX_NPC_HEALTH);
     expect(arjan.delayedHealth).toBeGreaterThan(arjan.health);
     expect(arjan.mode).toBe('hostile');
+    expect(isNpcBillboardVisible(arjan)).toBe(false); // hidden during 1s alert
+    expect(basement.windowNpc.y).toBe(startArjanY); // does not run during 1s alert
+    // Advance past 1s alert so Arjan starts shooting, running, & showing billboard
+    for (let i = 0; i < 16; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.05);
+    }
     expect(isNpcBillboardVisible(arjan)).toBe(true);
-    expect(arjan.weaponVibrationTimer).toBeGreaterThan(0);
     expect(basement.windowNpc.y).toBeLessThan(startArjanY); // walked north along A* path toward player!
+    expect(arjan.weaponVibrationTimer).toBeGreaterThan(0);
 
     // 3. Move player behind the closed Spa Room doors (truly out of sight & unreachable) for 5+ seconds -> returns to passive, billboard stays visible because HP < 100
     state.player.x = 15 * TILE_SIZE;
@@ -4184,6 +4218,16 @@ Tanja -> Alex
     expect(basement.arjanCombat.mode).toBe('dead');
     const droppedNpcUzi = state.droppedUzis.find((u) => u.pickupable);
     expect(droppedNpcUzi).toBeDefined();
+    expect(droppedNpcUzi?.maxAge).toBeUndefined();
+
+    // NPC-dropped Uzi does NOT disappear over time and is NOT picked up while player already holds a usable Uzi
+    state.player.x = droppedNpcUzi!.x - 4;
+    state.player.y = droppedNpcUzi!.y - 4;
+    for (let i = 0; i < 40; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.1); // 4.0s elapsed
+    }
+    expect(state.droppedUzis.some((u) => u.pickupable)).toBe(true);
 
     // Simulate player not holding a usable Uzi (depleted) and touching the dropped NPC Uzi
     state.player.uziDepleted = true;

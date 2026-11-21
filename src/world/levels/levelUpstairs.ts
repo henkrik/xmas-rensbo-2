@@ -518,12 +518,6 @@ export class LevelUpstairs implements GameLevel {
   public getInteractables(player?: Player): Interactable[] {
     const list: Interactable[] = [
       {
-        id: 'upstairs-stairs-down',
-        bounds: { ...UPSTAIRS_STAIRS_TRIGGER_BOUNDS },
-        promptText: 'Walk downstairs',
-        dialogueLines: [],
-      },
-      {
         id: 'upstairs-dining-cupboard',
         bounds: { ...UPSTAIRS_CUPBOARD_BOUNDS },
         promptText: 'Inspect',

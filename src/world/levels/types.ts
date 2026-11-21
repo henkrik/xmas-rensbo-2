@@ -36,7 +36,7 @@ export interface GameLevel {
   readonly id: LevelId;
   readonly map: TileMap;
   enter(player: Player): void;
-  getSolidObstacles(): readonly Rect[];
+  getSolidObstacles(player?: Player): readonly Rect[];
   getInteractables(player?: Player): Interactable[];
   handleInteraction(
     interactableId: string,

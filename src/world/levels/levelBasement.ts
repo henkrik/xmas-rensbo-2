@@ -235,6 +235,31 @@ export const BASEMENT_STAIRS_TRIGGER_BOUNDS: Rect = {
   height: 4 * TILE_SIZE,
 };
 
+/** Side rails along the North and South edges of the basement stairs; collideable only when player is on the floor. */
+export const BASEMENT_STAIRS_SIDE_NORTH_BOUNDS: Rect = {
+  x: 18 * TILE_SIZE,
+  y: 15 * TILE_SIZE - 2,
+  width: 4 * TILE_SIZE,
+  height: 2,
+};
+
+export const BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS: Rect = {
+  x: 18 * TILE_SIZE,
+  y: 19 * TILE_SIZE,
+  width: 4 * TILE_SIZE,
+  height: 2,
+};
+
+export function isPlayerOnBasementStairs(player: Rect): boolean {
+  const centerY = player.y + player.height * 0.5;
+  return (
+    player.x + player.width > 18 * TILE_SIZE + 1 &&
+    player.x < 22 * TILE_SIZE &&
+    centerY >= 15 * TILE_SIZE &&
+    centerY <= 19 * TILE_SIZE
+  );
+}
+
 export const USED_STAIRS_STATE_KEY = 'usedStairs';
 export const TOILET_EVENT_TRIGGERED_KEY = 'basementToiletEventTriggered';
 export const BASEMENT_CHIMNEY_INTRO_STATE_KEY = 'basementChimneyIntroTriggered';
@@ -337,7 +362,7 @@ export class LevelBasement implements GameLevel {
     );
   }
 
-  public getSolidObstacles(): readonly Rect[] {
+  public getSolidObstacles(player?: Player): readonly Rect[] {
     const obs: Rect[] = [
       this.windowNpc,
       this.olexaNpc,
@@ -350,6 +375,9 @@ export class LevelBasement implements GameLevel {
     }
     if (!this.stairsWoodBurned) {
       obs.push(...BASEMENT_STAIRS_WOOD_OBSTACLES);
+    }
+    if (!player || !isPlayerOnBasementStairs(player)) {
+      obs.push(BASEMENT_STAIRS_SIDE_NORTH_BOUNDS, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS);
     }
     return obs;
   }

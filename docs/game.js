@@ -2374,12 +2374,6 @@
     getInteractables(player) {
       const list = [
         {
-          id: "upstairs-stairs-down",
-          bounds: { ...UPSTAIRS_STAIRS_TRIGGER_BOUNDS },
-          promptText: "Walk downstairs",
-          dialogueLines: []
-        },
-        {
           id: "upstairs-dining-cupboard",
           bounds: { ...UPSTAIRS_CUPBOARD_BOUNDS },
           promptText: "Inspect",
@@ -2899,6 +2893,22 @@
     width: 2 * TILE_SIZE,
     height: 4 * TILE_SIZE
   };
+  var BASEMENT_STAIRS_SIDE_NORTH_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 15 * TILE_SIZE - 2,
+    width: 4 * TILE_SIZE,
+    height: 2
+  };
+  var BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 19 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: 2
+  };
+  function isPlayerOnBasementStairs(player) {
+    const centerY = player.y + player.height * 0.5;
+    return player.x + player.width > 18 * TILE_SIZE + 1 && player.x < 22 * TILE_SIZE && centerY >= 15 * TILE_SIZE && centerY <= 19 * TILE_SIZE;
+  }
   var USED_STAIRS_STATE_KEY = "usedStairs";
   var TOILET_EVENT_TRIGGERED_KEY = "basementToiletEventTriggered";
   var BASEMENT_CHIMNEY_INTRO_STATE_KEY = "basementChimneyIntroTriggered";
@@ -2983,7 +2993,7 @@
         this.map
       );
     }
-    getSolidObstacles() {
+    getSolidObstacles(player) {
       const obs = [
         this.windowNpc,
         this.olexaNpc,
@@ -2996,6 +3006,9 @@
       }
       if (!this.stairsWoodBurned) {
         obs.push(...BASEMENT_STAIRS_WOOD_OBSTACLES);
+      }
+      if (!player || !isPlayerOnBasementStairs(player)) {
+        obs.push(BASEMENT_STAIRS_SIDE_NORTH_BOUNDS, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS);
       }
       return obs;
     }
@@ -11303,15 +11316,22 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         input,
         dtSeconds,
         basement.map,
-        basement.getSolidObstacles()
+        basement.getSolidObstacles(state.player)
       );
+      if (!isPlayerOnBasementStairs(state.player)) {
+        if (rectsIntersect(state.player, BASEMENT_STAIRS_SIDE_NORTH_BOUNDS)) {
+          state.player.y = BASEMENT_STAIRS_SIDE_NORTH_BOUNDS.y - state.player.height;
+        } else if (rectsIntersect(state.player, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS)) {
+          state.player.y = BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.y + BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.height;
+        }
+      }
       basement.updateHazardsAndItems(dtSeconds, state.player);
       basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
       if (state.activeDialogue) {
         refreshInteractables(state);
         return;
       }
-      if (basement.stairsWoodBurned && !state.screenFade && rectEdgeDistance(state.player, BASEMENT_STAIRS_TRIGGER_BOUNDS) <= INTERACTION_MAX_GAP_PX) {
+      if (basement.stairsWoodBurned && !state.screenFade && isPlayerOnBasementStairs(state.player) && rectEdgeDistance(state.player, BASEMENT_STAIRS_TRIGGER_BOUNDS) <= INTERACTION_MAX_GAP_PX) {
         state.player.isMoving = false;
         state.nearbyInteractable = null;
         state.screenFade = {
@@ -11365,6 +11385,19 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       upstairs.updateNpcSight(dtSeconds, state.player, transitionCtx);
       if (state.activeDialogue) {
         refreshInteractables(state);
+        return;
+      }
+      if (!state.screenFade && rectEdgeDistance(state.player, UPSTAIRS_STAIRS_TRIGGER_BOUNDS) <= INTERACTION_MAX_GAP_PX) {
+        state.player.isMoving = false;
+        state.nearbyInteractable = null;
+        state.screenFade = {
+          phase: "out",
+          timer: 0,
+          duration: 0.5,
+          onMidpoint: () => {
+            transitionCtx.loadLevel("level-basement");
+          }
+        };
         return;
       }
     } else if (state.currentLevelId === "level-people") {

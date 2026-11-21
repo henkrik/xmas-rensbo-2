@@ -87,6 +87,7 @@ import {
   BASEMENT_MINE_FUSE_SECONDS,
   BASEMENT_SPA_ROOM_BOUNDS,
   BASEMENT_SPA_TUB_BOUNDS,
+  BASEMENT_STAIRS_SIDE_NORTH_BOUNDS,
   BASEMENT_STAIRS_SPAWN,
   BASEMENT_STAIRS_TRIGGER_BOUNDS,
   BASEMENT_STAIRS_WOOD_BOUNDS,
@@ -1144,17 +1145,20 @@ describe('Player walking & 2x Rensbo map layout', () => {
     applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
 
-    // 5. Walk back downstairs from `level-upstairs` -> spawns Santa on the stairs in `level-basement` (not by the fireplace!)
+    // 5. Walk back downstairs from `level-upstairs` -> automatically fades 0.5s to black, spawns Santa on the stairs in `level-basement`, and fades 0.5s from black
     state.player.x = UPSTAIRS_STAIRS_TRIGGER_BOUNDS.x + 8;
     state.player.y = UPSTAIRS_STAIRS_TRIGGER_BOUNDS.y - state.player.height - 1;
     updateGameState(state, input, 0.01);
-    expect(state.nearbyInteractable?.id).toBe('upstairs-stairs-down');
-    expect(state.nearbyInteractable?.promptText).toBe('Walk downstairs');
+    expect(state.nearbyInteractable).toBeNull();
+    expect(state.screenFade?.phase).toBe('out');
+    expect(state.screenFade?.duration).toBe(0.5);
+    expect(state.currentLevelId).toBe('level-upstairs');
 
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    updateGameState(state, input, 0.5);
     expect(state.currentLevelId).toBe('level-basement');
+    expect(state.screenFade?.phase).toBe('in');
+    updateGameState(state, input, 0.5);
+    expect(state.screenFade).toBeNull();
     expect(state.player.x).toBe(BASEMENT_STAIRS_SPAWN.x);
     expect(state.player.y).toBe(BASEMENT_STAIRS_SPAWN.y);
   });
@@ -4038,5 +4042,50 @@ Tanja -> Alex
     expect(cheatState.player.unlockedUzi).toBe(true);
     expect(cheatState.player.uziAmmo).toBe(MAX_UZI_AMMO);
     expect(cheatState.player.equippedItem).toBe('uzi');
+  });
+
+  it('blocks entering basement stairs from north/south floor while allowing exit once on stairs', () => {
+    const state = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-basement',
+    });
+    const basement = state.levels['level-basement'];
+    basement.stairsWoodBurned = true;
+    const input = createEmptyInput();
+
+    // 1. Standing on north floor (row 14, col 20) and walking south hits the stair side and does NOT go upstairs
+    state.player.x = 20 * TILE_SIZE + 2;
+    state.player.y = 14 * TILE_SIZE + 1;
+    input.down = true;
+    for (let i = 0; i < 10; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    input.down = false;
+    expect(state.player.y + state.player.height).toBeLessThanOrEqual(15 * TILE_SIZE);
+    expect(state.screenFade).toBeNull();
+    expect(state.currentLevelId).toBe('level-basement');
+
+    // 2. Standing on south floor (row 19, col 20) and walking north hits the south stair side and does NOT go upstairs
+    state.player.x = 20 * TILE_SIZE + 2;
+    state.player.y = 19 * TILE_SIZE + 3;
+    input.up = true;
+    for (let i = 0; i < 10; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    input.up = false;
+    expect(state.player.y).toBeGreaterThanOrEqual(19 * TILE_SIZE);
+    expect(state.screenFade).toBeNull();
+
+    // 3. When already on the stairs (e.g. col 18.5, row 15), side rails are NOT collideable
+    //    and stepping/jumping off the north edge pushes Santa north clear of the side collider
+    state.player.x = 18.5 * TILE_SIZE;
+    state.player.y = 15 * TILE_SIZE + 1;
+    input.up = true;
+    updateGameState(state, input, 0.1);
+    input.up = false;
+    expect(state.player.y).toBeLessThan(15 * TILE_SIZE);
+    expect(state.player.y + state.player.height).toBeLessThanOrEqual(
+      BASEMENT_STAIRS_SIDE_NORTH_BOUNDS.y
+    );
   });
 });

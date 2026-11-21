@@ -48,13 +48,21 @@ import {
   rectEdgeDistance,
 } from './interaction';
 import {
+  BASEMENT_STAIRS_SIDE_NORTH_BOUNDS,
+  BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS,
   BASEMENT_STAIRS_TRIGGER_BOUNDS,
   BASEMENT_STAIRS_WOOD_OBSTACLES,
+  isPlayerOnBasementStairs,
   LevelBasement,
   STAIRS_WOOD_BURN_DURATION,
   USED_STAIRS_STATE_KEY,
 } from './levels/levelBasement';
-import { UPSTAIRS_INTRO_STATE_KEY } from './levels/levelUpstairs';
+import {
+  LevelUpstairs,
+  UPSTAIRS_ALBIN_X,
+  UPSTAIRS_INTRO_STATE_KEY,
+  UPSTAIRS_STAIRS_TRIGGER_BOUNDS,
+} from './levels/levelUpstairs';
 import {
   ClimbingState,
   createMotorcycle,
@@ -62,7 +70,6 @@ import {
   MotorcycleState,
   MotorcycleStatus,
 } from './levels/levelOutside';
-import { LevelUpstairs, UPSTAIRS_ALBIN_X } from './levels/levelUpstairs';
 import { LevelPeople } from './levels/levelPeople';
 import { GameLevel, LevelId, LevelTransitionContext } from './levels/types';
 import {
@@ -1298,8 +1305,20 @@ export function updateGameState(
       input,
       dtSeconds,
       basement.map,
-      basement.getSolidObstacles()
+      basement.getSolidObstacles(state.player)
     );
+    if (!isPlayerOnBasementStairs(state.player)) {
+      if (rectsIntersect(state.player, BASEMENT_STAIRS_SIDE_NORTH_BOUNDS)) {
+        state.player.y =
+          BASEMENT_STAIRS_SIDE_NORTH_BOUNDS.y - state.player.height;
+      } else if (
+        rectsIntersect(state.player, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS)
+      ) {
+        state.player.y =
+          BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.y +
+          BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.height;
+      }
+    }
     basement.updateHazardsAndItems(dtSeconds, state.player);
     basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
     if (state.activeDialogue) {
@@ -1307,10 +1326,11 @@ export function updateGameState(
       return;
     }
 
-    // Automatically walk upstairs with a 0.5s fade to black & fade from black once close enough
+    // Automatically walk upstairs with a 0.5s fade to black & fade from black once on the stairs and close enough
     if (
       basement.stairsWoodBurned &&
       !state.screenFade &&
+      isPlayerOnBasementStairs(state.player) &&
       rectEdgeDistance(state.player, BASEMENT_STAIRS_TRIGGER_BOUNDS) <=
         INTERACTION_MAX_GAP_PX
     ) {
@@ -1371,6 +1391,25 @@ export function updateGameState(
     upstairs.updateNpcSight(dtSeconds, state.player, transitionCtx);
     if (state.activeDialogue) {
       refreshInteractables(state);
+      return;
+    }
+
+    // Automatically walk downstairs with a 0.5s fade to black & fade from black once close enough
+    if (
+      !state.screenFade &&
+      rectEdgeDistance(state.player, UPSTAIRS_STAIRS_TRIGGER_BOUNDS) <=
+        INTERACTION_MAX_GAP_PX
+    ) {
+      state.player.isMoving = false;
+      state.nearbyInteractable = null;
+      state.screenFade = {
+        phase: 'out',
+        timer: 0,
+        duration: 0.5,
+        onMidpoint: () => {
+          transitionCtx.loadLevel('level-basement');
+        },
+      };
       return;
     }
   } else if (state.currentLevelId === 'level-people') {

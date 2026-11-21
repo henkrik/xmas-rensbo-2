@@ -14,7 +14,6 @@ import {
   BASEMENT_HALL_NORTH_DOOR_BOUNDS,
   BASEMENT_MINE_BOUNDS,
   BASEMENT_SPA_HIDDEN_MASK,
-  BASEMENT_STAIRS_WOOD_OBSTACLES,
 } from '../world/levels/levelBasement';
 import {
   DIANA_DISTRACTED_KEY,
@@ -2069,11 +2068,10 @@ export function renderGame(
       ctx.fillStyle = blinkRed ? '#ef4444' : '#7f1d1d';
       ctx.fillRect(BASEMENT_MINE_BOUNDS.x + 3, BASEMENT_MINE_BOUNDS.y + 3, 4, 4);
     }
-    if (!basement.stairsWoodBurned) {
-      ctx.fillStyle = basement.stairsWoodBurnTimer > 0 ? '#ea580c' : '#6b4226';
-      for (const obs of BASEMENT_STAIRS_WOOD_OBSTACLES) {
-        ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
-      }
+    for (const tile of basement.stairsWoodTiles) {
+      if (tile.burned) continue;
+      ctx.fillStyle = tile.burning ? '#ea580c' : '#6b4226';
+      ctx.fillRect(tile.bounds.x, tile.bounds.y, tile.bounds.width, tile.bounds.height);
     }
   } else if (state.currentLevelId === 'level-upstairs') {
     const upstairs = state.levels['level-upstairs'];

@@ -95,7 +95,6 @@ import {
   BASEMENT_STAIRS_WOOD_OBSTACLES,
   BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS,
   LevelBasement,
-  STAIRS_WOOD_BURN_DURATION,
   USED_STAIRS_STATE_KEY,
 } from '../src/world/levels/levelBasement';
 import {
@@ -1094,23 +1093,13 @@ describe('Player walking & 2x Rensbo map layout', () => {
     input.up = false;
     expect(state.player.isMoving).toBe(false);
 
-    // Advance 2 seconds -> dialogue opens
+    // Advance 2 seconds -> Hanneloes jumps off the toilet and turns hostile instead of showing dialogue
     updateGameState(state, input, 2.0);
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe(
-      "What are you doing here?? I know you see me when I'm sleeping but this is not okay."
-    );
-    expect(state.activeDialogue?.speakerPortrait).toBe('Hanneloes');
-
-    // Close dialogue with KeyZ -> reloads level-basement and triggers damage blink
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue).toBeNull();
-    expect(state.currentLevelId).toBe('level-basement');
-    expect(state.player.blinkTimer).toBeGreaterThan(0);
+    expect(basement.hanneloesCombat.mode).toBe('hostile');
+    expect(basement.toiletNpc.x).toBeLessThan(21 * TILE_SIZE);
 
-    // Now that the event triggered, door remains open and player can walk around
+    // Door remains open and player can walk into the bathroom
     state.player.x = BASEMENT_BATHROOM_DOOR_BOUNDS.x + 2;
     state.player.y = BASEMENT_BATHROOM_DOOR_BOUNDS.y + TILE_SIZE + 1;
     input.up = true;
@@ -1557,17 +1546,17 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
   it('calculates LineOfSight and ConeOfSight bounding boxes and triggers detection callbacks', () => {
     // 1. LineOfSight unit test without map:
-    // Starts at (100, 100), facing east (direction = 0), distance = 50
+    // Starts at (100, 100), facing east (direction = 0), distance = 50 (default 20 sample points)
     const los = new LineOfSight({ x: 100, y: 100 }, 0, 50);
-    expect(los.n).toBe(10);
-    expect(los.boxes.length).toBe(10);
-    for (let i = 0; i < 10; i++) {
-      expect(los.boxes[i].x).toBeCloseTo(100 + (50 / 10) * i);
+    expect(los.n).toBe(20);
+    expect(los.boxes.length).toBe(20);
+    for (let i = 0; i < 20; i++) {
+      expect(los.boxes[i].x).toBeCloseTo(100 + (50 / 20) * i);
       expect(los.boxes[i].y).toBeCloseTo(100);
       expect(los.boxes[i].width).toBe(4);
       expect(los.boxes[i].height).toBe(4);
       // Getter points(i) returns center of box
-      expect(los.points(i).x).toBeCloseTo(100 + (50 / 10) * i + 2);
+      expect(los.points(i).x).toBeCloseTo(100 + (50 / 20) * i + 2);
       expect(los.points(i).y).toBeCloseTo(100 + 2);
     }
 
@@ -1584,7 +1573,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     // Starting at x = 16 (col 1), going east: box 0 (x=16, col 1), box 1 (x=32, col 2), box 2 (x=48, col 3 = wall!)
     // Box 2 collides with wall, so box 3+ should not be spawned.
     const losWithWall = new LineOfSight({ x: 16, y: 16 }, 0, 160, mockMap as any);
-    expect(losWithWall.n).toBe(3); // boxes 0, 1, 2 spawned; box 2 hit wall, so box 3 was not spawned
+    expect(losWithWall.n).toBe(5); // 20-point step=8px: boxes 0..4 spawned (x=16,24,32,40,48); box 4 hit col 3 wall
 
     let losDetectedCount = 0;
     const unsubLos = los.onDetection(() => {
@@ -1614,7 +1603,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     const fov = (60 * Math.PI) / 180;
     const cone = new ConeOfSight({ x: 200, y: 200 }, 0, 60, fov);
     expect(cone.lines.length).toBe(5);
-    expect(cone.getAllBoxes().length).toBe(50);
+    expect(cone.getAllBoxes().length).toBe(100);
     expect(cone.sightPolygon.length).toBe(6); // position + 5 line tips
 
     let coneDetectedCount = 0;
@@ -1643,9 +1632,10 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
     // 1. Initially looking north (-Math.PI / 2 radians, or 90 degrees absolute)
     expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2);
-    // Distance increased by +50%: 5 tiles * 1.5 = 7.5 tiles
-    expect(basement.coneOfSight!.distance).toBe(7.5 * 16);
+    // Distance doubled to 15 tiles (240 px) with 20 sample points per ray
+    expect(basement.coneOfSight!.distance).toBe(15 * 16);
     expect(basement.coneOfSight!.lines.length).toBe(5);
+    expect(basement.coneOfSight!.lines[0].maxPoints).toBe(20);
     expect(basement.coneOfSight!.sightPolygon.length).toBe(6);
 
     // Every 2 seconds it deletes old cone of sight and spawns new one +45 degrees
@@ -3831,12 +3821,15 @@ Tanja -> Alex
       BASEMENT_STAIRS_WOOD_BOUNDS.x - state.player.width + 0.01
     );
 
-    // Shoot fireball east into wood stack -> burns over STAIRS_WOOD_BURN_DURATION then clears path
+    // Shoot fireball east into wood tile -> only the hit tile ignites locally, burns in 3.0s, spreads to immediate neighbors at 2.5s
     state.player.yaw = 0;
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.02);
     applyKeyEvent(input, 'Space', false);
     updateGameState(state, input, 0.4);
+    const burningInitially = basement.stairsWoodTiles.filter((t) => t.burning);
+    expect(burningInitially.length).toBeGreaterThanOrEqual(1);
+    expect(burningInitially.length).toBeLessThan(basement.stairsWoodTiles.length);
     expect(basement.stairsWoodBurnTimer).toBeGreaterThan(0);
     expect(basement.stairsWoodBurned).toBe(false);
 
@@ -3844,12 +3837,18 @@ Tanja -> Alex
     const burningMesh = buildDynamicSceneMeshes(state, 50);
     expect(burningMesh.translucent.vertexCount).toBeGreaterThan(0);
 
-    updateGameState(state, input, STAIRS_WOOD_BURN_DURATION + 0.1);
-    expect(basement.stairsWoodBurned).toBe(true);
+    // Advance past 2.5s -> fire spreads to immediate neighbor(s); advance past 3.0s -> hit tile burns away cleanly
+    updateGameState(state, input, 2.2); // total ~2.6s -> neighbor(s) ignited!
+    expect(basement.stairsWoodTiles.filter((t) => t.burning).length).toBeGreaterThan(
+      burningInitially.length
+    );
+    updateGameState(state, input, 0.6); // total ~3.2s -> original hit tile(s) burned away!
+    expect(burningInitially.every((t) => t.burned)).toBe(true);
 
-    // Now Santa can walk right up into 'basement-stairs-up'
-    state.player.x = BASEMENT_STAIRS_WOOD_BOUNDS.x;
-    state.player.y = BASEMENT_STAIRS_TRIGGER_BOUNDS.y + 4;
+    // Now Santa can walk right through the burned tile onto the stairs
+    const burnedTile = burningInitially[0];
+    state.player.x = burnedTile.bounds.x;
+    state.player.y = burnedTile.bounds.y + 2;
     applyKeyEvent(input, 'KeyD', true);
     for (let i = 0; i < 20; i++) {
       updateGameState(state, input, 0.02);
@@ -4050,10 +4049,12 @@ Tanja -> Alex
     state.player.y = basement.windowNpc.y - 3 * TILE_SIZE;
     state.player.yaw = Math.PI / 2; // facing south toward Arjan
     applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.05);
+    for (let i = 0; i < 6; i++) {
+      updateGameState(state, input, 0.05);
+    }
     applyKeyEvent(input, 'Space', false);
     // Advance bullets to hit Arjan and let him pathfind & walk north toward Santa
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 8; i++) {
       updateGameState(state, input, 0.05);
     }
     expect(arjan.health).toBeLessThan(MAX_NPC_HEALTH);
@@ -4149,5 +4150,52 @@ Tanja -> Alex
       (p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan'
     ).length;
     expect(resumedShots).toBeGreaterThan(0);
+  });
+
+  it('lets player pick up dropped NPC Uzis when unarmed/depleted and deals 50 HP on basement mine blast', () => {
+    const state = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-basement',
+    });
+    const basement = state.levels['level-basement'];
+    const input = createEmptyInput();
+
+    // 1. Standing in the mine explosion deals 50 HP damage
+    state.player.x = BASEMENT_MINE_BOUNDS.x;
+    state.player.y = BASEMENT_MINE_BOUNDS.y;
+    updateGameState(state, input, 0.05);
+    expect(basement.mineState).toBe('blinking');
+    updateGameState(state, input, BASEMENT_MINE_FUSE_SECONDS + 0.1);
+    expect(basement.mineState).toBe('exploded');
+    expect(state.player.health).toBe(50);
+
+    // 2. Kill Arjan -> drops a pickupable Uzi on the floor; player without an Uzi picks it up on touch
+    state.player.unlockedUzi = true;
+    state.player.equippedItem = 'uzi';
+    state.player.x = basement.windowNpc.x;
+    state.player.y = basement.windowNpc.y - TILE_SIZE;
+    state.player.yaw = Math.PI / 2;
+    applyKeyEvent(input, 'Space', true);
+    for (let i = 0; i < 30 && basement.arjanCombat.mode !== 'dead'; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.1);
+    }
+    applyKeyEvent(input, 'Space', false);
+    expect(basement.arjanCombat.mode).toBe('dead');
+    const droppedNpcUzi = state.droppedUzis.find((u) => u.pickupable);
+    expect(droppedNpcUzi).toBeDefined();
+
+    // Simulate player not holding a usable Uzi (depleted) and touching the dropped NPC Uzi
+    state.player.uziDepleted = true;
+    state.player.uziAmmo = 0;
+    state.player.equippedItem = 'empty';
+    state.player.x = droppedNpcUzi!.x - 4;
+    state.player.y = droppedNpcUzi!.y - 4;
+    updateGameState(state, input, 0.05);
+    expect(state.player.unlockedUzi).toBe(true);
+    expect(state.player.uziDepleted).toBe(false);
+    expect(state.player.uziAmmo).toBe(MAX_UZI_AMMO);
+    expect(state.player.equippedItem).toBe('uzi');
+    expect(state.droppedUzis.some((u) => u.pickupable)).toBe(false);
   });
 });

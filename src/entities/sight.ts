@@ -8,8 +8,11 @@ export interface Point2D {
 
 export type DetectionCallback = (player: Player) => void;
 
-/** Default distance in pixels for a cone of sight (7.5 tiles). */
-export const DEFAULT_CONE_OF_SIGHT_DISTANCE = 7.5 * TILE_SIZE;
+/** Default distance in pixels for a cone of sight (15 tiles = 2x original 7.5 tiles). */
+export const DEFAULT_CONE_OF_SIGHT_DISTANCE = 15 * TILE_SIZE;
+
+/** Default number of sample points along each LineOfSight (20 = 2x original 10 for preserved precision). */
+export const DEFAULT_LINE_OF_SIGHT_POINTS = 20;
 
 /** Default field of view angle in radians for a cone of sight (45 degrees). */
 export const DEFAULT_CONE_OF_SIGHT_FOV = (45 * Math.PI) / 180;
@@ -39,7 +42,7 @@ export class LineOfSight {
     direction: number,
     distance: number,
     map?: TileMap,
-    maxPoints: number = 10,
+    maxPoints: number = DEFAULT_LINE_OF_SIGHT_POINTS,
     ignoreTilePred?: (col: number, row: number) => boolean
   ) {
     this.position = { ...position };

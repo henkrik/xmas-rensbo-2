@@ -60,10 +60,8 @@ import {
   BASEMENT_STAIRS_SIDE_NORTH_BOUNDS,
   BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS,
   BASEMENT_STAIRS_TRIGGER_BOUNDS,
-  BASEMENT_STAIRS_WOOD_OBSTACLES,
   isPlayerOnBasementStairs,
   LevelBasement,
-  STAIRS_WOOD_BURN_DURATION,
   USED_STAIRS_STATE_KEY,
 } from './levels/levelBasement';
 import {
@@ -164,6 +162,7 @@ export interface DroppedUzi {
   y: number;
   z: number;
   yaw: number;
+  pickupable?: boolean;
 }
 
 export interface LevelRegistry {
@@ -792,7 +791,9 @@ function getLevelNpcTargets(state: GameState): NpcTarget[] {
     if (basement.olexaCombat.mode !== 'dead') {
       addTarget('basement:Olexa', basement.olexaNpc);
     }
-    addTarget('basement:Hanneloes', basement.toiletNpc);
+    if (basement.hanneloesCombat.mode !== 'dead') {
+      addTarget('basement:Hanneloes', basement.toiletNpc);
+    }
   } else if (state.currentLevelId === 'level-upstairs') {
     const upstairs = state.levels['level-upstairs'];
     if (upstairs.albinCombat.mode !== 'dead') {
@@ -874,6 +875,15 @@ function damageArmedNpc(
       z: groundZ,
       age: 0,
       maxAge: 999999,
+    });
+    const rightAngle = npc.aimYaw + Math.PI / 2;
+    state.droppedUzis.push({
+      levelId: state.currentLevelId,
+      x: hitX + Math.cos(rightAngle) * 5.2,
+      y: hitY + Math.sin(rightAngle) * 5.2,
+      z: groundZ,
+      yaw: npc.aimYaw + 0.4,
+      pickupable: true,
     });
   }
 }
@@ -1037,18 +1047,10 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 }
         : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
 
-      // Check stairs wood stacks burn in basement when hit by a fireball
+      // Check per-tile stairs wood burn in basement when hit by a fireball
       if (isFireball && state.currentLevelId === 'level-basement') {
         const basement = state.levels['level-basement'];
-        if (
-          !basement.stairsWoodBurned &&
-          BASEMENT_STAIRS_WOOD_OBSTACLES.some((obs) =>
-            rectsIntersect(projRect, obs)
-          )
-        ) {
-          if (basement.stairsWoodBurnTimer <= 0) {
-            basement.stairsWoodBurnTimer = STAIRS_WOOD_BURN_DURATION;
-          }
+        if (basement.igniteStairsWoodAt(projRect)) {
           removed = true;
           break;
         }
@@ -1392,6 +1394,32 @@ export function updateGameState(
   // Update 3D jump / fall arc, indoor door opening animations, projectiles, bullet holes, and blood
   updatePlayerJump(state.player, dtSeconds);
   updateProjectiles(state, dtSeconds);
+
+  // Pick up a fallen NPC's dropped Uzi if the player does not currently hold a usable Uzi
+  if (!state.player.unlockedUzi || state.player.uziDepleted) {
+    for (let i = state.droppedUzis.length - 1; i >= 0; i--) {
+      const uzi = state.droppedUzis[i];
+      if (!uzi.pickupable || uzi.levelId !== state.currentLevelId) continue;
+      const uziRect: Rect = {
+        x: uzi.x - 6,
+        y: uzi.y - 6,
+        width: 12,
+        height: 12,
+      };
+      if (rectsIntersect(state.player, uziRect)) {
+        state.droppedUzis.splice(i, 1);
+        state.player.unlockedUzi = true;
+        state.player.uziDepleted = false;
+        state.player.uziAmmo = MAX_UZI_AMMO;
+        state.player.uziDropTimer = 0;
+        state.player.uziCheatRefillTimer = 0;
+        state.player.equippedItem = 'uzi';
+        state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+        debugLog('Picked up Uzi from fallen NPC (30 rounds)');
+        break;
+      }
+    }
+  }
   updateEffectTimers(state, dtSeconds);
   for (const door of state.levels['level-basement'].openedDoors) {
     door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
@@ -1477,7 +1505,7 @@ export function updateGameState(
           BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.height;
       }
     }
-    basement.updateHazardsAndItems(dtSeconds, state.player);
+    basement.updateHazardsAndItems(dtSeconds, state.player, transitionCtx);
     basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
     if (state.activeDialogue) {
       refreshInteractables(state);
@@ -1486,7 +1514,6 @@ export function updateGameState(
 
     // Automatically walk upstairs with a 0.5s fade to black & fade from black once on the stairs and close enough
     if (
-      basement.stairsWoodBurned &&
       !state.screenFade &&
       isPlayerOnBasementStairs(state.player) &&
       rectEdgeDistance(state.player, BASEMENT_STAIRS_TRIGGER_BOUNDS) <=

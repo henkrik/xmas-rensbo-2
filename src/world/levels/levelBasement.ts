@@ -233,7 +233,54 @@ export const BASEMENT_STAIRS_WOOD_OBSTACLES: readonly Rect[] = [
   BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS,
 ];
 
-export const STAIRS_WOOD_BURN_DURATION = 1.0;
+export const STAIRS_WOOD_BURN_DURATION = 3.0;
+export const STAIRS_WOOD_SPREAD_SECONDS = 2.5;
+export const BASEMENT_MINE_EXPLOSION_DAMAGE = 50;
+export const BASEMENT_MINE_EXPLOSION_RADIUS = 2.5 * TILE_SIZE;
+
+export interface StairsWoodTile {
+  col: number;
+  row: number;
+  bounds: Rect;
+  burning: boolean;
+  burnElapsed: number;
+  burned: boolean;
+  spreadDone: boolean;
+}
+
+function createInitialStairsWoodTiles(): StairsWoodTile[] {
+  const coords: Array<readonly [number, number]> = [
+    // North edge (row 14, cols 18..21)
+    [18, 14],
+    [19, 14],
+    [20, 14],
+    [21, 14],
+    // West edge (col 18, rows 15..18)
+    [18, 15],
+    [18, 16],
+    [18, 17],
+    [18, 18],
+    // South edge (row 19, cols 18..21)
+    [18, 19],
+    [19, 19],
+    [20, 19],
+    [21, 19],
+  ];
+  return coords.map(([col, row]) => ({
+    col,
+    row,
+    bounds: {
+      x: col * TILE_SIZE,
+      y: row * TILE_SIZE,
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+    },
+    burning: false,
+    burnElapsed: 0,
+    burned: false,
+    spreadDone: false,
+  }));
+}
 
 /** Invisible collision box halfway up the stairs that offers "Walk upstairs". */
 export const BASEMENT_STAIRS_TRIGGER_BOUNDS: Rect = {
@@ -287,19 +334,59 @@ export class LevelBasement implements GameLevel {
   public mineTimer: number = 0;
   public mineExplosionTimer: number = 0;
   public flamethrowerPickedUp: boolean = false;
-  public stairsWoodBurned: boolean = false;
-  public stairsWoodBurnTimer: number = 0;
+  public stairsWoodTiles: StairsWoodTile[] = createInitialStairsWoodTiles();
   public readonly windowNpc = { ...BASEMENT_WINDOW_NPC };
   public readonly olexaNpc = { ...BASEMENT_OLEXA_NPC };
   public readonly toiletNpc = { ...BASEMENT_TOILET_NPC };
   public toiletCutscene: ToiletCutsceneState | null = null;
   public coneOfSight: ConeOfSight | null;
   public olexaConeOfSight: ConeOfSight | null;
+  public hanneloesCone: ConeOfSight | null = null;
   public arjanCombat: ArmedNpcState;
   public olexaCombat: ArmedNpcState;
+  public hanneloesCombat: ArmedNpcState;
   public npcSightAngle: number = -Math.PI / 2; // North is -90 degrees in screen Y coordinates
   public npcSightTimer: number = 0;
   public intruderDetected: boolean = false;
+
+  public get stairsWoodBurned(): boolean {
+    return this.stairsWoodTiles.every((t) => t.burned);
+  }
+
+  public set stairsWoodBurned(val: boolean) {
+    for (const tile of this.stairsWoodTiles) {
+      tile.burned = val;
+      tile.burning = false;
+      tile.burnElapsed = val ? STAIRS_WOOD_BURN_DURATION : 0;
+      tile.spreadDone = val;
+    }
+  }
+
+  public get stairsWoodBurnTimer(): number {
+    let maxRemaining = 0;
+    for (const tile of this.stairsWoodTiles) {
+      if (tile.burning && !tile.burned) {
+        maxRemaining = Math.max(
+          maxRemaining,
+          STAIRS_WOOD_BURN_DURATION - tile.burnElapsed
+        );
+      }
+    }
+    return maxRemaining;
+  }
+
+  public igniteStairsWoodAt(hitRect: Rect): boolean {
+    let hitAny = false;
+    for (const tile of this.stairsWoodTiles) {
+      if (!tile.burned && rectsIntersect(hitRect, tile.bounds)) {
+        if (!tile.burning) {
+          tile.burning = true;
+        }
+        hitAny = true;
+      }
+    }
+    return hitAny;
+  }
 
   constructor() {
     this.doors = [
@@ -311,6 +398,7 @@ export class LevelBasement implements GameLevel {
     ];
     this.arjanCombat = createArmedNpcState('basement:Arjan', 'Arjan', -Math.PI / 2);
     this.olexaCombat = createArmedNpcState('basement:Olexa', 'Olexa', -Math.PI / 2);
+    this.hanneloesCombat = createArmedNpcState('basement:Hanneloes', 'Hanneloes', Math.PI);
     this.coneOfSight = new ConeOfSight(
       { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
       this.npcSightAngle,
@@ -326,15 +414,18 @@ export class LevelBasement implements GameLevel {
   }
 
   public getArmedNpcs(): Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> {
+    const isBathroomOpen = !this.doors.some((d) => d.id === 'basement-bathroom-door');
     return [
       { state: this.arjanCombat, bounds: this.windowNpc, visible: true },
       { state: this.olexaCombat, bounds: this.olexaNpc, visible: true },
+      { state: this.hanneloesCombat, bounds: this.toiletNpc, visible: isBathroomOpen },
     ];
   }
 
   public getArmedNpcByKey(key: string): ArmedNpcState | undefined {
     if (key === this.arjanCombat.key) return this.arjanCombat;
     if (key === this.olexaCombat.key) return this.olexaCombat;
+    if (key === this.hanneloesCombat.key) return this.hanneloesCombat;
     return undefined;
   }
 
@@ -413,11 +504,17 @@ export class LevelBasement implements GameLevel {
     if (this.olexaCombat.mode !== 'dead') {
       obs.push(this.olexaNpc);
     }
+    const isBathroomOpen = !this.doors.some((d) => d.id === 'basement-bathroom-door');
+    if (isBathroomOpen && this.hanneloesCombat.mode !== 'dead') {
+      obs.push(this.toiletNpc);
+    }
     if (this.spaDoorClosed) {
       obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
     }
-    if (!this.stairsWoodBurned) {
-      obs.push(...BASEMENT_STAIRS_WOOD_OBSTACLES);
+    for (const tile of this.stairsWoodTiles) {
+      if (!tile.burned) {
+        obs.push(tile.bounds);
+      }
     }
     if (!player || !isPlayerOnBasementStairs(player)) {
       obs.push(BASEMENT_STAIRS_SIDE_NORTH_BOUNDS, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS);
@@ -465,7 +562,13 @@ export class LevelBasement implements GameLevel {
     return list;
   }
 
-  public updateHazardsAndItems(dtSeconds: number, player: Player): void {
+  public updateHazardsAndItems(
+    dtSeconds: number,
+    player: Player,
+    ctx?: LevelTransitionContext
+  ): void {
+    if (dtSeconds <= 0) return;
+
     if (this.mineState === 'idle' && rectsIntersect(player, BASEMENT_MINE_BOUNDS)) {
       this.mineState = 'blinking';
       this.mineTimer = BASEMENT_MINE_FUSE_SECONDS;
@@ -475,6 +578,16 @@ export class LevelBasement implements GameLevel {
         this.mineState = 'exploded';
         this.mineExplosionTimer = 0.65;
         this.spaDoorClosed = false;
+        const mineCx = BASEMENT_MINE_BOUNDS.x + BASEMENT_MINE_BOUNDS.width * 0.5;
+        const mineCy = BASEMENT_MINE_BOUNDS.y + BASEMENT_MINE_BOUNDS.height * 0.5;
+        const playerCx = player.x + player.width * 0.5;
+        const playerCy = player.y + player.height * 0.5;
+        if (
+          Math.hypot(playerCx - mineCx, playerCy - mineCy) <=
+          BASEMENT_MINE_EXPLOSION_RADIUS
+        ) {
+          ctx?.damagePlayer?.(BASEMENT_MINE_EXPLOSION_DAMAGE);
+        }
       }
     }
 
@@ -492,11 +605,30 @@ export class LevelBasement implements GameLevel {
       selectPlayerEquipmentSlot(player, 4);
     }
 
-    if (this.stairsWoodBurnTimer > 0) {
-      this.stairsWoodBurnTimer = Math.max(0, this.stairsWoodBurnTimer - dtSeconds);
-      if (this.stairsWoodBurnTimer <= 0) {
-        this.stairsWoodBurned = true;
+    // Per-tile local wood fire burning (3.0s) and immediate neighbor spread at 2.5s
+    const toIgnite: StairsWoodTile[] = [];
+    for (const tile of this.stairsWoodTiles) {
+      if (!tile.burning || tile.burned) continue;
+      tile.burnElapsed += dtSeconds;
+      if (!tile.spreadDone && tile.burnElapsed >= STAIRS_WOOD_SPREAD_SECONDS) {
+        tile.spreadDone = true;
+        for (const neighbor of this.stairsWoodTiles) {
+          if (
+            !neighbor.burned &&
+            !neighbor.burning &&
+            Math.abs(neighbor.col - tile.col) + Math.abs(neighbor.row - tile.row) === 1
+          ) {
+            toIgnite.push(neighbor);
+          }
+        }
       }
+      if (tile.burnElapsed >= STAIRS_WOOD_BURN_DURATION) {
+        tile.burned = true;
+        tile.burning = false;
+      }
+    }
+    for (const tile of toIgnite) {
+      tile.burning = true;
     }
   }
 
@@ -679,12 +811,56 @@ export class LevelBasement implements GameLevel {
         this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, undefined, this.map);
       }
     }
+
+    // 3. Hanneloes (toiletNpc, active once bathroom door is opened)
+    const isBathroomOpen = !this.doors.some((d) => d.id === 'basement-bathroom-door');
+    updateNpcHealthAndTimers(this.hanneloesCombat, dtSeconds);
+    if (this.hanneloesCombat.mode === 'dead') {
+      this.hanneloesCone = null;
+    } else if (isBathroomOpen && this.hanneloesCombat.mode === 'hostile') {
+      // Ensure she steps off the solid toilet tile (col 21, row 9) onto walkable floor (col 20, row 9)
+      if (this.toiletNpc.x >= 21 * TILE_SIZE) {
+        this.toiletNpc.x = 20 * TILE_SIZE + 2;
+      }
+      stepHostileNpcAlongPath(
+        this.hanneloesCombat,
+        this.toiletNpc,
+        player,
+        this.map,
+        this.getSolidObstacles(player),
+        dtSeconds
+      );
+      const hx = this.toiletNpc.x + this.toiletNpc.width * 0.5;
+      const hy = this.toiletNpc.y + this.toiletNpc.height * 0.5;
+      const aimYaw = Math.atan2(playerCy - hy, playerCx - hx);
+      this.hanneloesCombat.aimYaw = aimYaw;
+      this.hanneloesCone = new ConeOfSight({ x: hx, y: hy }, aimYaw, undefined, this.map);
+      if (this.hanneloesCone.checkDetection(player)) {
+        this.hanneloesCombat.unseenTimer = 0;
+      } else {
+        this.hanneloesCombat.unseenTimer += dtSeconds;
+      }
+      if (this.hanneloesCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+        this.hanneloesCombat.mode = 'passive';
+        this.hanneloesCombat.unseenTimer = 0;
+        this.hanneloesCombat.isMoving = false;
+        this.hanneloesCombat.path = [];
+        this.hanneloesCombat.pathTimer = 0;
+        this.hanneloesCone = new ConeOfSight({ x: hx, y: hy }, aimYaw, undefined, this.map);
+      } else {
+        tryFireHostileNpcUzi(this.hanneloesCombat, hx, hy, aimYaw, ctx.fireNpcUzi);
+      }
+    } else if (isBathroomOpen && this.hanneloesCone?.checkDetection(player)) {
+      this.hanneloesCombat.mode = 'hostile';
+      this.hanneloesCombat.unseenTimer = 0;
+      this.hanneloesCombat.pathTimer = 0;
+    }
   }
 
   public updateCutscene(
     dtSeconds: number,
     player: Player,
-    ctx: LevelTransitionContext
+    _ctx: LevelTransitionContext
   ): boolean {
     if (!this.toiletCutscene?.active) {
       return false;
@@ -698,18 +874,15 @@ export class LevelBasement implements GameLevel {
       this.toiletCutscene.active = false;
       this.toiletCutscene = null;
       player.states.set(TOILET_EVENT_TRIGGERED_KEY, true);
-      ctx.openDialogue(
-        [
-          "What are you doing here?? I know you see me when I'm sleeping but this is not okay.",
-        ],
-        () => {
-          // Player takes damage: reload current level, make Santa blink
-          ctx.loadLevel('level-basement');
-          player.blinkTimer = 2.0; // HIT_BLINK_DURATION_SECONDS
-          ctx.damagePlayer?.(30);
-        },
-        'Hanneloes'
-      );
+      // Instead of dialogue/reset, Hanneloes jumps off the toilet and turns hostile!
+      if (this.hanneloesCombat.mode !== 'dead') {
+        if (this.toiletNpc.x >= 21 * TILE_SIZE) {
+          this.toiletNpc.x = 20 * TILE_SIZE + 2;
+        }
+        this.hanneloesCombat.mode = 'hostile';
+        this.hanneloesCombat.unseenTimer = 0;
+        this.hanneloesCombat.pathTimer = 0;
+      }
     }
 
     return true;

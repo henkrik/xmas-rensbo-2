@@ -32,7 +32,6 @@ import {
   BASEMENT_MINE_BOUNDS,
   BASEMENT_MINE_FUSE_SECONDS,
   BASEMENT_SPA_HIDDEN_MASK,
-  BASEMENT_STAIRS_WOOD_OBSTACLES,
   STAIRS_WOOD_BURN_DURATION,
 } from '../world/levels/levelBasement';
 import {
@@ -2574,20 +2573,6 @@ export function addHumanoid3D(
       TexId.SOLID,
       0.45
     );
-    // Fallen Uzi beside the body
-    mb.addOrientedBox(
-      cx + rx * 5.2,
-      baseY + 0.9,
-      cz + rz * 5.2,
-      5.0,
-      1.4,
-      1.3,
-      yaw + 0.4,
-      0,
-      rgb(38, 42, 50),
-      TexId.SOLID,
-      0.45
-    );
     return;
   }
 
@@ -3739,39 +3724,53 @@ export function buildDynamicSceneMeshes(
     );
     maybeBurnNpc('basement:Olexa', olexaX, 0, olexaZ);
 
-    // Hanneloes sitting on the toilet in the bathroom (when door is opened)
+    // Hanneloes in the bathroom (sitting on toilet when passive, chasing with Uzi when hostile)
     const isBathroomClosed = basement.doors.some((d) => d.id === 'basement-bathroom-door');
     if (!isBathroomClosed) {
       const tx = basement.toiletNpc.x + basement.toiletNpc.width * 0.5;
       const tz = basement.toiletNpc.y + basement.toiletNpc.height * 0.5;
+      const isSittingOnToilet =
+        basement.hanneloesCombat.mode === 'passive' && basement.toiletNpc.x >= 21 * TILE_SIZE;
+      const baseY = isSittingOnToilet ? 2.0 : 0;
       addHumanoid3D(
         opaque,
         tx,
-        2.0,
+        baseY,
         tz,
-        directionToYaw(basement.toiletNpc.facing),
+        basement.hanneloesCombat.aimYaw,
         t,
-        false,
+        basement.hanneloesCombat.isMoving,
         {
           coat: hexToColor4('#2d7862'),
           trim: rgb(238, 244, 242),
           pants: rgb(52, 56, 74),
           skin: rgb(250, 208, 176),
           hair: hexToColor4('#8a4822'),
-          sitting: true,
+          sitting: isSittingOnToilet,
+          equippedItem: isSittingOnToilet ? 'empty' : 'uzi',
+          uziReloadTimer: basement.hanneloesCombat.reloadTimer,
+          weaponVibrationTimer: basement.hanneloesCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress:
+            basement.hanneloesCombat.mode === 'dead'
+              ? Math.max(0.05, basement.hanneloesCombat.deadFallProgress)
+              : 0,
         },
         false,
         false,
         translucent
       );
-      maybeBurnNpc('basement:Hanneloes', tx, 2.0, tz);
+      maybeBurnNpc('basement:Hanneloes', tx, baseY, tz);
       if (basement.toiletCutscene?.active && Math.floor(basement.toiletCutscene.timer * 10) % 2 === 0) {
-        addExclamationBadge3D(opaque, tx, 2.0, tz);
+        addExclamationBadge3D(opaque, tx, baseY, tz);
       }
     }
 
     addConeOfSight3D(translucent, basement.coneOfSight);
     addConeOfSight3D(translucent, basement.olexaConeOfSight);
+    if (!isBathroomClosed) {
+      addConeOfSight3D(translucent, basement.hanneloesCone);
+    }
 
     for (const door of basement.doors) {
       addDoorAndFog3D(opaque, door);
@@ -3911,106 +3910,88 @@ export function buildDynamicSceneMeshes(
       );
     }
 
-    // Burnable Stacks of Wood all the way around the stairs (North, West, South)
-    if (!basement.stairsWoodBurned) {
-      const burnRatio =
-        basement.stairsWoodBurnTimer > 0
-          ? Math.max(0.18, basement.stairsWoodBurnTimer / STAIRS_WOOD_BURN_DURATION)
-          : 1;
-      const logColor =
-        basement.stairsWoodBurnTimer > 0 ? rgb(76, 44, 28) : rgb(138, 86, 46);
-      const barkColor =
-        basement.stairsWoodBurnTimer > 0 ? rgb(52, 28, 18) : rgb(98, 58, 30);
+    // Burnable Stacks of Wood all the way around the stairs (per-tile local burn & spread)
+    let woodFireLights = 0;
+    for (const tile of basement.stairsWoodTiles) {
+      if (tile.burned) continue;
+      const remaining = Math.max(0, STAIRS_WOOD_BURN_DURATION - tile.burnElapsed);
+      const burnRatio = tile.burning
+        ? Math.max(0.18, remaining / STAIRS_WOOD_BURN_DURATION)
+        : 1;
+      const logColor = tile.burning ? rgb(76, 44, 28) : rgb(138, 86, 46);
+      const barkColor = tile.burning ? rgb(52, 28, 18) : rgb(98, 58, 30);
 
-      for (const stackRect of BASEMENT_STAIRS_WOOD_OBSTACLES) {
-        const isVertical = stackRect.height >= stackRect.width;
-        const count = 5;
-        for (let idx = 0; idx < count; idx++) {
-          const lx = isVertical
-            ? stackRect.x + stackRect.width * 0.5
-            : stackRect.x + 7 + idx * 12.5;
-          const lz = isVertical
-            ? stackRect.y + 7 + idx * 12.5
-            : stackRect.y + stackRect.height * 0.5;
-          const offX = isVertical ? 2.6 : 0;
-          const offZ = isVertical ? 0 : 2.6;
-          const longX = isVertical ? 4.4 * burnRatio : 10.8;
-          const longZ = isVertical ? 10.8 : 4.4 * burnRatio;
-          const crossX = isVertical ? 11.2 : 4.4 * burnRatio;
-          const crossZ = isVertical ? 4.4 * burnRatio : 11.2;
+      const lx = tile.bounds.x + tile.bounds.width * 0.5;
+      const lz = tile.bounds.y + tile.bounds.height * 0.5;
+      const isVertical = tile.row >= 15 && tile.row <= 18;
+      const offX = isVertical ? 2.6 : 0;
+      const offZ = isVertical ? 0 : 2.6;
+      const longX = isVertical ? 4.4 * burnRatio : 12.0;
+      const longZ = isVertical ? 12.0 : 4.4 * burnRatio;
+      const crossX = isVertical ? 12.0 : 4.4 * burnRatio;
+      const crossZ = isVertical ? 4.4 * burnRatio : 12.0;
 
-          opaque.addBeveledBox(
-            lx - offX,
-            0,
-            lz - offZ,
-            longX,
-            3.8 * burnRatio,
-            longZ,
-            0.45,
-            logColor,
-            TexId.WOOD_GRAIN,
-            0.55
-          );
-          opaque.addBeveledBox(
-            lx + offX,
-            0,
-            lz + offZ,
-            longX,
-            3.8 * burnRatio,
-            longZ,
-            0.45,
-            barkColor,
-            TexId.WOOD_GRAIN,
-            0.55
-          );
-          opaque.addBeveledBox(
-            lx,
-            3.6 * burnRatio,
-            lz,
-            crossX,
-            3.8 * burnRatio,
-            crossZ,
-            0.45,
-            logColor,
-            TexId.WOOD_GRAIN,
-            0.55
-          );
-          if (idx % 2 === 0) {
-            opaque.addBeveledBox(
-              lx,
-              7.2 * burnRatio,
-              lz,
-              isVertical ? 8.4 : 4.2 * burnRatio,
-              3.4 * burnRatio,
-              isVertical ? 4.2 * burnRatio : 8.4,
-              0.45,
-              barkColor,
-              TexId.WOOD_GRAIN,
-              0.5
-            );
-          }
-        }
+      opaque.addBeveledBox(
+        lx - offX,
+        0,
+        lz - offZ,
+        longX,
+        3.8 * burnRatio,
+        longZ,
+        0.45,
+        logColor,
+        TexId.WOOD_GRAIN,
+        0.55
+      );
+      opaque.addBeveledBox(
+        lx + offX,
+        0,
+        lz + offZ,
+        longX,
+        3.8 * burnRatio,
+        longZ,
+        0.45,
+        barkColor,
+        TexId.WOOD_GRAIN,
+        0.55
+      );
+      opaque.addBeveledBox(
+        lx,
+        3.6 * burnRatio,
+        lz,
+        crossX,
+        3.8 * burnRatio,
+        crossZ,
+        0.45,
+        logColor,
+        TexId.WOOD_GRAIN,
+        0.55
+      );
+      opaque.addBeveledBox(
+        lx,
+        7.2 * burnRatio,
+        lz,
+        isVertical ? 8.8 : 4.2 * burnRatio,
+        3.4 * burnRatio,
+        isVertical ? 4.2 * burnRatio : 8.8,
+        0.45,
+        barkColor,
+        TexId.WOOD_GRAIN,
+        0.5
+      );
 
-        if (basement.stairsWoodBurnTimer > 0) {
-          for (let fi = 0; fi < 3; fi++) {
-            const fx = isVertical
-              ? stackRect.x + stackRect.width * 0.5
-              : stackRect.x + 12 + fi * 20;
-            const fz = isVertical
-              ? stackRect.y + 12 + fi * 20
-              : stackRect.y + stackRect.height * 0.5;
-            addBurningFireEffect3D(
-              translucent,
-              pointLights,
-              fx,
-              1.2,
-              fz,
-              t + fi * 0.7,
-              1.1,
-              fi === 1 && pointLights.length < 2
-            );
-          }
-        }
+      if (tile.burning) {
+        addBurningFireEffect3D(
+          translucent,
+          pointLights,
+          lx,
+          1.2,
+          lz,
+          t + (tile.col + tile.row) * 0.7,
+          1.05,
+          woodFireLights < 2 && pointLights.length < 2
+        );
+        woodFireLights++;
       }
     }
   } else if (levelId === 'level-upstairs') {

@@ -317,6 +317,7 @@ interface StaticLevelGLBuffers {
   outlineBuffer: WebGLBuffer;
   outlineVertexCount: number;
   mapVersion: number;
+  map: GameState['map'];
 }
 
 function compileShader(
@@ -520,7 +521,13 @@ export class WebGL3DRenderer implements Hardware3DRenderer {
 
   private getOrCreateStaticLevelBuffers(state: GameState): StaticLevelGLBuffers {
     const existing = this.staticLevelBuffers.get(state.currentLevelId);
-    if (existing && existing.mapVersion === state.mapVersion) return existing;
+    if (
+      existing &&
+      existing.mapVersion === state.mapVersion &&
+      existing.map === state.map
+    ) {
+      return existing;
+    }
 
     const gl = this.gl;
     const mesh = getStaticLevelMesh(state.currentLevelId, state.map, state);
@@ -540,6 +547,7 @@ export class WebGL3DRenderer implements Hardware3DRenderer {
       outlineBuffer,
       outlineVertexCount: outlineMesh.vertexCount,
       mapVersion: state.mapVersion,
+      map: state.map,
     };
     this.staticLevelBuffers.set(state.currentLevelId, entry);
     return entry;

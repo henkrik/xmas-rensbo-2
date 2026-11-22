@@ -258,6 +258,8 @@ export class WebGPURenderer {
       vertexCount: number;
       outlineBuffer: GPUBuffer;
       outlineVertexCount: number;
+      mapVersion: number;
+      map: GameState['map'];
     }
   >();
   private dynamicOpaqueBuffer: GPUBuffer;
@@ -570,10 +572,18 @@ export class WebGPURenderer {
     outlineVertexCount: number;
   } {
     const existing = this.staticBuffers.get(state.currentLevelId);
-    if (existing) {
+    if (
+      existing &&
+      existing.mapVersion === state.mapVersion &&
+      existing.map === state.map
+    ) {
       return existing;
     }
-    const mesh = getStaticLevelMesh(state.currentLevelId, state.map);
+    if (existing) {
+      existing.buffer.destroy();
+      existing.outlineBuffer.destroy();
+    }
+    const mesh = getStaticLevelMesh(state.currentLevelId, state.map, state);
     const byteLength = Math.max(64, mesh.vertices.byteLength);
     const buffer = this.device.createBuffer({
       size: byteLength,
@@ -610,6 +620,8 @@ export class WebGPURenderer {
       vertexCount: mesh.vertexCount,
       outlineBuffer,
       outlineVertexCount: outlineMesh.vertexCount,
+      mapVersion: state.mapVersion,
+      map: state.map,
     };
     this.staticBuffers.set(state.currentLevelId, entry);
     return entry;

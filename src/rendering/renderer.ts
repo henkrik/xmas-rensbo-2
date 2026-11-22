@@ -1882,7 +1882,7 @@ export function renderSoftware3DScene(
   ctx.fillStyle = isOutside ? '#172647' : '#14121c';
   ctx.fillRect(0, 0, w, h);
 
-  const staticMesh = getStaticLevelMesh(state.currentLevelId, state.map);
+  const staticMesh = getStaticLevelMesh(state.currentLevelId, state.map, state);
   const dynamicMeshes = buildDynamicSceneMeshes(state, cam.distance);
   const sunX = 0.42;
   const sunY = 0.78;

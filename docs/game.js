@@ -10658,7 +10658,7 @@
     const isOutside = state.currentLevelId === "level-outside";
     ctx.fillStyle = isOutside ? "#172647" : "#14121c";
     ctx.fillRect(0, 0, w, h);
-    const staticMesh = getStaticLevelMesh(state.currentLevelId, state.map);
+    const staticMesh = getStaticLevelMesh(state.currentLevelId, state.map, state);
     const dynamicMeshes = buildDynamicSceneMeshes(state, cam.distance);
     const sunX = 0.42;
     const sunY = 0.78;
@@ -11723,7 +11723,9 @@ void main() {
     }
     getOrCreateStaticLevelBuffers(state) {
       const existing = this.staticLevelBuffers.get(state.currentLevelId);
-      if (existing && existing.mapVersion === state.mapVersion) return existing;
+      if (existing && existing.mapVersion === state.mapVersion && existing.map === state.map) {
+        return existing;
+      }
       const gl = this.gl;
       const mesh = getStaticLevelMesh(state.currentLevelId, state.map, state);
       const outlineMesh = extractOutlineMesh(mesh);
@@ -11738,7 +11740,8 @@ void main() {
         opaqueVertexCount: mesh.vertexCount,
         outlineBuffer,
         outlineVertexCount: outlineMesh.vertexCount,
-        mapVersion: state.mapVersion
+        mapVersion: state.mapVersion,
+        map: state.map
       };
       this.staticLevelBuffers.set(state.currentLevelId, entry);
       return entry;
@@ -12434,10 +12437,14 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     getOrUploadStaticLevelBuffer(state) {
       const existing = this.staticBuffers.get(state.currentLevelId);
-      if (existing) {
+      if (existing && existing.mapVersion === state.mapVersion && existing.map === state.map) {
         return existing;
       }
-      const mesh = getStaticLevelMesh(state.currentLevelId, state.map);
+      if (existing) {
+        existing.buffer.destroy();
+        existing.outlineBuffer.destroy();
+      }
+      const mesh = getStaticLevelMesh(state.currentLevelId, state.map, state);
       const byteLength = Math.max(64, mesh.vertices.byteLength);
       const buffer = this.device.createBuffer({
         size: byteLength,
@@ -12471,7 +12478,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         buffer,
         vertexCount: mesh.vertexCount,
         outlineBuffer,
-        outlineVertexCount: outlineMesh.vertexCount
+        outlineVertexCount: outlineMesh.vertexCount,
+        mapVersion: state.mapVersion,
+        map: state.map
       };
       this.staticBuffers.set(state.currentLevelId, entry);
       return entry;

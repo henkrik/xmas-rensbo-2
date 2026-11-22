@@ -955,6 +955,28 @@
     }
     return false;
   }
+  function cyclePlayerEquipmentSlot(player) {
+    const available = [
+      { slot: 1, id: "empty" },
+      { slot: 2, id: "unarmed" }
+    ];
+    if (player.unlockedUzi && !player.uziDepleted) {
+      available.push({ slot: 3, id: "uzi" });
+    }
+    if (player.unlockedFlamethrower) {
+      available.push({ slot: 4, id: "flamethrower" });
+    }
+    if (player.unlockedKatana) {
+      available.push({ slot: 5, id: "katana" });
+    }
+    if (player.unlockedBazooka) {
+      available.push({ slot: 6, id: "bazooka" });
+    }
+    const currentIdx = available.findIndex((item) => item.id === player.equippedItem);
+    const next = available[(currentIdx + 1) % available.length];
+    selectPlayerEquipmentSlot(player, next.slot);
+    return player.equippedItem;
+  }
   function lerpAngle(current, target, t) {
     let diff = (target - current + Math.PI) % (Math.PI * 2);
     if (diff < 0) diff += Math.PI * 2;
@@ -5273,7 +5295,8 @@
         if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
           player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
           ctx.openDialogue([
-            "You better run, Santa Claus is coming to town."
+            "You better run, Santa Claus is coming to town.",
+            ctx.isMobile ? "Tap anywhere inside the game screen to fire your weapon (hold to keep firing)." : "Press Space to fire your weapon (hold to keep firing)."
           ]);
         }
         return true;
@@ -7197,7 +7220,8 @@
           upstairs.rosannaCombat
         ];
         return allNpcs.filter((npc) => npc.mode !== "dead").map((npc) => npc.name);
-      }
+      },
+      isMobile: state.joystickActive
     };
     if (state.currentLevelId === "level-outside") {
       const handledEarly = updateOutsideLevel(state, input, dtSeconds);
@@ -15602,6 +15626,15 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       leftJoystickStick = document.getElementById("virtual-joystick-left-stick");
     }
     const mobileActionBtn = document.getElementById("mobile-action-btn");
+    let toggleWeaponBtn = document.getElementById("toggle-weapon-btn");
+    if (!toggleWeaponBtn && gameContainer) {
+      toggleWeaponBtn = document.createElement("button");
+      toggleWeaponBtn.id = "toggle-weapon-btn";
+      toggleWeaponBtn.type = "button";
+      toggleWeaponBtn.setAttribute("aria-label", "Toggle weapon");
+      toggleWeaponBtn.textContent = "Toggle weapon";
+      gameContainer.appendChild(toggleWeaponBtn);
+    }
     const assets = await loadAllAssets();
     const input = createEmptyInput();
     let joystickEnabled = isMobileDevice;
@@ -15800,6 +15833,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     if (mobileActionBtn) {
       mobileActionBtn.addEventListener("pointerdown", (e) => {
         e.preventDefault();
+        e.stopPropagation();
         input.actionJustPressed = true;
         input.action = true;
       });
@@ -15810,12 +15844,48 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         input.action = false;
       });
     }
+    if (toggleWeaponBtn) {
+      toggleWeaponBtn.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!shouldShowEquipmentHud(state) || state.worldFadedToBlack) return;
+        cyclePlayerEquipmentSlot(state.player);
+      });
+    }
+    let activeFirePointerId = null;
+    canvas.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (!(isMobileDevice || joystick?.isVisible() || leftJoystick?.isVisible())) {
+          return;
+        }
+        if (state.activeDialogue) {
+          return;
+        }
+        if (activeFirePointerId !== null) {
+          return;
+        }
+        e.preventDefault();
+        activeFirePointerId = e.pointerId;
+        input.attackJustPressed = true;
+        input.attack = true;
+      },
+      { passive: false }
+    );
+    const releaseTouchFire = (e) => {
+      if (activeFirePointerId !== null && e.pointerId === activeFirePointerId) {
+        activeFirePointerId = null;
+        input.attack = false;
+      }
+    };
+    window.addEventListener("pointerup", releaseTouchFire);
+    window.addEventListener("pointercancel", releaseTouchFire);
     window.addEventListener(
       "pointerdown",
       (e) => {
         if (!(isMobileDevice || joystick?.isVisible())) return;
         if (!state.activeDialogue) return;
-        if (mobileActionBtn && (e.target === mobileActionBtn || mobileActionBtn.contains(e.target))) {
+        if (mobileActionBtn && (e.target === mobileActionBtn || mobileActionBtn.contains(e.target)) || toggleWeaponBtn && (e.target === toggleWeaponBtn || toggleWeaponBtn.contains(e.target))) {
           return;
         }
         e.preventDefault();
@@ -15860,6 +15930,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         } else {
           mobileActionBtn.style.display = "none";
         }
+      }
+      if (toggleWeaponBtn) {
+        toggleWeaponBtn.style.display = shouldShowEquipmentHud(state) && !state.worldFadedToBlack ? "block" : "none";
       }
       requestAnimationFrame(frame);
     }

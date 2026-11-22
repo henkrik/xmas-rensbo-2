@@ -30,6 +30,7 @@ import {
 import {
   ARMOR_MAX_PLAYER_HEALTH,
   createPlayer,
+  cyclePlayerEquipmentSlot,
   FLAMETHROWER_MAX_DISTANCE,
   FLAMETHROWER_PROJECTILE_SPEED,
   FOOTPRINT_DURATION_SECONDS,
@@ -539,13 +540,17 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.player.x).toBe(BASEMENT_FIREPLACE_SPAWN.x);
     expect(state.player.y).toBe(BASEMENT_FIREPLACE_SPAWN.y);
 
-    // Chimney intro dialogue
+    // Chimney intro dialogue (line 1 + desktop firing hint line 2)
     expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
-      'You better run, Santa Claus is coming to town.'
-    );
+    expect(state.activeDialogue?.lines).toEqual([
+      'You better run, Santa Claus is coming to town.',
+      'Press Space to fire your weapon (hold to keep firing).',
+    ]);
 
-    // Press Space -> Closes dialogue
+    // Press Space twice -> Closes dialogue
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
@@ -5033,5 +5038,36 @@ describe('Hostile armored headcrab cat', () => {
     hudOutside.player.states.set(RUDOLPH_INSPECTED_KEY, true);
     expect(shouldShowEquipmentHud(hudOutside)).toBe(true);
     expect(shouldShowHealthBar(hudOutside)).toBe(true);
+
+    // 8. Toggle weapon cycles through obtained items (1, 2, 3, ... wrapping back to 1) skipping unobtained items
+    const p = createPlayer(0, 0);
+    p.unlockedUzi = true;
+    p.unlockedBazooka = true; // flamethrower & katana not obtained
+    expect(p.equippedItem).toBe('empty');
+    expect(cyclePlayerEquipmentSlot(p)).toBe('unarmed');
+    expect(cyclePlayerEquipmentSlot(p)).toBe('uzi');
+    expect(cyclePlayerEquipmentSlot(p)).toBe('bazooka');
+    expect(cyclePlayerEquipmentSlot(p)).toBe('empty');
+
+    // Mobile basement entry dialogue explains tap-and-hold firing
+    const mobileRoofState = createGameState({
+      initialLevelId: 'level-outside',
+      isMobile: true,
+      showIntroDialogue: false,
+    });
+    mobileRoofState.joystickActive = true;
+    mobileRoofState.isOnRoof = true;
+    mobileRoofState.player.unlockedUzi = true;
+    mobileRoofState.player.x = ROOF_CHIMNEY_BOUNDS.x;
+    mobileRoofState.player.y = ROOF_CHIMNEY_BOUNDS.y + ROOF_CHIMNEY_BOUNDS.height + 2;
+    const mobInput = createEmptyInput();
+    applyKeyEvent(mobInput, 'Space', true);
+    updateGameState(mobileRoofState, mobInput, 0.02);
+    applyKeyEvent(mobInput, 'Space', false);
+    expect(mobileRoofState.currentLevelId).toBe('level-basement');
+    expect(mobileRoofState.activeDialogue?.lines).toEqual([
+      'You better run, Santa Claus is coming to town.',
+      'Tap anywhere inside the game screen to fire your weapon (hold to keep firing).',
+    ]);
   });
 });

@@ -8,8 +8,9 @@ import {
 import { attachDebugConsole } from './core/debugConsole';
 import { initSecretSantaDB } from './core/secretSantaDB';
 import secretText from '../inspiration/secret.txt';
+import { cyclePlayerEquipmentSlot } from './entities/player';
 import { createCamera3D, updateCamera3D } from './rendering/math3d';
-import { renderGame } from './rendering/renderer';
+import { renderGame, shouldShowEquipmentHud } from './rendering/renderer';
 import { Hardware3DRenderer, WebGL3DRenderer } from './rendering/webglRenderer';
 import { WebGPURenderer } from './rendering/webgpuRenderer';
 import {
@@ -153,6 +154,15 @@ async function startGame(): Promise<void> {
   }
 
   const mobileActionBtn = document.getElementById('mobile-action-btn') as HTMLButtonElement | null;
+  let toggleWeaponBtn = document.getElementById('toggle-weapon-btn') as HTMLButtonElement | null;
+  if (!toggleWeaponBtn && gameContainer) {
+    toggleWeaponBtn = document.createElement('button');
+    toggleWeaponBtn.id = 'toggle-weapon-btn';
+    toggleWeaponBtn.type = 'button';
+    toggleWeaponBtn.setAttribute('aria-label', 'Toggle weapon');
+    toggleWeaponBtn.textContent = 'Toggle weapon';
+    gameContainer.appendChild(toggleWeaponBtn);
+  }
 
   const assets = await loadAllAssets();
   const input = createEmptyInput();
@@ -397,6 +407,7 @@ async function startGame(): Promise<void> {
   if (mobileActionBtn) {
     mobileActionBtn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       input.actionJustPressed = true;
       input.action = true;
     });
@@ -408,6 +419,45 @@ async function startGame(): Promise<void> {
     });
   }
 
+  if (toggleWeaponBtn) {
+    toggleWeaponBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!shouldShowEquipmentHud(state) || state.worldFadedToBlack) return;
+      cyclePlayerEquipmentSlot(state.player);
+    });
+  }
+
+  // On mobile (or when virtual joystick is active), tapping anywhere inside the game rectangle fires Santa's weapon (holding continues firing until release)
+  let activeFirePointerId: number | null = null;
+  canvas.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!(isMobileDevice || joystick?.isVisible() || leftJoystick?.isVisible())) {
+        return;
+      }
+      if (state.activeDialogue) {
+        return;
+      }
+      if (activeFirePointerId !== null) {
+        return;
+      }
+      e.preventDefault();
+      activeFirePointerId = e.pointerId;
+      input.attackJustPressed = true;
+      input.attack = true;
+    },
+    { passive: false }
+  );
+  const releaseTouchFire = (e: PointerEvent) => {
+    if (activeFirePointerId !== null && e.pointerId === activeFirePointerId) {
+      activeFirePointerId = null;
+      input.attack = false;
+    }
+  };
+  window.addEventListener('pointerup', releaseTouchFire);
+  window.addEventListener('pointercancel', releaseTouchFire);
+
   // On mobile (or when virtual joystick is active), tapping anywhere on screen advances dialogue trees
   window.addEventListener(
     'pointerdown',
@@ -415,8 +465,10 @@ async function startGame(): Promise<void> {
       if (!(isMobileDevice || joystick?.isVisible())) return;
       if (!state.activeDialogue) return;
       if (
-        mobileActionBtn &&
-        (e.target === mobileActionBtn || mobileActionBtn.contains(e.target as Node))
+        (mobileActionBtn &&
+          (e.target === mobileActionBtn || mobileActionBtn.contains(e.target as Node))) ||
+        (toggleWeaponBtn &&
+          (e.target === toggleWeaponBtn || toggleWeaponBtn.contains(e.target as Node)))
       ) {
         return;
       }
@@ -474,6 +526,14 @@ async function startGame(): Promise<void> {
       } else {
         mobileActionBtn.style.display = 'none';
       }
+    }
+
+    // Sync top-right "Toggle weapon" button visibility with equipment HUD
+    if (toggleWeaponBtn) {
+      toggleWeaponBtn.style.display =
+        shouldShowEquipmentHud(state) && !state.worldFadedToBlack
+          ? 'block'
+          : 'none';
     }
 
     requestAnimationFrame(frame);

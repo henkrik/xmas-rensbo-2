@@ -198,6 +198,9 @@ export class LevelOutside implements GameLevel {
         player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
         ctx.openDialogue([
           'You better run, Santa Claus is coming to town.',
+          ctx.isMobile
+            ? 'Tap anywhere inside the game screen to fire your weapon (hold to keep firing).'
+            : 'Press Space to fire your weapon (hold to keep firing).',
         ]);
       }
       return true;

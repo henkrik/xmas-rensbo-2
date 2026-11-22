@@ -2558,6 +2558,7 @@ export function updateGameState(
       ];
       return allNpcs.filter((npc) => npc.mode !== 'dead').map((npc) => npc.name);
     },
+    isMobile: state.joystickActive,
   };
 
   if (state.currentLevelId === 'level-outside') {

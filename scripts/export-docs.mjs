@@ -34,6 +34,7 @@ const indexHtml = `<!DOCTYPE html>
           </div>
         </div>
         <button id="mobile-action-btn" type="button" aria-label="Action"></button>
+        <button id="toggle-weapon-btn" type="button" aria-label="Toggle weapon">Toggle weapon</button>
       </div>
     </div>
     <script src="./game.js"></script>

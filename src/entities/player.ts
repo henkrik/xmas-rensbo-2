@@ -298,6 +298,34 @@ export function selectPlayerEquipmentSlot(player: Player, slot: number): boolean
   return false;
 }
 
+/**
+ * Cycles through obtained equipment slots in order (1, 2, 3, ... wrapping back to 1),
+ * skipping any items the player has not obtained yet.
+ */
+export function cyclePlayerEquipmentSlot(player: Player): EquipmentId {
+  const available: Array<{ slot: number; id: EquipmentId }> = [
+    { slot: 1, id: 'empty' },
+    { slot: 2, id: 'unarmed' },
+  ];
+  if (player.unlockedUzi && !player.uziDepleted) {
+    available.push({ slot: 3, id: 'uzi' });
+  }
+  if (player.unlockedFlamethrower) {
+    available.push({ slot: 4, id: 'flamethrower' });
+  }
+  if (player.unlockedKatana) {
+    available.push({ slot: 5, id: 'katana' });
+  }
+  if (player.unlockedBazooka) {
+    available.push({ slot: 6, id: 'bazooka' });
+  }
+
+  const currentIdx = available.findIndex((item) => item.id === player.equippedItem);
+  const next = available[(currentIdx + 1) % available.length];
+  selectPlayerEquipmentSlot(player, next.slot);
+  return player.equippedItem;
+}
+
 export function lerpAngle(current: number, target: number, t: number): number {
   let diff = (target - current + Math.PI) % (Math.PI * 2);
   if (diff < 0) diff += Math.PI * 2;

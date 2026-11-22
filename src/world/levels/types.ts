@@ -56,6 +56,7 @@ export interface LevelTransitionContext {
   fadeWorldToBlack?: () => void;
   detonateHouseC4?: () => void;
   getRemainingNaughtyListNames?: () => string[];
+  isMobile?: boolean;
 }
 
 export interface GameLevel {

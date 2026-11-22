@@ -2874,16 +2874,10 @@
         } else if (ctx.fadeWorldToBlack) {
           ctx.fadeWorldToBlack();
         }
-        const receiver = ctx.getSecretSantaReceiver ? ctx.getSecretSantaReceiver() : void 0;
-        const finalLine = receiver ?? "Ehm... this is awkward. An error occurred, gift receiver unknown.";
         ctx.openDialogue(
           [
             "KABOOM! The C4 detonates under the Christmas tree, blowing the entire Rensbo house sky-high!",
-            'CONGRATULATIONS! You have "saved" Christmas \u2014 not a single witness, wall, or hostile Santa left standing.',
-            "As a reward for your explosive holiday spirit...",
-            "You will learn who your secret santa gift receiver is...",
-            "And that person is...",
-            finalLine
+            'CONGRATULATIONS! You have "saved" Christmas \u2014 not a single witness, wall, or hostile Santa left standing.'
           ],
           void 0,
           void 0,

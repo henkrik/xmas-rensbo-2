@@ -2226,51 +2226,25 @@ Tanja -> Alex
     expect(state.activeDialogue?.lines).toEqual([
       'KABOOM! The C4 detonates under the Christmas tree, blowing the entire Rensbo house sky-high!',
       'CONGRATULATIONS! You have "saved" Christmas — not a single witness, wall, or hostile Santa left standing.',
-      'As a reward for your explosive holiday spirit...',
-      'You will learn who your secret santa gift receiver is...',
-      'And that person is...',
-      'Arjan',
     ]);
     expect(state.activeDialogue?.currentIndex).toBe(0);
 
-    // Advance dialogue to line 1 -> world fades to black
+    // Advance dialogue to line 1 (final line) -> world fades to black
     input.actionJustPressed = true;
     updateGameState(state, input, 0.016);
     expect(state.activeDialogue?.currentIndex).toBe(1);
     expect(state.worldFadedToBlack).toBe(true);
-
-    // Advance dialogue through remaining lines to final line ("Arjan")
-    for (let line = 2; line <= 5; line++) {
-      input.actionJustPressed = true;
-      updateGameState(state, input, 0.016);
-      expect(state.activeDialogue?.currentIndex).toBe(line);
-    }
-    expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe('Arjan');
+    expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
+      'CONGRATULATIONS! You have "saved" Christmas — not a single witness, wall, or hostile Santa left standing.'
+    );
 
     // Attempting to advance beyond the final line must NOT close the dialogue box and must stay frozen
     input.actionJustPressed = true;
     updateGameState(state, input, 0.016);
     expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.currentIndex).toBe(5);
-    expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe('Arjan');
-
-    // Test fallback when gift receiver is unknown / null
-    const dbUnknown = new SecretSantaDB(sampleContent, null);
-    const stateUnknown = createGameState({
-      initialLevelId: 'level-upstairs',
-      secretSantaDB: dbUnknown,
-      cheat: true,
-    });
-    stateUnknown.player.states.set(C4_TAKEN_STATE_KEY, true);
-    markAllNpcsDead(stateUnknown);
-    stateUnknown.player.x = 4 * TILE_SIZE;
-    stateUnknown.player.y = 15 * TILE_SIZE;
-    refreshInteractables(stateUnknown);
-
-    input.actionJustPressed = true;
-    updateGameState(stateUnknown, input, 0.016);
-    expect(stateUnknown.activeDialogue?.lines[5]).toBe(
-      'Ehm... this is awkward. An error occurred, gift receiver unknown.'
+    expect(state.activeDialogue?.currentIndex).toBe(1);
+    expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
+      'CONGRATULATIONS! You have "saved" Christmas — not a single witness, wall, or hostile Santa left standing.'
     );
   });
 

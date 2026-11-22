@@ -23,13 +23,23 @@ export const PUNCH_DURATION_SECONDS = 0.28;
 export const UZI_EQUIP_DURATION_SECONDS = 0.5;
 export const UZI_DROP_DURATION_SECONDS = 0.45;
 export const UZI_FIRE_INTERVAL_SECONDS = 0.1;
-export const UZI_PROJECTILE_SPEED = 16 * TILE_SIZE;
+export const UZI_PROJECTILE_SPEED = 24 * TILE_SIZE;
 export const MAX_UZI_AMMO = 30;
 export const FLAMETHROWER_FIRE_INTERVAL_SECONDS = 0.05;
 export const FLAMETHROWER_PROJECTILE_SPEED = 5 * TILE_SIZE;
 export const FLAMETHROWER_MAX_DISTANCE = 6 * TILE_SIZE;
+export const UPSTAIRS_INITIAL_FLAMETHROWER_AMMO = 10;
+export const DROPPED_FLAMETHROWER_AMMO = 20;
+export const KATANA_SWING_DURATION_SECONDS = 0.32;
+export const BAZOOKA_FIRE_INTERVAL_SECONDS = 0.9;
 
-export type EquipmentId = 'empty' | 'unarmed' | 'uzi' | 'flamethrower';
+export type EquipmentId =
+  | 'empty'
+  | 'unarmed'
+  | 'uzi'
+  | 'flamethrower'
+  | 'katana'
+  | 'bazooka';
 
 export interface Footprint {
   x: number;
@@ -78,7 +88,12 @@ export interface Player {
   uziDropTimer: number;
   uziCheatRefillTimer: number;
   unlockedFlamethrower: boolean;
+  flamethrowerAmmo: number;
   flamethrowerFireCooldown: number;
+  unlockedKatana: boolean;
+  katanaSwingTimer: number;
+  unlockedBazooka: boolean;
+  bazookaFireCooldown: number;
   weaponVibrationTimer: number;
   punchTimer: number;
   punchHand: 'left' | 'right';
@@ -114,7 +129,12 @@ export function createPlayer(x: number, y: number): Player {
     uziDropTimer: 0,
     uziCheatRefillTimer: 0,
     unlockedFlamethrower: false,
+    flamethrowerAmmo: Infinity,
     flamethrowerFireCooldown: 0,
+    unlockedKatana: false,
+    katanaSwingTimer: 0,
+    unlockedBazooka: false,
+    bazookaFireCooldown: 0,
     weaponVibrationTimer: 0,
     punchTimer: 0,
     punchHand: 'right',
@@ -172,6 +192,15 @@ export function updatePlayerHealthAndTimers(player: Player, dtSeconds: number): 
       player.weaponVibrationTimer - dtSeconds
     );
   }
+  if (player.katanaSwingTimer > 0) {
+    player.katanaSwingTimer = Math.max(0, player.katanaSwingTimer - dtSeconds);
+  }
+  if (player.bazookaFireCooldown > 0) {
+    player.bazookaFireCooldown = Math.max(
+      0,
+      player.bazookaFireCooldown - dtSeconds
+    );
+  }
 }
 
 export function triggerPlayerPunch(player: Player): boolean {
@@ -180,6 +209,14 @@ export function triggerPlayerPunch(player: Player): boolean {
   }
   player.punchTimer = PUNCH_DURATION_SECONDS;
   player.punchHand = player.punchHand === 'right' ? 'left' : 'right';
+  return true;
+}
+
+export function triggerPlayerKatanaSwing(player: Player): boolean {
+  if (player.equippedItem !== 'katana') {
+    return false;
+  }
+  player.katanaSwingTimer = KATANA_SWING_DURATION_SECONDS;
   return true;
 }
 
@@ -215,6 +252,24 @@ export function selectPlayerEquipmentSlot(player: Player, slot: number): boolean
       return false;
     }
     player.equippedItem = 'flamethrower';
+    player.uziEquipTimer = 0;
+    player.punchTimer = 0;
+    return true;
+  }
+  if (slot === 5) {
+    if (!player.unlockedKatana) {
+      return false;
+    }
+    player.equippedItem = 'katana';
+    player.uziEquipTimer = 0;
+    player.punchTimer = 0;
+    return true;
+  }
+  if (slot === 6) {
+    if (!player.unlockedBazooka) {
+      return false;
+    }
+    player.equippedItem = 'bazooka';
     player.uziEquipTimer = 0;
     player.punchTimer = 0;
     return true;

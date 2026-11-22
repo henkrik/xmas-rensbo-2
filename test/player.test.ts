@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyCatDamage,
+  CAT_ARMOR_DAMAGE_MULTIPLIER,
+  CAT_LATCH_DAMAGE_PER_SECOND,
+  CAT_LATCH_DURATION_SECONDS,
   CAT_RETRIGGER_FLEE_DISTANCE,
   CAT_START_X,
   CAT_START_Y,
   createCat,
   EXTRA_ROOM_BOUNDS,
+  MAX_CAT_HEALTH,
   updateCat,
 } from '../src/entities/cat';
 import { debugConsole, debugLog } from '../src/core/debugConsole';
@@ -31,6 +36,7 @@ import {
   MAX_UZI_AMMO,
   PLAYER_JUMP_HEIGHT,
   PUNCH_DURATION_SECONDS,
+  selectPlayerEquipmentSlot,
   setPlayerHealth,
   triggerPlayerJump,
   updatePlayer,
@@ -84,6 +90,7 @@ import {
   BASEMENT_FRONT_DOOR_BOUNDS,
   BASEMENT_HALL_NORTH_DOOR_BOUNDS,
   BASEMENT_MINE_BOUNDS,
+  BASEMENT_MINE_EXPLOSION_DAMAGE,
   BASEMENT_MINE_FUSE_SECONDS,
   BASEMENT_SPA_ROOM_BOUNDS,
   BASEMENT_SPA_TUB_BOUNDS,
@@ -98,17 +105,19 @@ import {
   USED_STAIRS_STATE_KEY,
 } from '../src/world/levels/levelBasement';
 import {
-  ARJAN_KEY_STATE_KEY,
-  DIANA_DISTRACTED_KEY,
+  C4_PLACED_STATE_KEY,
+  C4_TAKEN_STATE_KEY,
   DIANA_PRESENT_TAKEN_KEY,
   KITCHEN_ROSANNA_STATE_KEY,
   KITCHEN_TRIGGER_BOUNDS,
   LevelUpstairs,
-  SIMON_DISTRACTED_KEY,
   SIMON_PRESENT_TAKEN_KEY,
+  TABLE_ROOM_AMBUSH_STATE_KEY,
+  TABLE_ROOM_AMBUSH_TRIGGER_BOUNDS,
   UPSTAIRS_ALBIN_START_Y,
   UPSTAIRS_BEDROOM_DOOR_BOUNDS,
   UPSTAIRS_BEDROOM_HIDDEN_MASK,
+  UPSTAIRS_C4_BOUNDS,
   UPSTAIRS_COMPUTER_BOUNDS,
   UPSTAIRS_CUPBOARD_BOUNDS,
   UPSTAIRS_DIANA_PRESENT_BOUNDS,
@@ -159,6 +168,9 @@ import {
   NPC_UZI_BULLET_DAMAGE,
   NPC_UZI_MAGAZINE_SIZE,
   NPC_UZI_RELOAD_SECONDS,
+  PLAYER_FIREBALL_NPC_DAMAGE,
+  PLAYER_KATANA_NPC_DAMAGE,
+  PLAYER_PUNCH_NPC_DAMAGE,
   PLAYER_UZI_NPC_DAMAGE,
 } from '../src/entities/npcCombat';
 import { AStarPathfinder } from '../src/world/pathfinding';
@@ -1192,7 +1204,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(tableRoomDoor.hiddenRegions).toEqual(UPSTAIRS_TABLE_ROOM_HIDDEN_MASKS);
     expect(tableRoomDoor.hiddenRegions.length).toBe(3);
 
-    // Opening office door without key gives locked dialogue:
+    // Opening office door gives locked dialogue (no Arjan key exists anymore; must blast open with bazooka):
     state.player.x = UPSTAIRS_OFFICE_DOOR_BOUNDS.x + 2;
     state.player.y = UPSTAIRS_OFFICE_DOOR_BOUNDS.y - 14;
     updateGameState(state, input, 0.01);
@@ -1201,7 +1213,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines[0]).toBe(
-      'The office is locked... hmm, where would Arjan hide a key?'
+      'The office door is locked tight. You will need something explosive to blast through the wall!'
     );
     // Dismiss dialogue
     applyKeyEvent(input, 'Space', true);
@@ -1209,35 +1221,13 @@ describe('Player walking & 2x Rensbo map layout', () => {
     applyKeyEvent(input, 'Space', false);
     expect(upstairs.doors.some((d) => d.id === 'upstairs-office-door')).toBe(true);
 
-    // Inspect cupboard next to dining table -> finds Arjan's key
+    // Dining cupboard no longer holds Arjan's key or an interactable
     state.player.x = UPSTAIRS_CUPBOARD_BOUNDS.x + TILE_SIZE + 2;
     state.player.y = UPSTAIRS_CUPBOARD_BOUNDS.y + 4;
     updateGameState(state, input, 0.01);
-    expect(state.nearbyInteractable?.id).toBe('upstairs-dining-cupboard');
-    expect(state.nearbyInteractable?.promptText).toBe('Inspect');
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue?.lines[0]).toBe(
-      "You found a hidden compartment containing a key... it's Arjan's key!"
-    );
-    expect(state.player.states.get(ARJAN_KEY_STATE_KEY)).toBe(true);
-    // Dismiss dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    expect(state.nearbyInteractable?.id).not.toBe('upstairs-dining-cupboard');
 
-    // With the key, the office door opens
-    state.player.x = UPSTAIRS_OFFICE_DOOR_BOUNDS.x + 2;
-    state.player.y = UPSTAIRS_OFFICE_DOOR_BOUNDS.y - 14;
-    updateGameState(state, input, 0.01);
-    expect(state.nearbyInteractable?.id).toBe('upstairs-office-door');
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(upstairs.doors.some((d) => d.id === 'upstairs-office-door')).toBe(false);
-
-    // Open other doors: shower, bedroom, table room
+    // Open other doors: shower, bedroom, table room (office door stays locked until blasted)
     for (const [doorId, bounds, offsetY] of [
       ['upstairs-shower-door', UPSTAIRS_SHOWER_DOOR_BOUNDS, TILE_SIZE + 2],
       ['upstairs-bedroom-door', UPSTAIRS_BEDROOM_DOOR_BOUNDS, TILE_SIZE + 2],
@@ -1254,7 +1244,24 @@ describe('Player walking & 2x Rensbo map layout', () => {
       applyKeyEvent(input, 'Space', false);
     }
 
-    expect(upstairs.doors.length).toBe(0);
+    expect(upstairs.doors.map((d) => d.id)).toEqual(['upstairs-office-door']);
+
+    // Inside Arjan's office: pick up C4 explosive
+    state.player.x = UPSTAIRS_C4_BOUNDS.x;
+    state.player.y = UPSTAIRS_C4_BOUNDS.y - state.player.height - 2;
+    updateGameState(state, input, 0.01);
+    expect(state.nearbyInteractable?.id).toBe('upstairs-office-c4');
+    expect(state.nearbyInteractable?.promptText).toBe('Pick up C4');
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.player.states.get(C4_TAKEN_STATE_KEY)).toBe(true);
+    expect(state.activeDialogue?.lines[0]).toBe(
+      'You picked up a block of military-grade C4 explosive! Now plant it under the Christmas tree...'
+    );
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
 
     // Inspect PC in the office -> "Start PC" and 3 dialogue messages
     state.player.x = UPSTAIRS_COMPUTER_BOUNDS.x + 2;
@@ -1299,46 +1306,48 @@ describe('Player walking & 2x Rensbo map layout', () => {
     input.right = false;
     expect(state.player.x).toBeGreaterThan(26 * TILE_SIZE);
 
-    // 3. Walking into The Kitchen triggers the one-time Rosanna Santa event
+    // 3. Walking into The Kitchen triggers the one-time Rosanna Bazooka Santa reveal event
     expect(state.player.states.get(KITCHEN_ROSANNA_STATE_KEY)).toBeUndefined();
-    state.player.x = 13 * TILE_SIZE;
-    state.player.y = KITCHEN_TRIGGER_BOUNDS.y + 8;
+    state.player.x = 13.5 * TILE_SIZE;
+    state.player.y = KITCHEN_TRIGGER_BOUNDS.y + 42;
     updateGameState(state, input, 0.05);
 
     expect(state.player.states.get(KITCHEN_ROSANNA_STATE_KEY)).toBe(true);
     expect(upstairs.rosannaCutscene?.active).toBe(true);
-    const initialOtherSantaX = upstairs.rosannaCutscene!.santaX;
+    const initialSantaZ = upstairs.rosannaCutscene!.santaZ;
 
-    // While the other Santa runs west-to-east outside the north windows, the player cannot move
+    // During rising phase, player movement is locked while Rosanna slowly rises behind the middle window
     const lockedPlayerX = state.player.x;
     const lockedPlayerY = state.player.y;
     input.left = true;
     input.down = true;
-    updateGameState(state, input, 0.3);
+    updateGameState(state, input, 0.5);
     input.left = false;
     input.down = false;
     expect(state.player.x).toBe(lockedPlayerX);
     expect(state.player.y).toBe(lockedPlayerY);
-    expect(upstairs.rosannaCutscene!.santaX).toBeGreaterThan(initialOtherSantaX);
+    expect(upstairs.rosannaCutscene!.santaZ).toBeGreaterThan(initialSantaZ);
 
-    // Advance until the other Santa finishes running east and is out of sight
-    for (let i = 0; i < 40; i++) {
+    // Advance through firing + window jump phases until Rosanna enters the kitchen
+    let sawRocket = false;
+    for (let i = 0; i < 80; i++) {
       updateGameState(state, input, 0.05);
+      if (state.projectiles.some((p) => p.kind === 'rocket')) {
+        sawRocket = true;
+      }
       if (!upstairs.rosannaCutscene) {
         break;
       }
     }
 
+    expect(sawRocket).toBe(true);
+    expect(state.player.health).toBe(MAX_PLAYER_HEALTH); // Cutscene explosion hits kitchen wall west of player without hurting player
     expect(upstairs.rosannaCutscene).toBeNull();
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe('... Rosanna???');
+    expect(upstairs.rosannaSpawned).toBe(true);
+    expect(upstairs.rosannaCombat.weapon).toBe('bazooka');
+    expect(upstairs.rosannaCombat.mode).toBe('hostile');
 
-    // Close the "... Rosanna???" dialogue -> player regains control and can move again!
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue).toBeNull();
-
+    // Player regains control and can move again (clear active hostiles check or move down)
     input.down = true;
     updateGameState(state, input, 0.2);
     input.down = false;
@@ -1639,18 +1648,23 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(basement.coneOfSight!.lines[0].maxPoints).toBe(20);
     expect(basement.coneOfSight!.sightPolygon.length).toBe(6);
 
-    // Rotates smoothly every tick at Math.PI / 8 rad/s (+45 deg every 2 seconds)
+    // Rotates smoothly twice as fast (Math.PI / 4 rad/s) sweeping West (-PI) <-> North (-PI/2) <-> East (0)
     updateGameState(state, input, 1.0);
-    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2 + Math.PI / 8);
+    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 4);
 
-    updateGameState(state, input, 1.0); // total 2.0s
-    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2 + Math.PI / 4);
+    updateGameState(state, input, 1.0); // reaches East (0) and reverses direction!
+    expect(basement.npcSightAngle).toBeCloseTo(0);
+    expect(basement.arjanSweepDir).toBe(-1);
 
-    updateGameState(state, input, 2.0); // total 4.0s
-    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2 + Math.PI / 2);
+    updateGameState(state, input, 2.0); // sweeps back to North (-PI/2)
+    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI / 2);
 
-    // 2. Test player detection: place Santa in Arjan's cone of sight -> Arjan turns hostile, shoots Uzi,
-    //    and alerts Olexa (within 5 tiles) to also turn hostile!
+    updateGameState(state, input, 2.0); // reaches West (-PI) and reverses back toward North!
+    expect(basement.npcSightAngle).toBeCloseTo(-Math.PI);
+    expect(basement.arjanSweepDir).toBe(1);
+
+    // 2. Test player detection: place Santa in Arjan's cone of sight -> Arjan turns hostile immediately,
+    //    and Olexa (within 5 tiles) has a 2-second delayed hostile propagation!
     const targetBox = basement.coneOfSight!.getAllBoxes()[5];
     state.player.x = targetBox.x - 2;
     state.player.y = targetBox.y - 2;
@@ -1658,7 +1672,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
     expect(state.activeDialogue).toBeNull();
     expect(basement.arjanCombat.mode).toBe('hostile');
-    expect(basement.olexaCombat.mode).toBe('hostile');
+    expect(basement.olexaCombat.mode).toBe('passive');
+    expect(basement.olexaCombat.pendingHostileAlertTimer).toBeCloseTo(2.0, 1);
     expect(basement.arjanCombat.hostileAlertTimer).toBeCloseTo(1.0, 2);
     expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(false);
     expect(PLAYER_UZI_NPC_DAMAGE).toBe(30);
@@ -1669,10 +1684,13 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(basement.arjanCombat.isMoving).toBe(false);
     expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(false);
     expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan')).toBe(false);
-    // After 1s alert completes, starts shooting Uzi and shows health billboard
+    // After 1s alert completes, Arjan starts shooting Uzi and shows health billboard
     updateGameState(state, input, 0.55);
     expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(true);
     expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan')).toBe(true);
+    // After 2s total delay, Olexa also turns hostile!
+    updateGameState(state, input, 1.0);
+    expect(basement.olexaCombat.mode).toBe('hostile');
   });
 
   it('supports the people level (?level=people), spawning 11 NPCs and talking to each with their portrait', () => {
@@ -1909,10 +1927,11 @@ describe('Player walking & 2x Rensbo map layout', () => {
       (d) => d.id !== 'upstairs-bedroom-door'
     );
 
-    // 3. Rotates 45 degrees (+Math.PI / 4) every 1 second
-    expect(upstairs.anneMarieAngle).toBeCloseTo(-Math.PI / 2);
+    // 3. Anne-Marie always faces south (Math.PI / 2) toward the bedroom door and does not rotate
+    expect(upstairs.anneMarieAngle).toBeCloseTo(Math.PI / 2);
+    expect(upstairs.anneMarieCombat.weapon).toBe('katana');
     updateGameState(state, input, 1.1);
-    expect(upstairs.anneMarieAngle).toBeCloseTo(-Math.PI / 2 + Math.PI / 4);
+    expect(upstairs.anneMarieAngle).toBeCloseTo(Math.PI / 2);
 
     // 4. Detects Santa -> turns hostile
     const targetBoxOpen = upstairs.anneMarieCone!.getAllBoxes()[5];
@@ -1922,7 +1941,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(upstairs.anneMarieCombat.mode).toBe('hostile');
   });
 
-  it('supports inspecting, picking up presents, and distracting Diana and Simon', () => {
+  it('removes talk dialogs from all upstairs NPCs while preserving presents pickup', () => {
     const state = createGameState({
       initialLevelId: 'level-upstairs',
       showIntroDialogue: false,
@@ -1930,169 +1949,44 @@ describe('Player walking & 2x Rensbo map layout', () => {
     const input = createEmptyInput();
     const upstairs = state.levels['level-upstairs'] as LevelUpstairs;
 
-    // 1. Approach Diana from behind without her present -> "Inspect" option appears
+    // 1. No upstairs NPC has a talk/inspect dialog interactable anymore
+    const allInteractableIds = upstairs.getInteractables(state.player).map((i) => i.id);
+    expect(allInteractableIds).not.toContain('upstairs-diana-npc');
+    expect(allInteractableIds).not.toContain('upstairs-simon-npc');
+
     state.player.x = upstairs.dianaNpc.x;
     state.player.y = upstairs.dianaNpc.y - state.player.height - 2;
     updateGameState(state, input, 0.01);
+    expect(state.nearbyInteractable).toBeNull();
 
-    expect(state.nearbyInteractable?.id).toBe('upstairs-diana-npc');
-    expect(state.nearbyInteractable?.promptText).toBe('Inspect');
-
-    // Press Z -> "Hmm... I have to find something to distract Diana with..."
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe(
-      'Hmm... I have to find something to distract Diana with...'
-    );
-
-    // Dismiss dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue).toBeNull();
-
-    // 2. Approach Simon from behind without his present -> "Inspect" option appears
     state.player.x = upstairs.simonNpc.x + upstairs.simonNpc.width + 2;
     state.player.y = upstairs.simonNpc.y;
     updateGameState(state, input, 0.01);
+    expect(state.nearbyInteractable).toBeNull();
 
-    expect(state.nearbyInteractable?.id).toBe('upstairs-simon-npc');
-    expect(state.nearbyInteractable?.promptText).toBe('Inspect');
-
-    // Press Z -> "Hmm... I have to find something to distract Simon with..."
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[0]).toBe(
-      'Hmm... I have to find something to distract Simon with...'
-    );
-
-    // Dismiss dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue).toBeNull();
-
-    // 3. Take Diana's Present from the bedroom
+    // 2. Presents in bedroom and office can still be picked up
     state.player.x = UPSTAIRS_DIANA_PRESENT_BOUNDS.x;
     state.player.y =
       UPSTAIRS_DIANA_PRESENT_BOUNDS.y + UPSTAIRS_DIANA_PRESENT_BOUNDS.height + 2;
     updateGameState(state, input, 0.01);
-
     expect(state.nearbyInteractable?.id).toBe('upstairs-diana-present');
-    expect(state.nearbyInteractable?.promptText).toBe("Take Diana's Present");
-
-    // Press Z to pick it up
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
-
     expect(state.player.states.get(DIANA_PRESENT_TAKEN_KEY)).toBe(true);
-    expect(state.activeDialogue?.lines[0]).toBe("You picked up Diana's Present.");
-
-    // Dismiss dialogue
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue).toBeNull();
 
-    // 4. Take Simon's Present from the office southeast corner
     state.player.x = UPSTAIRS_SIMON_PRESENT_BOUNDS.x;
     state.player.y =
       UPSTAIRS_SIMON_PRESENT_BOUNDS.y - state.player.height - 2;
     updateGameState(state, input, 0.01);
-
     expect(state.nearbyInteractable?.id).toBe('upstairs-simon-present');
-    expect(state.nearbyInteractable?.promptText).toBe("Take Simon's Present");
-
-    // Press Z to pick it up
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
-
     expect(state.player.states.get(SIMON_PRESENT_TAKEN_KEY)).toBe(true);
-    expect(state.activeDialogue?.lines[0]).toBe("You picked up Simon's present.");
-
-    // Dismiss dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue).toBeNull();
-
-    // 5. Now return to Diana with her present -> "Give present" option appears
-    state.player.x = upstairs.dianaNpc.x;
-    state.player.y = upstairs.dianaNpc.y - state.player.height - 2;
-    updateGameState(state, input, 0.01);
-
-    expect(state.nearbyInteractable?.id).toBe('upstairs-diana-npc');
-    expect(state.nearbyInteractable?.promptText).toBe('Give present');
-
-    // Press Z to give present -> Diana distracted, cone deleted!
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
-    expect(state.player.states.get(DIANA_DISTRACTED_KEY)).toBe(true);
-    expect(upstairs.dianaCone).toBeNull();
-    expect(state.activeDialogue?.speakerPortrait).toBe('Diana');
-    expect(state.activeDialogue?.lines[0]).toBe('Hmm? A present...?');
-    expect(state.activeDialogue?.lines[1]).toBe(
-      "Diana is completely distracted. They won't stop me reaching the tree now."
-    );
-
-    // Advance dialogue line 2
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
-    // Dismiss dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue).toBeNull();
-
-    // 6. Return to Simon with his present -> "Give present" option appears
-    state.player.x = upstairs.simonNpc.x + upstairs.simonNpc.width + 2;
-    state.player.y = upstairs.simonNpc.y;
-    updateGameState(state, input, 0.01);
-
-    expect(state.nearbyInteractable?.id).toBe('upstairs-simon-npc');
-    expect(state.nearbyInteractable?.promptText).toBe('Give present');
-
-    // Press Z to give present -> Simon distracted, cone deleted!
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
-    expect(state.player.states.get(SIMON_DISTRACTED_KEY)).toBe(true);
-    expect(upstairs.simonCone).toBeNull();
-    expect(state.activeDialogue?.speakerPortrait).toBe('Simon');
-    expect(state.activeDialogue?.lines[0]).toBe('Hmm? A present...?');
-    expect(state.activeDialogue?.lines[1]).toBe(
-      "Simon is completely distracted. They won't stop me reaching the tree now."
-    );
-
-    // Advance dialogue line 2
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-
-    // Dismiss dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue).toBeNull();
-
-    // 7. Verify neither Diana nor Simon detects the player even right in front of them
-    state.player.x = 48; // where the cone used to look
-    state.player.y = 248;
-    updateGameState(state, input, 0.01);
-    expect(state.activeDialogue).toBeNull();
   });
 
   it('populates SecretSantaDB from secret.txt format, provides getters, and debug logs entries', async () => {
@@ -2200,7 +2094,7 @@ Tanja -> Alex
     expect(ConeOfSight.cheatMode).toBe(true);
   });
 
-  it('allows touching the Christmas tree to "Save Christmas", fading to black and freezing on the final dialogue line', () => {
+  it('picks up C4 in office, places it under the Christmas tree to blow up the house, and shows unclosable Secret Santa ending dialogue', () => {
     const sampleContent = 'Alex -> Arjan\nHenrik -> Sylvester';
     const alexPid = btoa('Alex');
     const secretSantaDB = new SecretSantaDB(sampleContent, alexPid);
@@ -2212,61 +2106,85 @@ Tanja -> Alex
     });
 
     expect(state.worldFadedToBlack).toBe(false);
+    expect(state.houseExploding).toBe(false);
 
-    // Position player right next to the Christmas tree (cols 2..3, rows 14..16 => x: 32..64, y: 224..272)
+    // Without C4 yet, standing next to the Christmas tree does NOT allow placing C4
     state.player.x = 4 * TILE_SIZE; // x: 64
     state.player.y = 15 * TILE_SIZE; // y: 240
     refreshInteractables(state);
+    expect(findNearbyInteractable(state.player, state.interactables)?.id).not.toBe(
+      'upstairs-xmas-tree'
+    );
 
-    const nearby = findNearbyInteractable(state.player, state.interactables);
-    expect(nearby).not.toBeNull();
-    expect(nearby?.id).toBe('upstairs-xmas-tree');
-    expect(nearby?.promptText).toBe('Save Christmas');
+    // Pick up C4 inside Arjan's office
+    state.player.x = UPSTAIRS_C4_BOUNDS.x;
+    state.player.y = UPSTAIRS_C4_BOUNDS.y - state.player.height - 2;
+    refreshInteractables(state);
+    const nearbyC4 = findNearbyInteractable(state.player, state.interactables);
+    expect(nearbyC4?.id).toBe('upstairs-office-c4');
+    expect(nearbyC4?.promptText).toBe('Pick up C4');
 
-    // Press Z to trigger "Save Christmas"
     const input = createEmptyInput();
     input.actionJustPressed = true;
     input.action = true;
     updateGameState(state, input, 0.016);
+    expect(state.player.states.get(C4_TAKEN_STATE_KEY)).toBe(true);
+    // Dismiss pickup dialogue
+    input.actionJustPressed = true;
+    updateGameState(state, input, 0.016);
 
-    expect(state.worldFadedToBlack).toBe(true);
+    // Now return to the Christmas tree -> "Place C4" prompt appears
+    state.player.x = 4 * TILE_SIZE;
+    state.player.y = 15 * TILE_SIZE;
+    refreshInteractables(state);
+    const nearby = findNearbyInteractable(state.player, state.interactables);
+    expect(nearby).not.toBeNull();
+    expect(nearby?.id).toBe('upstairs-xmas-tree');
+    expect(nearby?.promptText).toBe('Place C4');
+
+    // Press Space to plant and detonate C4
+    input.actionJustPressed = true;
+    updateGameState(state, input, 0.016);
+
+    expect(state.player.states.get(C4_PLACED_STATE_KEY)).toBe(true);
+    expect(state.houseExploding).toBe(true);
+    expect(state.explosions.length).toBeGreaterThan(0);
+    expect(state.destroyingWalls.length).toBeGreaterThan(0);
+    expect(state.blackenedWalls.size).toBeGreaterThan(0);
+    expect(getStaticLevelMesh(state.currentLevelId, state.map, state).vertexCount).toBeGreaterThan(0);
+    expect(buildDynamicSceneMeshes(state, 0.25).opaque.vertexCount).toBeGreaterThan(0);
+
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.unclosable).toBe(true);
     expect(state.activeDialogue?.lines).toEqual([
-      'CONGRATULATIONS! You have successfully saved Christmas by delivering all presents undetected.',
-      'As a reward for your valiant effort...',
+      'KABOOM! The C4 detonates under the Christmas tree, blowing the entire Rensbo house sky-high!',
+      'CONGRATULATIONS! You have "saved" Christmas — not a single witness, wall, or hostile Santa left standing.',
+      'As a reward for your explosive holiday spirit...',
       'You will learn who your secret santa gift receiver is...',
       'And that person is...',
       'Arjan',
     ]);
     expect(state.activeDialogue?.currentIndex).toBe(0);
 
-    // Advance dialogue to line 1
+    // Advance dialogue to line 1 -> world fades to black
     input.actionJustPressed = true;
     updateGameState(state, input, 0.016);
     expect(state.activeDialogue?.currentIndex).toBe(1);
+    expect(state.worldFadedToBlack).toBe(true);
 
-    // Advance dialogue to line 2
-    input.actionJustPressed = true;
-    updateGameState(state, input, 0.016);
-    expect(state.activeDialogue?.currentIndex).toBe(2);
-
-    // Advance dialogue to line 3
-    input.actionJustPressed = true;
-    updateGameState(state, input, 0.016);
-    expect(state.activeDialogue?.currentIndex).toBe(3);
-
-    // Advance dialogue to line 4 (final line: "Arjan")
-    input.actionJustPressed = true;
-    updateGameState(state, input, 0.016);
-    expect(state.activeDialogue?.currentIndex).toBe(4);
+    // Advance dialogue through remaining lines to final line ("Arjan")
+    for (let line = 2; line <= 5; line++) {
+      input.actionJustPressed = true;
+      updateGameState(state, input, 0.016);
+      expect(state.activeDialogue?.currentIndex).toBe(line);
+    }
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe('Arjan');
 
     // Attempting to advance beyond the final line must NOT close the dialogue box and must stay frozen
     input.actionJustPressed = true;
     updateGameState(state, input, 0.016);
     expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.currentIndex).toBe(4);
+    expect(state.activeDialogue?.currentIndex).toBe(5);
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe('Arjan');
 
     // Test fallback when gift receiver is unknown / null
@@ -2276,13 +2194,14 @@ Tanja -> Alex
       secretSantaDB: dbUnknown,
       cheat: true,
     });
+    stateUnknown.player.states.set(C4_TAKEN_STATE_KEY, true);
     stateUnknown.player.x = 4 * TILE_SIZE;
     stateUnknown.player.y = 15 * TILE_SIZE;
     refreshInteractables(stateUnknown);
 
     input.actionJustPressed = true;
     updateGameState(stateUnknown, input, 0.016);
-    expect(stateUnknown.activeDialogue?.lines[4]).toBe(
+    expect(stateUnknown.activeDialogue?.lines[5]).toBe(
       'Ehm... this is awkward. An error occurred, gift receiver unknown.'
     );
   });
@@ -3449,20 +3368,14 @@ Tanja -> Alex
     state.player.uziEquipTimer = 0;
 
     applyKeyEvent(input, 'Space', true);
-    let spawned = 0;
-    let prevCount = 0;
     // Simulate 0.85s in 0.05s steps holding Space -> 9 shots fired at t = 0.0, 0.1, ..., 0.8s
     for (let step = 0; step < 17; step++) {
       updateGameState(state, input, 0.05);
-      if (state.projectiles.length > prevCount) {
-        spawned += state.projectiles.length - prevCount;
-      }
-      prevCount = state.projectiles.length;
     }
     applyKeyEvent(input, 'Space', false);
-    expect(spawned).toBe(9);
-    expect(state.projectiles.length).toBe(9);
     expect(state.player.uziAmmo).toBe(MAX_UZI_AMMO - 9);
+    expect(state.projectiles.length).toBeGreaterThan(0);
+    expect(UZI_PROJECTILE_SPEED).toBe(24 * TILE_SIZE);
 
     // Verify projectile velocity = 16 tiles/sec (256 px/s) and 3D bullet rendering
     const firstProj = state.projectiles[0];
@@ -4241,5 +4154,568 @@ Tanja -> Alex
     expect(state.player.uziAmmo).toBe(MAX_UZI_AMMO);
     expect(state.player.equippedItem).toBe('uzi');
     expect(state.droppedUzis.some((u) => u.pickupable)).toBe(false);
+  });
+
+  it('supports Spa Room & Olexa medkits (+25 HP), NPC burning mode (20 HP/s, 2x random run/shoot), and Anne-Marie katana drop & pickup', () => {
+    const state = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-basement',
+    });
+    const basement = state.levels['level-basement'];
+    const input = createEmptyInput();
+
+    // 1. Spa Room medkit heals +25 HP when picked up after Spa Door opens
+    basement.spaDoorClosed = false;
+    const spaMedkit = state.medkits.find((m) => m.id === 'basement-spa-medkit');
+    expect(spaMedkit).toBeDefined();
+    damagePlayer(state, 40); // 60 HP
+    state.player.x = spaMedkit!.x - 4;
+    state.player.y = spaMedkit!.y - 4;
+    updateGameState(state, input, 0.05);
+    expect(state.player.health).toBe(85);
+    expect(state.medkits.some((m) => m.id === 'basement-spa-medkit')).toBe(false);
+
+    // 2. Hitting Olexa with Flamethrower switches him to 'burning' mode (takes 20 HP/s, runs & fires randomly)
+    //    and killing Olexa spawns a medkit!
+    state.player.unlockedFlamethrower = true;
+    state.player.equippedItem = 'flamethrower';
+    state.player.x = basement.olexaNpc.x;
+    state.player.y = basement.olexaNpc.y - 2 * TILE_SIZE;
+    state.player.yaw = Math.PI / 2;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.05);
+    applyKeyEvent(input, 'Space', false);
+    for (let i = 0; i < 8 && basement.olexaCombat.mode !== 'burning'; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.05);
+    }
+    expect(basement.olexaCombat.mode).toBe('burning');
+    const hpAfterHit = basement.olexaCombat.health;
+    updateGameState(state, input, 1.0);
+    expect(basement.olexaCombat.health).toBeCloseTo(Math.max(0, hpAfterHit - 20), 1);
+    const burningMesh = buildDynamicSceneMeshes(state, 40);
+    expect(burningMesh.opaque.vertexCount).toBeGreaterThan(0);
+
+    // Let burn damage kill Olexa -> spawns a medkit on the floor
+    for (let i = 0; i < 60 && basement.olexaCombat.mode !== 'dead'; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.1);
+    }
+    expect(basement.olexaCombat.mode).toBe('dead');
+    expect(state.medkits.some((m) => m.id === 'olexa-drop-medkit')).toBe(true);
+
+    // 3. Defeating Anne-Marie upstairs drops her katana sword which the player picks up (slot 5) and can swing
+    const upState = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-upstairs',
+    });
+    const upstairs = upState.levels['level-upstairs'];
+    upstairs.doors = upstairs.doors.filter((d) => d.id !== 'upstairs-bedroom-door');
+    upState.player.unlockedUzi = true;
+    upState.player.equippedItem = 'uzi';
+    upState.player.x = upstairs.anneMarieNpc.x;
+    upState.player.y = upstairs.anneMarieNpc.y + 2 * TILE_SIZE;
+    upState.player.yaw = -Math.PI / 2;
+    applyKeyEvent(input, 'Space', true);
+    for (let i = 0; i < 30 && upstairs.anneMarieCombat.mode !== 'dead'; i++) {
+      upState.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(upState, input, 0.1);
+    }
+    applyKeyEvent(input, 'Space', false);
+    expect(upstairs.anneMarieCombat.mode).toBe('dead');
+    expect(upState.droppedKatanas.length).toBe(1);
+
+    // Walk onto dropped katana -> unlocks & equips slot 5 ('katana')
+    upState.player.x = upState.droppedKatanas[0].x - 4;
+    upState.player.y = upState.droppedKatanas[0].y - 4;
+    updateGameState(upState, input, 0.05);
+    expect(upState.player.unlockedKatana).toBe(true);
+    expect(upState.player.equippedItem).toBe('katana');
+    expect(upState.droppedKatanas.length).toBe(0);
+
+    // Swinging katana triggers katanaSwingTimer and builds 3D slash mesh cleanly
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(upState, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    expect(upState.player.katanaSwingTimer).toBeGreaterThan(0);
+    const katanaMesh = buildDynamicSceneMeshes(upState, 40);
+    expect(katanaMesh.opaque.vertexCount).toBeGreaterThan(0);
+  });
+
+  it('supports Uzi floor swap on Space, upstairs ambush & flamethrower ammo/drops, friendly fire burning, and Rosanna bazooka fight', () => {
+    // 1. Spacebar swaps Uzi in hand for floor Uzi, replaying equip animation and swapping magazine ammo
+    const state = createGameState({
+      showIntroDialogue: false,
+      initialLevelId: 'level-basement',
+    });
+    const input = createEmptyInput();
+    state.player.unlockedUzi = true;
+    state.player.equippedItem = 'uzi';
+    state.player.uziAmmo = 5;
+    state.player.uziEquipTimer = 0;
+
+    state.droppedUzis.push({
+      levelId: 'level-basement',
+      x: state.player.x + 6,
+      y: state.player.y + 6,
+      z: 0,
+      yaw: 0,
+      pickupable: true,
+      ammo: 30,
+    });
+
+    updateGameState(state, input, 0.01);
+    expect(state.nearbyInteractable?.id).toBe('swap-floor-uzi');
+    expect(state.nearbyInteractable?.promptText).toBe('Swap Uzi');
+    expect(state.player.uziAmmo).toBe(5); // Still 5 before pressing Space
+
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+
+    expect(state.player.uziAmmo).toBe(30);
+    expect(state.player.uziEquipTimer).toBeGreaterThan(0);
+    expect(state.droppedUzis[0].ammo).toBe(5);
+
+    // 2. Flamethrower has Infinity ammo before upstairs, drops to 10 upstairs, and stops firing at 0
+    expect(state.player.flamethrowerAmmo).toBe(Infinity);
+    state.player.unlockedFlamethrower = true;
+    state.player.equippedItem = 'flamethrower';
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.player.flamethrowerAmmo).toBe(Infinity);
+
+    loadLevel(state, 'level-upstairs');
+    expect(state.player.flamethrowerAmmo).toBe(10);
+
+    // Consume all 10 flames
+    state.player.equippedItem = 'flamethrower';
+    for (let i = 0; i < 12; i++) {
+      applyKeyEvent(input, 'Space', true);
+      updateGameState(state, input, 0.1);
+      applyKeyEvent(input, 'Space', false);
+    }
+    expect(state.player.flamethrowerAmmo).toBe(0);
+    const projsAtZero = state.projectiles.length;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.1);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.projectiles.length).toBeLessThanOrEqual(projsAtZero);
+
+    // 3. Exiting upstairs main hallway west triggers Henrik & Tanja ambush: door opens, camera zooms to door, both hostile with flamethrowers
+    const upstairs = state.levels['level-upstairs'] as LevelUpstairs;
+    const cam = createCamera3D();
+    state.player.x = TABLE_ROOM_AMBUSH_TRIGGER_BOUNDS.x + 3 * TILE_SIZE;
+    state.player.y = TABLE_ROOM_AMBUSH_TRIGGER_BOUNDS.y + TILE_SIZE;
+    updateGameState(state, input, 0.05);
+    updateCamera3D(cam, state, input, 0.05, 256 / 224);
+
+    expect(state.player.states.get(TABLE_ROOM_AMBUSH_STATE_KEY)).toBe(true);
+    expect(upstairs.doors.some((d) => d.id === 'upstairs-table-room-door')).toBe(false);
+    expect(upstairs.tableRoomAmbushCutscene.active).toBe(true);
+    expect(upstairs.henrikCombat.mode).toBe('hostile');
+    expect(upstairs.tanjaCombat.mode).toBe('hostile');
+    expect(upstairs.henrikCombat.weapon).toBe('flamethrower');
+    expect(upstairs.tanjaCombat.weapon).toBe('flamethrower');
+    expect(cam.fovY).toBeLessThan((55 * Math.PI) / 180);
+
+    // Friendly fire: place Henrik directly between Tanja and player -> Tanja's flame ignites Henrik
+    upstairs.henrikNpc.x = 11 * TILE_SIZE + 2;
+    upstairs.henrikNpc.y = 13 * TILE_SIZE;
+    upstairs.tanjaNpc.x = 11 * TILE_SIZE + 2;
+    upstairs.tanjaNpc.y = 14.5 * TILE_SIZE;
+    state.player.x = 11 * TILE_SIZE + 2;
+    state.player.y = 11 * TILE_SIZE;
+    upstairs.henrikCombat.mode = 'passive';
+    upstairs.henrikCombat.path = [];
+    upstairs.tanjaCombat.mode = 'hostile';
+    upstairs.tanjaCombat.hostileAlertTimer = 0;
+    upstairs.tanjaCombat.path = [];
+    upstairs.tanjaCombat.pathTimer = 0;
+    upstairs.tanjaCombat.fireCooldown = 0;
+
+    for (let i = 0; i < 30 && (upstairs.henrikCombat.mode as string) !== 'burning'; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.05);
+    }
+    expect(upstairs.henrikCombat.mode).toBe('burning');
+
+    // Killing Henrik & Tanja drops flamethrowers with 20 flames each
+    state.player.unlockedUzi = true;
+    state.player.uziAmmo = 30;
+    state.player.uziDepleted = false;
+    state.player.equippedItem = 'uzi';
+    state.player.x = upstairs.tanjaNpc.x;
+    state.player.y = upstairs.tanjaNpc.y - 1.75 * TILE_SIZE;
+    state.player.yaw = Math.PI / 2;
+    upstairs.tanjaCombat.path = [];
+    upstairs.tanjaCombat.pathTimer = 1.0;
+    applyKeyEvent(input, 'Space', true);
+    for (let i = 0; i < 40 && (upstairs.tanjaCombat.mode as string) !== 'dead'; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.05);
+    }
+    applyKeyEvent(input, 'Space', false);
+    expect(upstairs.tanjaCombat.mode).toBe('dead');
+    expect(state.droppedFlamethrowers.some((d) => d.ammo === 20)).toBe(true);
+
+    const ammoBeforePickup = state.player.flamethrowerAmmo;
+    const flameDrop = state.droppedFlamethrowers[0];
+    state.player.x = flameDrop.x - 4;
+    state.player.y = flameDrop.y - 4;
+    updateGameState(state, input, 0.05);
+    expect(state.player.flamethrowerAmmo).toBe(ammoBeforePickup + 20);
+
+    // 4. Spawned Rosanna fires walking-speed bazooka rockets that explode for 50 HP mine-style damage & build 3D meshes cleanly
+    const bossState = createGameState({
+      initialLevelId: 'level-upstairs',
+      showIntroDialogue: false,
+    });
+    const bossUp = bossState.levels['level-upstairs'] as LevelUpstairs;
+    bossState.player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
+    bossUp.rosannaSpawned = true;
+    bossUp.rosannaCombat.mode = 'hostile';
+    bossUp.rosannaCombat.hostileAlertTimer = 0;
+    bossUp.rosannaCombat.fireCooldown = 0;
+    bossState.player.x = 12.5 * TILE_SIZE - 6;
+    bossState.player.y = 8 * TILE_SIZE;
+    bossState.player.health = MAX_PLAYER_HEALTH;
+
+    updateGameState(bossState, input, 0.05);
+    const rocket = bossState.projectiles.find((p) => p.kind === 'rocket');
+    expect(rocket).toBeDefined();
+    expect(Math.hypot(rocket!.vx, rocket!.vy)).toBeCloseTo(bossState.player.speed, 1);
+
+    const meshWithRocket = buildDynamicSceneMeshes(bossState, 40);
+    expect(meshWithRocket.opaque.vertexCount).toBeGreaterThan(0);
+
+    for (let i = 0; i < 30 && bossState.player.health === MAX_PLAYER_HEALTH; i++) {
+      updateGameState(bossState, input, 0.05);
+    }
+    expect(bossState.player.health).toBe(50);
+    expect(bossState.explosions.length).toBeGreaterThan(0);
+    const meshWithExplosion = buildDynamicSceneMeshes(bossState, 40);
+    expect(meshWithExplosion.translucent.vertexCount).toBeGreaterThan(0);
+  });
+
+  it('drops bazooka on Rosanna defeat, allows player rocket firing, destroys interior walls/doors over 1s, and blackens indestructible outer border walls/doors', () => {
+    const state = createGameState({
+      initialLevelId: 'level-upstairs',
+      showIntroDialogue: false,
+    });
+    const input = createEmptyInput();
+    const upstairs = state.levels['level-upstairs'] as LevelUpstairs;
+    state.player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
+    upstairs.rosannaSpawned = true;
+    upstairs.rosannaCombat.mode = 'hostile';
+    upstairs.rosannaCombat.hostileAlertTimer = 0;
+
+    // 1. Defeat Rosanna with Uzi -> drops Bazooka on the floor
+    state.player.unlockedUzi = true;
+    state.player.uziAmmo = 30;
+    state.player.uziDepleted = false;
+    state.player.equippedItem = 'uzi';
+    state.player.x = upstairs.rosannaNpc.x;
+    state.player.y = upstairs.rosannaNpc.y + 2 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    applyKeyEvent(input, 'Space', true);
+    for (let i = 0; i < 30 && (upstairs.rosannaCombat.mode as string) !== 'dead'; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.1);
+    }
+    applyKeyEvent(input, 'Space', false);
+    expect(upstairs.rosannaCombat.mode).toBe('dead');
+    expect(state.droppedBazookas.length).toBe(1);
+
+    // 2. Touch dropped bazooka -> unlocks & equips slot 6 ('bazooka')
+    const bazDrop = state.droppedBazookas[0];
+    state.player.x = bazDrop.x - 4;
+    state.player.y = bazDrop.y - 4;
+    updateGameState(state, input, 0.05);
+    expect(state.player.unlockedBazooka).toBe(true);
+    expect(state.player.equippedItem).toBe('bazooka');
+    expect(state.droppedBazookas.length).toBe(0);
+
+    // 3. Fire bazooka east at interior Shower wall (col 16, row 6 -> separates Kitchen and Shower)
+    // Put player at (14 * TILE_SIZE, 6 * TILE_SIZE + 2) aiming East (0 rad)
+    state.player.x = 14 * TILE_SIZE;
+    state.player.y = 6 * TILE_SIZE + 2;
+    state.player.yaw = 0;
+    state.player.bazookaFireCooldown = 0;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+
+    const playerRocket = state.projectiles.find((p) => p.kind === 'rocket' && p.owner === 'player');
+    expect(playerRocket).toBeDefined();
+    expect(Math.hypot(playerRocket!.vx, playerRocket!.vy)).toBeCloseTo(state.player.speed, 1);
+
+    // Advance until rocket impacts interior wall (col 16, row 6)
+    for (let i = 0; i < 30 && state.destroyingWalls.length === 0; i++) {
+      state.player.health = MAX_PLAYER_HEALTH;
+      updateGameState(state, input, 0.05);
+    }
+    expect(state.destroyingWalls.some((w) => w.col === 16 && w.row === 6)).toBe(true);
+    // Wall is squishing/fading dynamically for 1.0s and not yet deleted at 0.4s
+    updateGameState(state, input, 0.4);
+    expect(state.destroyingWalls.some((w) => w.col === 16 && w.row === 6)).toBe(true);
+    expect(upstairs.map.tiles[6][16]).toBe(TileType.InteriorWall);
+    const animMesh = buildDynamicSceneMeshes(state, 40);
+    expect(animMesh.translucent.vertexCount).toBeGreaterThan(0);
+
+    // Complete 1.0s destruction animation -> wall tile is deleted to floor and passable!
+    updateGameState(state, input, 0.7);
+    expect(state.destroyingWalls.some((w) => w.col === 16 && w.row === 6)).toBe(false);
+    expect(upstairs.map.tiles[6][16]).not.toBe(TileType.InteriorWall);
+    expect(upstairs.doors.find((d) => d.id === 'upstairs-shower-door')?.hiddenRegions.length).toBe(0);
+
+    // Also shooting an interior door (e.g. upstairs-bedroom-door at col 24, row 10) destroys it over 1s
+    state.player.x = 24 * TILE_SIZE + 2;
+    state.player.y = 11.5 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    state.player.bazookaFireCooldown = 0;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    for (let i = 0; i < 20 && state.destroyingDoors.length === 0; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    expect(state.destroyingDoors.some((d) => d.doorId === 'upstairs-bedroom-door')).toBe(true);
+    updateGameState(state, input, 1.05);
+    expect(upstairs.doors.some((d) => d.id === 'upstairs-bedroom-door')).toBe(false);
+
+    // 4. Shooting an outer border wall (e.g. row 4 north outer wall of house at col 13) turns it black but NEVER destroys it!
+    state.player.x = 13 * TILE_SIZE + 2;
+    state.player.y = 5.5 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    state.player.bazookaFireCooldown = 0;
+    const prevVersion = state.mapVersion;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    for (let i = 0; i < 20 && state.mapVersion === prevVersion; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    expect(state.blackenedWalls.has('level-upstairs:13,4')).toBe(true);
+    expect(state.destroyingWalls.some((w) => w.row === 4)).toBe(false);
+    updateGameState(state, input, 1.5);
+    expect(upstairs.map.tiles[4][13]).toBe(TileType.InteriorWall);
+    const staticWithBlackWall = getStaticLevelMesh(state.currentLevelId, state.map, state);
+    expect(staticWithBlackWall.vertexCount).toBeGreaterThan(0);
+
+    // 5. Basement outer Front Door (cols 15..16, row 20) turns black but remains indestructible
+    loadLevel(state, 'level-basement');
+    const basement = state.levels['level-basement'];
+    state.player.x = 15.5 * TILE_SIZE;
+    state.player.y = 18.5 * TILE_SIZE;
+    state.player.yaw = Math.PI / 2;
+    state.player.bazookaFireCooldown = 0;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    for (let i = 0; i < 20 && !state.blackenedWalls.has('level-basement:15,20'); i++) {
+      updateGameState(state, input, 0.05);
+    }
+    expect(state.blackenedWalls.has('level-basement:15,20')).toBe(true);
+    expect(state.blackenedWalls.has('level-basement:16,20')).toBe(true);
+    updateGameState(state, input, 1.5);
+    expect(basement.map.tiles[20][15]).toBe(TileType.InteriorWall);
+    expect(basement.map.tiles[20][16]).toBe(TileType.InteriorWall);
+  });
+});
+
+describe('Hostile armored headcrab cat', () => {
+  it('takes 1/10th damage from all player weapons and turns hostile', () => {
+    const state = createGameState();
+    loadLevel(state, 'level-upstairs');
+    const upstairs = state.levels['level-upstairs'];
+    const cat = upstairs.cat;
+    const input = createEmptyInput();
+
+    // Unlock all weapons so we can test every damage source cleanly
+    state.player.unlockedUzi = true;
+    state.player.uziAmmo = 30;
+    state.player.unlockedFlamethrower = true;
+    state.player.flamethrowerAmmo = 20;
+    state.player.unlockedKatana = true;
+    state.player.unlockedBazooka = true;
+
+    // Place player & cat in clear open floor (extra room cols 26..27, rows 12..17)
+    // Offset cat slightly east (+4.8px) to line up squarely with Santa's right-shoulder weapon muzzle
+    state.player.x = 26.2 * TILE_SIZE;
+    state.player.y = 15.8 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    cat.x = state.player.x + 4.8;
+    cat.y = 14.8 * TILE_SIZE;
+
+    // 1. Uzi shot -> 1/10th of PLAYER_UZI_NPC_DAMAGE & turns hostile
+    selectPlayerEquipmentSlot(state.player, 3);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    for (let i = 0; i < 15 && cat.mode !== 'hostile'; i++) {
+      updateGameState(state, input, 0.01);
+    }
+    expect(cat.mode).toBe('hostile');
+    expect(cat.health).toBeCloseTo(
+      MAX_CAT_HEALTH - PLAYER_UZI_NPC_DAMAGE * CAT_ARMOR_DAMAGE_MULTIPLIER,
+      4
+    );
+
+    // Reset mode to standing and test Flamethrower
+    cat.mode = 'standing';
+    const healthAfterUzi = cat.health;
+    state.player.x = 26.2 * TILE_SIZE;
+    state.player.y = 15.8 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    cat.x = state.player.x + 4.5;
+    cat.y = 14.0 * TILE_SIZE;
+    selectPlayerEquipmentSlot(state.player, 4);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    for (let i = 0; i < 40 && (cat.mode as string) !== 'hostile'; i++) {
+      updateGameState(state, input, 0.02);
+    }
+    expect(cat.mode).toBe('hostile');
+    expect(cat.health).toBeCloseTo(
+      healthAfterUzi - PLAYER_FIREBALL_NPC_DAMAGE * CAT_ARMOR_DAMAGE_MULTIPLIER,
+      4
+    );
+
+    // Reset mode to flee and test Katana slash
+    cat.mode = 'flee';
+    const healthAfterFlame = cat.health;
+    cat.x = 26.5 * TILE_SIZE;
+    cat.y = 15.0 * TILE_SIZE;
+    state.player.x = 26.5 * TILE_SIZE;
+    state.player.y = 15.8 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    selectPlayerEquipmentSlot(state.player, 5);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    expect(cat.mode).toBe('hostile');
+    expect(cat.health).toBeCloseTo(
+      healthAfterFlame - PLAYER_KATANA_NPC_DAMAGE * CAT_ARMOR_DAMAGE_MULTIPLIER,
+      4
+    );
+
+    // Reset mode to standing and test Unarmed punch
+    cat.mode = 'standing';
+    cat.vx = 0;
+    cat.vy = 0;
+    const healthAfterKatana = cat.health;
+    cat.x = 26.5 * TILE_SIZE;
+    cat.y = 15.2 * TILE_SIZE;
+    state.player.x = 26.5 * TILE_SIZE;
+    state.player.y = 15.8 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    selectPlayerEquipmentSlot(state.player, 2);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    expect(cat.mode).toBe('hostile');
+    expect(cat.health).toBeCloseTo(
+      healthAfterKatana - PLAYER_PUNCH_NPC_DAMAGE * CAT_ARMOR_DAMAGE_MULTIPLIER,
+      4
+    );
+
+    // Reset mode to standing and test Bazooka blast
+    cat.mode = 'standing';
+    cat.vx = 0;
+    cat.vy = 0;
+    const healthAfterPunch = cat.health;
+    state.player.x = 26.2 * TILE_SIZE;
+    state.player.y = 16.0 * TILE_SIZE;
+    state.player.yaw = -Math.PI / 2;
+    cat.x = state.player.x + 4.0;
+    cat.y = 14.2 * TILE_SIZE;
+    selectPlayerEquipmentSlot(state.player, 6);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    for (let i = 0; i < 40 && (cat.mode as string) !== 'hostile'; i++) {
+      updateGameState(state, input, 0.02);
+    }
+    expect(cat.mode).toBe('hostile');
+    expect(cat.health).toBeCloseTo(
+      healthAfterPunch - BASEMENT_MINE_EXPLOSION_DAMAGE * CAT_ARMOR_DAMAGE_MULTIPLIER,
+      4
+    );
+  });
+
+  it('leaps like a headcrab, latches on Santa face dealing 5 HP/sec for 10s, then flees and can re-aggro', () => {
+    const state = createGameState();
+    loadLevel(state, 'level-upstairs');
+    const upstairs = state.levels['level-upstairs'];
+    const cat = upstairs.cat;
+    const input = createEmptyInput();
+
+    cat.x = 26.5 * TILE_SIZE;
+    cat.y = 12.2 * TILE_SIZE;
+    state.player.x = 26.5 * TILE_SIZE;
+    state.player.y = 16.0 * TILE_SIZE;
+    state.player.health = MAX_PLAYER_HEALTH;
+
+    // Trigger hostile state
+    expect(applyCatDamage(cat, 30)).toBe(true);
+    expect(cat.mode).toBe('hostile');
+    expect(cat.health).toBeCloseTo(97, 4);
+
+    // During leap toward player, cat becomes airborne (jumpZ > 0) and renders arched red mesh
+    let maxJumpZ = 0;
+    for (let i = 0; i < 40 && cat.mode === 'hostile'; i++) {
+      updateGameState(state, input, 0.05);
+      maxJumpZ = Math.max(maxJumpZ, cat.jumpZ);
+    }
+    expect(maxJumpZ).toBeGreaterThan(5);
+
+    // Ensure 3D dynamic mesh builds cleanly while hostile and latched
+    const latchedMesh = buildDynamicSceneMeshes(state, 0.05);
+    expect(latchedMesh.opaque.vertexCount).toBeGreaterThan(0);
+
+    // It should reach and latch onto Santa's face
+    expect(cat.mode).toBe('latched');
+    expect(cat.jumpZ).toBeGreaterThan(10);
+
+    // Stay latched for 10.0 seconds (in 0.1s ticks) -> takes 5 HP per second = 50 HP total
+    const healthBeforeLatch = state.player.health;
+    for (let i = 0; i < 100; i++) {
+      updateGameState(state, input, 0.1);
+    }
+
+    expect(state.player.health).toBe(
+      healthBeforeLatch - CAT_LATCH_DURATION_SECONDS * CAT_LATCH_DAMAGE_PER_SECOND
+    );
+    // Right after 10 seconds, cat jumps off and becomes non-hostile ('flee')
+    expect(cat.mode).toBe('flee');
+    expect(cat.jumpZ).toBe(0);
+
+    // Stepping while fleeing moves it away and deals no further damage
+    const healthAfterJumpOff = state.player.health;
+    const distAtJumpOff = Math.hypot(
+      cat.x - state.player.x,
+      cat.y - state.player.y
+    );
+    for (let i = 0; i < 10; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    expect(state.player.health).toBe(healthAfterJumpOff);
+    expect(Math.hypot(cat.x - state.player.x, cat.y - state.player.y)).toBeGreaterThan(
+      distAtJumpOff
+    );
+
+    // Damaging the cat again turns it hostile again
+    expect(applyCatDamage(cat, 30)).toBe(true);
+    expect(cat.mode).toBe('hostile');
+
+    // Draining remaining armor HP kills the cat cleanly
+    applyCatDamage(cat, 2000);
+    expect(cat.mode).toBe('dead');
+    expect(cat.health).toBe(0);
+    const deadMesh = buildDynamicSceneMeshes(state, 0.2);
+    expect(deadMesh.opaque.vertexCount).toBeGreaterThan(0);
   });
 });

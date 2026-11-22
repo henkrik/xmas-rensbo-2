@@ -20,6 +20,7 @@ import { Dog } from '../entities/dog';
 import { NPC_UZI_RELOAD_SECONDS } from '../entities/npcCombat';
 import {
   EquipmentId,
+  KATANA_SWING_DURATION_SECONDS,
   PUNCH_DURATION_SECONDS,
   UZI_DROP_DURATION_SECONDS,
   UZI_EQUIP_DURATION_SECONDS,
@@ -35,11 +36,14 @@ import {
   STAIRS_WOOD_BURN_DURATION,
 } from '../world/levels/levelBasement';
 import {
+  C4_PLACED_STATE_KEY,
+  C4_TAKEN_STATE_KEY,
   DIANA_DISTRACTED_KEY,
   DIANA_PRESENT_TAKEN_KEY,
   SIMON_DISTRACTED_KEY,
   SIMON_PRESENT_TAKEN_KEY,
   UPSTAIRS_ALBIN_X,
+  UPSTAIRS_C4_BOUNDS,
   UPSTAIRS_DIANA_PRESENT_BOUNDS,
   UPSTAIRS_SIMON_PRESENT_BOUNDS,
 } from '../world/levels/levelUpstairs';
@@ -1266,6 +1270,11 @@ interface IndoorWallOptions {
   openableDoorCoords?: ReadonlyArray<readonly [number, number]>;
   /** Optional floor rectangle (e.g. descending stairwell opening) where flat y=0 floor tiles are omitted. */
   skipFloorRect?: { minCol: number; maxCol: number; minRow: number; maxRow: number };
+  /** Outer border wall/door coordinates blackened by rocket impacts ("levelId:col,row"). */
+  blackenedKeys?: ReadonlySet<string>;
+  /** Currently squishing/fading interior walls ("col,row" -> floor tile replacement). */
+  destroyingWalls?: ReadonlyMap<string, TileType>;
+  levelId?: LevelId;
 }
 
 function tileKey(col: number, row: number): string {
@@ -1280,7 +1289,8 @@ function addStandardWallTile3D(
   wallHeight: number,
   trimAdjacentWidth = 0,
   hasWallX = false,
-  hasWallZ = false
+  hasWallZ = false,
+  blackened = false
 ): void {
   const wainscotH = 10.6;
   const trimW = hasWallX
@@ -1289,6 +1299,11 @@ function addStandardWallTile3D(
   const trimDBase = hasWallZ ? ts : ts + 0.35;
   const trimDRail = hasWallZ ? ts : ts + 0.45;
   const crownW = hasWallX ? trimW : trimW + 0.1;
+
+  if (blackened) {
+    mb.addBox(cx, 0, cz, ts + 0.1, wallHeight, ts + 0.1, rgb(18, 18, 22), TexId.SOLID, 0.35);
+    return;
+  }
 
   // 1. Dark walnut baseboard plinth (y = 0..1.8)
   mb.addBox(cx, 0, cz, trimW, 1.8, trimDBase, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
@@ -1325,29 +1340,33 @@ function addWindowWallTile3D(
   cz: number,
   ts: number,
   wallHeight: number,
-  kind: 'window-south' | 'window-north' | 'window-north-transparent'
+  kind: 'window-south' | 'window-north' | 'window-north-transparent',
+  blackened = false
 ): void {
   const sillY = 7.4;
   const headerY = 25.4;
+  const soot = rgb(20, 20, 26);
 
   // Lower wall below the window (baseboard + short wainscoting + oak window sill)
-  mb.addBox(cx, 0, cz, ts + 0.25, 1.6, ts + 0.3, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
-  mb.addBox(cx, 1.6, cz, ts, sillY - 1.6, ts, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.45);
-  mb.addBeveledBox(cx, sillY, cz, ts + 0.2, 1.2, ts + 1.4, 0.3, rgb(138, 92, 52), TexId.WOOD_GRAIN, 0.45);
+  mb.addBox(cx, 0, cz, ts + 0.25, 1.6, ts + 0.3, blackened ? soot : rgb(110, 72, 42), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.35);
+  mb.addBox(cx, 1.6, cz, ts, sillY - 1.6, ts, blackened ? soot : rgb(228, 220, 206), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
+  mb.addBeveledBox(cx, sillY, cz, ts + 0.2, 1.2, ts + 1.4, 0.3, blackened ? soot : rgb(138, 92, 52), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
 
   // Upper wall lintel above the window + crown molding
-  mb.addBox(cx, headerY, cz, ts, wallHeight - headerY - 1.8, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
-  mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.25, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+  mb.addBox(cx, headerY, cz, ts, wallHeight - headerY - 1.8, ts, blackened ? soot : rgb(236, 226, 208), blackened ? TexId.SOLID : TexId.INTERIOR_WALL, 0.55);
+  mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.25, 1.8, ts + 0.45, 0.35, blackened ? soot : rgb(92, 60, 38), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
 
   // Side wooden window mullions & top transom bar
   const openH = headerY - (sillY + 1.2);
-  mb.addBox(cx - ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.4);
-  mb.addBox(cx + ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.4);
-  mb.addBox(cx, sillY + 1.2 + openH * 0.55, cz, ts - 1.6, 1.1, 3.6, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.3);
+  const frameColor = blackened ? soot : rgb(116, 74, 42);
+  const frameTex = blackened ? TexId.SOLID : TexId.WOOD_GRAIN;
+  mb.addBox(cx - ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, frameColor, frameTex, 0.4);
+  mb.addBox(cx + ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, frameColor, frameTex, 0.4);
+  mb.addBox(cx, sillY + 1.2 + openH * 0.55, cz, ts - 1.6, 1.1, 3.6, frameColor, frameTex, 0.3);
 
   if (kind !== 'window-north-transparent') {
-    // Warm frosted casement window pane so interiors stay cozy at night
-    mb.addBox(cx, sillY + 1.2, cz, ts - 2.6, openH - 0.2, 2.2, rgb(252, 232, 158), TexId.WINDOW_GLOW, 0.35);
+    // Warm frosted casement window pane (or charred dark glass when blackened)
+    mb.addBox(cx, sillY + 1.2, cz, ts - 2.6, openH - 0.2, 2.2, blackened ? rgb(28, 28, 34) : rgb(252, 232, 158), blackened ? TexId.SOLID : TexId.WINDOW_GLOW, 0.35);
   }
 }
 
@@ -1357,11 +1376,13 @@ function addDoorWallLintelTile3D(
   row: number,
   ts: number,
   wallHeight: number,
-  side: 'door-left' | 'door-right'
+  side: 'door-left' | 'door-right',
+  blackened = false
 ): void {
   const cx = col * ts + ts * 0.5;
   const cz = row * ts + ts * 0.5;
   const doorHeight = 24.4;
+  const soot = rgb(20, 20, 26);
 
   // Floor threshold beneath the door leaf so there is never a black gap when close to the doorway
   mb.addQuad(
@@ -1377,14 +1398,14 @@ function addDoorWallLintelTile3D(
 
   // Outer door casing jamb + carved oak architrave header bar
   const jambX = side === 'door-left' ? col * ts + 1.1 : (col + 1) * ts - 1.1;
-  mb.addBox(jambX, 0, cz, 2.2, doorHeight, ts * 0.85, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
-  mb.addBeveledBox(cx, doorHeight, cz, ts, 1.4, ts + 0.5, 0.25, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+  mb.addBox(jambX, 0, cz, 2.2, doorHeight, ts * 0.85, blackened ? soot : rgb(104, 66, 36), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
+  mb.addBeveledBox(cx, doorHeight, cz, ts, 1.4, ts + 0.5, 0.25, blackened ? soot : rgb(104, 66, 36), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
 
   // Upper wall lintel (y = doorHeight + 1.4 .. wallHeight - 1.8) + crown molding
   const lintelY = doorHeight + 1.4;
   const lintelH = Math.max(1.5, wallHeight - 1.8 - lintelY);
-  mb.addBox(cx, lintelY, cz, ts, lintelH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
-  mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.2, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+  mb.addBox(cx, lintelY, cz, ts, lintelH, ts, blackened ? soot : rgb(236, 226, 208), blackened ? TexId.SOLID : TexId.INTERIOR_WALL, 0.55);
+  mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.2, 1.8, ts + 0.45, 0.35, blackened ? soot : rgb(92, 60, 38), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
 }
 
 /**
@@ -1416,21 +1437,28 @@ function addDoorwayFrameAndHeader3D(
   mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.2, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
 }
 
-function addLockedDoubleDoor3D(mb: MeshBuilder, cx: number, cz: number, ts: number): void {
+function addLockedDoubleDoor3D(
+  mb: MeshBuilder,
+  cx: number,
+  cz: number,
+  ts: number,
+  blackened = false
+): void {
   const leafW = ts - 2.6;
   const leafH = 24.0;
+  const soot = rgb(20, 20, 26);
   for (const offsetX of [-ts * 0.5 + 0.9, ts * 0.5 - 0.9]) {
     const lx = cx + offsetX;
     // Tall paneled door slab recessed cleanly inside the 2-tile doorway
-    mb.addBeveledBox(lx, 0, cz, leafW, leafH, 3.8, 0.4, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
+    mb.addBeveledBox(lx, 0, cz, leafW, leafH, 3.8, 0.4, blackened ? soot : rgb(124, 68, 34), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.65);
     // Lower and upper raised door panels on both faces
-    mb.addBox(lx, 2.4, cz, leafW * 0.68, 7.2, 4.4, rgb(146, 86, 46), TexId.WOOD_GRAIN, 0.3);
-    mb.addBox(lx, 12.2, cz, leafW * 0.68, 9.2, 4.4, rgb(146, 86, 46), TexId.WOOD_GRAIN, 0.3);
+    mb.addBox(lx, 2.4, cz, leafW * 0.68, 7.2, 4.4, blackened ? rgb(28, 28, 34) : rgb(146, 86, 46), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.3);
+    mb.addBox(lx, 12.2, cz, leafW * 0.68, 9.2, 4.4, blackened ? rgb(28, 28, 34) : rgb(146, 86, 46), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.3);
   }
   // Brass double doorknobs on both sides
   for (const dz of [-2.4, 2.4]) {
-    mb.addSphere(cx - 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
-    mb.addSphere(cx + 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
+    mb.addSphere(cx - 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, blackened ? rgb(48, 48, 54) : rgb(250, 214, 72), TexId.SOLID, 0.35);
+    mb.addSphere(cx + 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, blackened ? rgb(48, 48, 54) : rgb(250, 214, 72), TexId.SOLID, 0.35);
   }
 }
 
@@ -1532,16 +1560,19 @@ function addIndoorTilesAndWalls(
       const cx = c * ts + ts * 0.5;
       const cz = r * ts + ts * 0.5;
 
-      if (tile === TileType.InteriorWall) {
+      const destroyingFloor = options?.destroyingWalls?.get(tileKey(c, r));
+      if (tile === TileType.InteriorWall && destroyingFloor === undefined) {
         const override = overrides?.get(tileKey(c, r));
+        const blackKey = options?.levelId ? `${options.levelId}:${c},${r}` : `${c},${r}`;
+        const blackened = options?.blackenedKeys?.has(blackKey) === true;
         if (override === 'door-left' || override === 'door-right') {
-          addDoorWallLintelTile3D(mb, c, r, ts, wallHeight, override);
+          addDoorWallLintelTile3D(mb, c, r, ts, wallHeight, override, blackened);
         } else if (
           override === 'window-south' ||
           override === 'window-north' ||
           override === 'window-north-transparent'
         ) {
-          addWindowWallTile3D(mb, cx, cz, ts, wallHeight, override);
+          addWindowWallTile3D(mb, cx, cz, ts, wallHeight, override, blackened);
         } else {
           // Slight trim pullback if an openable door sits directly to the East or West so moldings don't overhang the door leaf
           const leftDoor = openableSet.has(tileKey(c - 1, r)) || overrides?.has(tileKey(c - 1, r));
@@ -1553,9 +1584,10 @@ function addIndoorTilesAndWalls(
           const hasWallZ =
             map.tiles[r - 1]?.[c] === TileType.InteriorWall ||
             map.tiles[r + 1]?.[c] === TileType.InteriorWall;
-          addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback, hasWallX, hasWallZ);
+          addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback, hasWallX, hasWallZ, blackened);
         }
       } else {
+        const floorTileType = destroyingFloor ?? tile;
         const skipFloor = options?.skipFloorRect;
         if (
           skipFloor &&
@@ -1569,13 +1601,13 @@ function addIndoorTilesAndWalls(
         let floorColor = rgb(198, 146, 92);
         let floorTex: number = TexId.WOOD_FLOOR;
 
-        if (tile === TileType.StoneTileFloor) {
+        if (floorTileType === TileType.StoneTileFloor) {
           floorColor = rgb(182, 170, 160);
           floorTex = TexId.STONE_FLOOR;
-        } else if (tile === TileType.BathroomTileFloor) {
+        } else if (floorTileType === TileType.BathroomTileFloor) {
           floorColor = rgb(216, 238, 244);
           floorTex = TexId.BATHROOM_TILE;
-        } else if (tile === TileType.StairsFloor) {
+        } else if (floorTileType === TileType.StairsFloor) {
           floorColor = rgb(168, 116, 68);
           floorTex = TexId.WOOD_GRAIN;
         }
@@ -1631,7 +1663,21 @@ function addTuftedCouch3D(
 // Static Level 2: Basement (32x28 TileMap)
 // ============================================================================
 
-export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
+function buildDestroyingWallLookup(
+  levelId: LevelId,
+  state?: GameState
+): ReadonlyMap<string, TileType> | undefined {
+  if (!state || state.destroyingWalls.length === 0) return undefined;
+  const out = new Map<string, TileType>();
+  for (const w of state.destroyingWalls) {
+    if (w.levelId === levelId) {
+      out.set(tileKey(w.col, w.row), w.replacementTile);
+    }
+  }
+  return out;
+}
+
+export function buildBasementStaticMesh(map: TileMap, state?: GameState): MeshBuilder {
   const mb = new MeshBuilder();
   const ts = map.tileSize; // 16
 
@@ -1655,6 +1701,9 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
     wallHeight: INDOOR_WALL_HEIGHT,
     wallOverrides,
     openableDoorCoords: [[20, 12]], // Bathroom door
+    blackenedKeys: state?.blackenedWalls,
+    destroyingWalls: buildDestroyingWallLookup('level-basement', state),
+    levelId: 'level-basement',
   });
 
   // Recessed double-door casing & upper wall header above the Spa Doors (cols 15..16, row 12)
@@ -1841,7 +1890,11 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
 
   // 8. Locked Front Double Door recessed cleanly inside wall opening (cols 15..16, row 20)
   // (The north Spa Double Door at row 12 is built dynamically so it breaks open on mine explosion.)
-  addLockedDoubleDoor3D(mb, 16 * ts, 20.5 * ts, ts);
+  const frontDoorBlackened =
+    state?.blackenedWalls.has('level-basement:15,20') ||
+    state?.blackenedWalls.has('level-basement:16,20') ||
+    false;
+  addLockedDoubleDoor3D(mb, 16 * ts, 20.5 * ts, ts, frontDoorBlackened);
 
   // 9. High-Fi Basement Staircase rising up to the ceiling stairwell opening (cols 18..21, rows 15..18)
   for (let s = 0; s < 12; s++) {
@@ -1872,7 +1925,7 @@ export function buildBasementStaticMesh(map: TileMap): MeshBuilder {
 // Static Level 3: Upstairs (32x28 TileMap)
 // ============================================================================
 
-export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
+export function buildUpstairsStaticMesh(map: TileMap, state?: GameState): MeshBuilder {
   const mb = new MeshBuilder();
   const ts = map.tileSize; // 16
 
@@ -1909,6 +1962,9 @@ export function buildUpstairsStaticMesh(map: TileMap): MeshBuilder {
     ],
     // Leave stairwell steps (cols 15..18, rows 14..17) open below y=0 so descending stairs are clearly visible
     skipFloorRect: { minCol: 15, maxCol: 18, minRow: 14, maxRow: 17 },
+    blackenedKeys: state?.blackenedWalls,
+    destroyingWalls: buildDestroyingWallLookup('level-upstairs', state),
+    levelId: 'level-upstairs',
   });
 
   // Aesthetic Coffered Ceiling + Rafters + Chandeliers (leave stairwell at cols 15..18, rows 14..18 open)
@@ -2180,31 +2236,117 @@ export function buildPeopleStaticMesh(map: TileMap): MeshBuilder {
   return mb;
 }
 
-const staticMeshCache = new Map<LevelId, MeshData>();
+const staticMeshCache = new Map<
+  LevelId,
+  { version: number; map: TileMap; mesh: MeshData }
+>();
 
-export function getStaticLevelMesh(levelId: LevelId, map: TileMap): MeshData {
+export function getStaticLevelMesh(
+  levelId: LevelId,
+  map: TileMap,
+  state?: GameState
+): MeshData {
+  const version = state?.mapVersion ?? 0;
   const cached = staticMeshCache.get(levelId);
-  if (cached) {
-    return cached;
+  if (cached && cached.version === version && cached.map === map) {
+    return cached.mesh;
   }
   let builder: MeshBuilder;
   if (levelId === 'level-outside') {
     builder = buildOutsideStaticMesh(map);
   } else if (levelId === 'level-basement') {
-    builder = buildBasementStaticMesh(map);
+    builder = buildBasementStaticMesh(map, state);
   } else if (levelId === 'level-upstairs') {
-    builder = buildUpstairsStaticMesh(map);
+    builder = buildUpstairsStaticMesh(map, state);
   } else {
     builder = buildPeopleStaticMesh(map);
   }
   const mesh = builder.build();
-  staticMeshCache.set(levelId, mesh);
+  staticMeshCache.set(levelId, { version, map, mesh });
   return mesh;
 }
 
 // ============================================================================
 // High-Fi 3D Articulated Character Models (Santa, 11 NPCs, Dog, Cat, Props)
 // ============================================================================
+
+function addKatanaGeometry3D(
+  mb: MeshBuilder,
+  hx: number,
+  hy: number,
+  hz: number,
+  dirX: number,
+  dirY: number,
+  dirZ: number,
+  upGX: number,
+  upGY: number,
+  upGZ: number,
+  yaw: number,
+  pitch: number,
+  scale = 1
+): void {
+  const wrapDark = rgb(24, 24, 32);
+  const goldGuard = rgb(232, 186, 62);
+  const steelBlade = rgb(224, 234, 246);
+  const steelEdge = rgb(248, 252, 255);
+
+  // Tsuka (wrapped handle extending slightly behind the hand)
+  mb.addOrientedBox(
+    hx - dirX * 1.4 * scale,
+    hy - dirY * 1.4 * scale,
+    hz - dirZ * 1.4 * scale,
+    3.6 * scale,
+    0.75 * scale,
+    0.75 * scale,
+    yaw,
+    pitch,
+    wrapDark,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  // Tsuba (gold handguard)
+  mb.addOrientedBox(
+    hx + dirX * 0.65 * scale,
+    hy + dirY * 0.65 * scale,
+    hz + dirZ * 0.65 * scale,
+    0.45 * scale,
+    2.1 * scale,
+    2.1 * scale,
+    yaw,
+    pitch,
+    goldGuard,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  // Long gleaming katana blade
+  mb.addOrientedBox(
+    hx + dirX * 6.8 * scale + upGX * 0.15 * scale,
+    hy + dirY * 6.8 * scale + upGY * 0.15 * scale,
+    hz + dirZ * 6.8 * scale + upGZ * 0.15 * scale,
+    11.8 * scale,
+    0.95 * scale,
+    0.32 * scale,
+    yaw,
+    pitch,
+    steelBlade,
+    TexId.SOLID,
+    0.4 * scale
+  );
+  // Bright tapered kissaki tip
+  mb.addOrientedBox(
+    hx + dirX * 13.4 * scale + upGX * 0.25 * scale,
+    hy + dirY * 13.4 * scale + upGY * 0.25 * scale,
+    hz + dirZ * 13.4 * scale + upGZ * 0.25 * scale,
+    2.2 * scale,
+    0.65 * scale,
+    0.26 * scale,
+    yaw,
+    pitch - 0.12,
+    steelEdge,
+    TexId.SOLID,
+    0.3 * scale
+  );
+}
 
 function addUziGeometry3D(
   mb: MeshBuilder,
@@ -2403,6 +2545,111 @@ function addFlamethrowerGeometry3D(
   );
 }
 
+function addBazookaGeometry3D(
+  mb: MeshBuilder,
+  cx: number,
+  shoulderY: number,
+  cz: number,
+  fx: number,
+  fz: number,
+  rx: number,
+  rz: number,
+  yaw: number,
+  scale = 1
+): void {
+  const tubeOlive = rgb(72, 92, 54);
+  const muzzleDark = rgb(36, 42, 48);
+  const sightGold = rgb(228, 178, 62);
+  const rocketWarhead = rgb(212, 46, 38);
+
+  // Main shoulder-mounted launch tube resting on right shoulder
+  const tx = cx + fx * 1.2 * scale + rx * 3.8 * scale;
+  const ty = shoulderY + 1.4 * scale;
+  const tz = cz + fz * 1.2 * scale + rz * 3.8 * scale;
+
+  mb.addOrientedBox(
+    tx,
+    ty,
+    tz,
+    14.5 * scale,
+    2.4 * scale,
+    2.4 * scale,
+    yaw,
+    0,
+    tubeOlive,
+    TexId.SOLID,
+    0.45 * scale
+  );
+  // Flared front & rear collars
+  mb.addOrientedBox(
+    tx + fx * 7.2 * scale,
+    ty,
+    tz + fz * 7.2 * scale,
+    1.6 * scale,
+    3.0 * scale,
+    3.0 * scale,
+    yaw,
+    0,
+    muzzleDark,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  mb.addOrientedBox(
+    tx - fx * 7.0 * scale,
+    ty,
+    tz - fz * 7.0 * scale,
+    1.6 * scale,
+    2.85 * scale,
+    2.85 * scale,
+    yaw,
+    0,
+    muzzleDark,
+    TexId.SOLID,
+    0.35 * scale
+  );
+  // Warhead peeking inside front muzzle
+  mb.addSphere(
+    tx + fx * 8.1 * scale,
+    ty,
+    tz + fz * 8.1 * scale,
+    1.0 * scale,
+    0.9 * scale,
+    0.9 * scale,
+    6,
+    6,
+    rocketWarhead,
+    TexId.SOLID,
+    0.25 * scale
+  );
+  // Vertical grip & optical sight
+  mb.addOrientedBox(
+    tx + fx * 1.8 * scale,
+    ty - 1.9 * scale,
+    tz + fz * 1.8 * scale,
+    1.2 * scale,
+    2.2 * scale,
+    0.9 * scale,
+    yaw,
+    0,
+    muzzleDark,
+    TexId.SOLID,
+    0.3 * scale
+  );
+  mb.addOrientedBox(
+    tx + fx * 2.2 * scale - rx * 1.4 * scale,
+    ty + 1.35 * scale,
+    tz + fz * 2.2 * scale - rz * 1.4 * scale,
+    2.4 * scale,
+    1.0 * scale,
+    0.9 * scale,
+    yaw,
+    0,
+    sightGold,
+    TexId.SOLID,
+    0.3 * scale
+  );
+}
+
 function addBurningFireEffect3D(
   translucentMb: MeshBuilder,
   pointLights: PointLight3D[],
@@ -2457,6 +2704,7 @@ export interface CharacterColors3D {
   hasBeard?: boolean;
   holdingClub?: boolean;
   holdingBook?: boolean;
+  holdingBazooka?: boolean;
   sitting?: boolean;
   hasPresentInLap?: boolean;
   equippedItem?: EquipmentId;
@@ -2465,6 +2713,9 @@ export interface CharacterColors3D {
   uziEquipTimer?: number;
   uziDropTimer?: number;
   uziReloadTimer?: number;
+  katanaSwingTimer?: number;
+  wildKatanaSwing?: boolean;
+  isCharred?: boolean;
   weaponVibrationTimer?: number;
   elapsedTime?: number;
   deadFallProgress?: number;
@@ -2486,6 +2737,17 @@ export function addHumanoid3D(
 ): void {
   if (translucentMb) {
     translucentMb.addShadowDisc(cx, shadowGroundY, cz, 5.6, 5.6, 0.36);
+  }
+
+  if (style.isCharred) {
+    style = {
+      ...style,
+      coat: rgb(22, 22, 26),
+      trim: rgb(32, 32, 36),
+      pants: rgb(18, 18, 22),
+      skin: rgb(30, 26, 26),
+      hair: rgb(14, 14, 16),
+    };
   }
 
   const cyaw = Math.cos(yaw);
@@ -2643,6 +2905,7 @@ export function addHumanoid3D(
   const activePunchSide = style.punchHand === 'left' ? -1 : 1;
   const isHoldingUzi = equippedItem === 'uzi';
   const isHoldingFlamethrower = equippedItem === 'flamethrower';
+  const isHoldingKatana = equippedItem === 'katana';
   const isReloadingUzi = isHoldingUzi && (style.uziReloadTimer ?? 0) > 0;
   const reloadProgress = isReloadingUzi
     ? 1 - Math.max(0, Math.min(1, (style.uziReloadTimer ?? 0) / NPC_UZI_RELOAD_SECONDS))
@@ -2766,6 +3029,109 @@ export function addHumanoid3D(
           0.35
         );
       }
+      continue;
+    }
+
+    if (isHoldingKatana && side === 1) {
+      // Right arm holding katana: steady combat stance, player slash, or Anne-Marie's wild hostile slashing
+      let swingYawOffset = -0.35;
+      let theta = Math.PI * 0.42;
+      if (style.wildKatanaSwing) {
+        const wt = style.elapsedTime ?? walkPhase;
+        swingYawOffset = Math.sin(wt * 18) * 1.15;
+        theta = Math.PI * 0.52 + Math.cos(wt * 14) * 0.42;
+      } else if ((style.katanaSwingTimer ?? 0) > 0) {
+        const p =
+          1 -
+          Math.max(
+            0,
+            Math.min(1, (style.katanaSwingTimer ?? 0) / KATANA_SWING_DURATION_SECONDS)
+          );
+        swingYawOffset = -1.1 + p * 2.2;
+        theta = Math.PI * 0.55 + Math.sin(p * Math.PI) * 0.25;
+      }
+      const syawK = yaw + swingYawOffset;
+      const kfx = Math.cos(syawK);
+      const kfz = Math.sin(syawK);
+      const st = Math.sin(theta);
+      const ct = Math.cos(theta);
+      const dirX = st * kfx;
+      const dirY = -ct;
+      const dirZ = st * kfz;
+      const ax0 = cx + rx * (armSpread * side);
+      const az0 = cz + rz * (armSpread * side);
+
+      mb.addOrientedBox(
+        ax0 + dirX * 2.2,
+        shoulderY + dirY * 2.2,
+        az0 + dirZ * 2.2,
+        2.0,
+        4.4,
+        2.0,
+        syawK,
+        theta,
+        style.coat,
+        TexId.FABRIC,
+        0.65
+      );
+      const hx = ax0 + dirX * 4.4;
+      const hy = shoulderY + dirY * 4.4;
+      const hz = az0 + dirZ * 4.4;
+      mb.addSphere(hx, hy, hz, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
+
+      const bladePitch = theta - Math.PI * 0.5;
+      addKatanaGeometry3D(
+        mb,
+        hx,
+        hy,
+        hz,
+        dirX,
+        dirY,
+        dirZ,
+        ct * kfx,
+        st,
+        ct * kfz,
+        syawK,
+        bladePitch,
+        1
+      );
+      continue;
+    }
+
+    if (style.holdingBazooka && side === 1) {
+      // Right arm raised to hold shoulder-mounted bazooka grip
+      const theta = Math.PI * 0.56;
+      const st = Math.sin(theta);
+      const ct = Math.cos(theta);
+      const ax0 = cx + rx * (armSpread * side);
+      const az0 = cz + rz * (armSpread * side);
+      mb.addOrientedBox(
+        ax0 + fx * st * 2.2,
+        shoulderY - ct * 2.2,
+        az0 + fz * st * 2.2,
+        2.0,
+        4.4,
+        2.0,
+        yaw,
+        theta,
+        style.coat,
+        TexId.FABRIC,
+        0.65
+      );
+      mb.addSphere(
+        ax0 + fx * st * 4.4,
+        shoulderY - ct * 4.4,
+        az0 + fz * st * 4.4,
+        1.15,
+        1.15,
+        1.15,
+        6,
+        8,
+        mittenColor,
+        TexId.SOLID,
+        0.5
+      );
+      addBazookaGeometry3D(mb, cx, shoulderY, cz, fx, fz, rx, rz, yaw, 1);
       continue;
     }
 
@@ -3110,13 +3476,50 @@ function addDog3D(
   }
 }
 
+function addC4Explosive3D(
+  opaque: MeshBuilder,
+  translucent: MeshBuilder,
+  cx: number,
+  cz: number,
+  elapsedTime: number,
+  fastBlink: boolean
+): void {
+  translucent.addShadowDisc(cx, 0.02, cz, 4.6, 3.8, 0.34);
+  const c4Olive = rgb(94, 108, 74);
+  const strapDark = rgb(32, 34, 42);
+  const keypadDark = rgb(44, 52, 62);
+  // Dual stacked C4 blocks + black binding straps
+  opaque.addBox(cx - 2.3, 0, cz - 1.5, 4.6, 2.2, 3.0, c4Olive, TexId.SOLID, 0.55);
+  opaque.addBox(cx - 2.4, 2.2, cz - 0.6, 4.8, 0.4, 1.2, strapDark, TexId.SOLID, 0.35);
+  opaque.addBox(cx - 1.5, 2.2, cz - 1.2, 3.0, 0.7, 2.4, keypadDark, TexId.SOLID, 0.4);
+  const blinkRate = fastBlink ? 14 : 3.5;
+  const ledLit = Math.floor(elapsedTime * blinkRate) % 2 === 0;
+  opaque.addSphere(
+    cx + 0.75,
+    3.05,
+    cz,
+    0.48,
+    0.48,
+    0.48,
+    6,
+    6,
+    ledLit ? rgb(255, 48, 42) : rgb(110, 22, 22),
+    TexId.SOLID,
+    0.15
+  );
+}
+
 function addCat3D(mb: MeshBuilder, translucentMb: MeshBuilder, cat: Cat, elapsedTime = 0): void {
   const cx = cat.x + cat.width * 0.5;
   const cz = cat.y + cat.height * 0.5;
-  translucentMb.addShadowDisc(cx, 0, cz, 4.4, 4.4, 0.32);
+  const baseY = cat.jumpZ ?? 0;
+  const shadowScale = Math.max(0.55, 1 - baseY * 0.025);
+  translucentMb.addShadowDisc(cx, 0, cz, 4.4 * shadowScale, 4.4 * shadowScale, 0.32 * shadowScale);
 
   const speed = Math.hypot(cat.vx, cat.vy);
-  const isRunning = cat.mode === 'flee' || speed > 1.5;
+  const isHostile = cat.mode === 'hostile' || cat.mode === 'latched';
+  const isDead = cat.mode === 'dead';
+  const isRunning = cat.mode === 'flee' || isHostile || speed > 1.5;
   const yaw =
     typeof cat.yaw === 'number'
       ? cat.yaw
@@ -3129,11 +3532,78 @@ function addCat3D(mb: MeshBuilder, translucentMb: MeshBuilder, cat: Cat, elapsed
   const rz = fx;
 
   const catBlack = rgb(28, 30, 40);
+  const blinkClock = cat.blinkRedTimer > 0 ? cat.blinkRedTimer : elapsedTime;
+  const isRedBlink = isHostile && Math.floor(blinkClock * 10) % 2 === 0;
+  const bodyColor = isRedBlink ? rgb(236, 36, 36) : catBlack;
+  const spineSpikeColor = isRedBlink ? rgb(255, 72, 64) : rgb(42, 44, 58);
+
+  if (isDead) {
+    // Fallen cat + dark crimson puddle
+    translucentMb.addShadowDisc(cx, 0.03, cz, 5.6, 5.2, 0.72);
+    mb.addOrientedBox(cx, 0.9, cz, 5.6, 1.4, 3.4, yaw, 0, catBlack, TexId.SOLID, 0.55);
+    mb.addSphere(cx + fx * 3.1, 1.3, cz + fz * 3.1, 2.2, 1.5, 2.2, 8, 10, catBlack, TexId.SOLID, 0.55);
+    return;
+  }
+
   const runStride = isRunning ? Math.sin(elapsedTime * 18) * 1.4 : 0;
 
-  if (isRunning) {
+  if (isHostile) {
+    // Angry Halloween cat with sharply crooked / arched spine + puffed bristles
+    // Front torso rising steeply backward into the hump (pitch < 0 raises -lx side, lowers +lx shoulder side)
+    mb.addOrientedBox(
+      cx + fx * 1.45,
+      baseY + 4.35,
+      cz + fz * 1.45,
+      3.4,
+      2.3,
+      3.0,
+      yaw,
+      -0.46,
+      bodyColor,
+      TexId.SOLID,
+      0.65
+    );
+    // High crooked dorsal peak at mid-back
+    mb.addSphere(cx, baseY + 5.7, cz, 2.3, 2.2, 1.85, 8, 10, bodyColor, TexId.SOLID, 0.65);
+    mb.addCone(cx, baseY + 7.2, cz, 0.85, 2.0, 6, spineSpikeColor, TexId.SOLID, 0.4);
+    mb.addCone(cx - fx * 1.2, baseY + 6.7, cz - fz * 1.2, 0.7, 1.7, 6, spineSpikeColor, TexId.SOLID, 0.4);
+    // Rear torso sloping steeply down behind the hump
+    mb.addOrientedBox(
+      cx - fx * 1.5,
+      baseY + 4.25,
+      cz - fz * 1.5,
+      3.4,
+      2.3,
+      3.0,
+      yaw,
+      0.52,
+      bodyColor,
+      TexId.SOLID,
+      0.65
+    );
+
+    // Outstretched headcrab-pouncing legs & white claws
+    for (const [fSign, rSign] of [
+      [1, 1],
+      [1, -1],
+      [-1, 1],
+      [-1, -1],
+    ] as const) {
+      const pounceSpread = cat.mode === 'latched' ? 1.55 : 1.15;
+      const lx =
+        cx +
+        fx * (fSign * 2.5 + fSign * runStride * 0.5) +
+        rx * rSign * (1.25 * pounceSpread);
+      const lz =
+        cz +
+        fz * (fSign * 2.5 + fSign * runStride * 0.5) +
+        rz * rSign * (1.25 * pounceSpread);
+      mb.addCylinder(lx, baseY + 0.1, lz, 0.55, 0.55, 3.0, 8, bodyColor, TexId.SOLID, 0.4);
+      mb.addSphere(lx + fx * 0.35, baseY + 0.35, lz + fz * 0.35, 0.65, 0.45, 0.75, 6, 6, rgb(248, 246, 250), TexId.SOLID, 0.25);
+    }
+  } else if (isRunning) {
     // Sleek stretched running body & animated legs oriented along running direction
-    mb.addOrientedBox(cx, 3.0, cz, 5.4, 2.8, 3.2, yaw, 0, catBlack, TexId.SOLID, 0.65);
+    mb.addOrientedBox(cx, baseY + 3.0, cz, 5.4, 2.8, 3.2, yaw, 0, bodyColor, TexId.SOLID, 0.65);
     for (const [fSign, rSign] of [
       [1, 1],
       [1, -1],
@@ -3142,30 +3612,36 @@ function addCat3D(mb: MeshBuilder, translucentMb: MeshBuilder, cat: Cat, elapsed
     ] as const) {
       const lx = cx + fx * (fSign * 2.1 + fSign * runStride * 0.65) + rx * rSign * 1.1;
       const lz = cz + fz * (fSign * 2.1 + fSign * runStride * 0.65) + rz * rSign * 1.1;
-      mb.addCylinder(lx, 0, lz, 0.55, 0.55, 2.6, 8, catBlack, TexId.SOLID, 0.4);
-      mb.addSphere(lx + fx * 0.25, 0.35, lz + fz * 0.25, 0.65, 0.45, 0.75, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.25);
+      mb.addCylinder(lx, baseY, lz, 0.55, 0.55, 2.6, 8, bodyColor, TexId.SOLID, 0.4);
+      mb.addSphere(lx + fx * 0.25, baseY + 0.35, lz + fz * 0.25, 0.65, 0.45, 0.75, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.25);
     }
   } else {
     // Lithe seated feline body & white front paws oriented along yaw
-    mb.addCylinder(cx, 0, cz, 2.8, 2.1, 5.0, 12, catBlack, TexId.SOLID, 0.65);
-    mb.addSphere(cx + fx * 2.3 + rx * 1.05, 0.55, cz + fz * 2.3 + rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
-    mb.addSphere(cx + fx * 2.3 - rx * 1.05, 0.55, cz + fz * 2.3 - rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+    mb.addCylinder(cx, baseY, cz, 2.8, 2.1, 5.0, 12, bodyColor, TexId.SOLID, 0.65);
+    mb.addSphere(cx + fx * 2.3 + rx * 1.05, baseY + 0.55, cz + fz * 2.3 + rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+    mb.addSphere(cx + fx * 2.3 - rx * 1.05, baseY + 0.55, cz + fz * 2.3 - rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
   }
 
-  // Sculpted Cat Head + Pointed Ears + Glowing Emerald Eyes facing `yaw`
-  const headDist = isRunning ? 3.2 : 1.0;
-  const headY = isRunning ? 5.2 : 6.6;
+  // Sculpted Cat Head + Pointed Ears + Eyes facing `yaw`
+  const headDist = isHostile ? 3.55 : isRunning ? 3.2 : 1.0;
+  const headY = baseY + (isHostile ? 4.4 : isRunning ? 5.2 : 6.6);
   const hx = cx + fx * headDist;
   const hz = cz + fz * headDist;
-  mb.addSphere(hx, headY, hz, 2.5, 2.3, 2.5, 10, 12, catBlack, TexId.SOLID, 0.65);
-  mb.addCone(hx + rx * 1.45, headY + 1.6, hz + rz * 1.45, 0.9, 2.2, 8, catBlack, TexId.SOLID, 0.5);
-  mb.addCone(hx - rx * 1.45, headY + 1.6, hz - rz * 1.45, 0.9, 2.2, 8, catBlack, TexId.SOLID, 0.5);
-  mb.addSphere(hx + fx * 2.15 + rx * 0.95, headY + 0.25, hz + fz * 2.15 + rz * 0.95, 0.5, 0.55, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
-  mb.addSphere(hx + fx * 2.15 - rx * 0.95, headY + 0.25, hz + fz * 2.15 - rz * 0.95, 0.5, 0.55, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
+  const eyeColor = isHostile ? rgb(255, 58, 42) : rgb(92, 248, 118);
+  mb.addSphere(hx, headY, hz, 2.5, 2.3, 2.5, 10, 12, bodyColor, TexId.SOLID, 0.65);
+  mb.addCone(hx + rx * 1.45, headY + 1.6, hz + rz * 1.45, 0.9, 2.2, 8, bodyColor, TexId.SOLID, 0.5);
+  mb.addCone(hx - rx * 1.45, headY + 1.6, hz - rz * 1.45, 0.9, 2.2, 8, bodyColor, TexId.SOLID, 0.5);
+  mb.addSphere(hx + fx * 2.15 + rx * 0.95, headY + 0.25, hz + fz * 2.15 + rz * 0.95, 0.5, 0.55, 0.45, 6, 6, eyeColor, TexId.SOLID, 0.15);
+  mb.addSphere(hx + fx * 2.15 - rx * 0.95, headY + 0.25, hz + fz * 2.15 - rz * 0.95, 0.5, 0.55, 0.45, 6, 6, eyeColor, TexId.SOLID, 0.15);
 
-  // S-curved trailing swishing tail
-  const swish = Math.sin(elapsedTime * 5) * 0.9;
-  mb.addSphere(cx - fx * 3.3 + rx * swish, isRunning ? 3.8 : 2.2, cz - fz * 3.3 + rz * swish, 0.7, 2.2, 0.7, 6, 8, catBlack, TexId.SOLID, 0.45);
+  // S-curved trailing swishing tail (bristled vertical bottle-brush tail when hostile)
+  if (isHostile) {
+    const twitch = Math.sin(elapsedTime * 16) * 0.45;
+    mb.addSphere(cx - fx * 3.2 + rx * twitch, baseY + 6.4, cz - fz * 3.2 + rz * twitch, 1.05, 3.2, 1.05, 8, 10, bodyColor, TexId.SOLID, 0.5);
+  } else {
+    const swish = Math.sin(elapsedTime * 5) * 0.9;
+    mb.addSphere(cx - fx * 3.3 + rx * swish, baseY + (isRunning ? 3.8 : 2.2), cz - fz * 3.3 + rz * swish, 0.7, 2.2, 0.7, 6, 8, bodyColor, TexId.SOLID, 0.45);
+  }
 }
 
 function addMotorcycle3D(
@@ -3407,10 +3883,12 @@ export function buildDynamicSceneMeshes(
       state.electrocutionTimer > 0 && Math.floor(t * 20) % 2 === 0;
     const sharedWeaponFields = {
       equippedItem: state.player.equippedItem,
+      holdingBazooka: state.player.equippedItem === 'bazooka',
       punchTimer: state.player.punchTimer,
       punchHand: state.player.punchHand,
       uziEquipTimer: state.player.uziEquipTimer,
       uziDropTimer: state.player.uziDropTimer,
+      katanaSwingTimer: state.player.katanaSwingTimer,
       weaponVibrationTimer: state.player.weaponVibrationTimer,
       elapsedTime: t,
     };
@@ -3439,12 +3917,16 @@ export function buildDynamicSceneMeshes(
     const rosannaCutsceneActive =
       levelId === 'level-upstairs' &&
       Boolean(state.levels['level-upstairs'].rosannaCutscene?.active);
+    const tableRoomAmbushActive =
+      levelId === 'level-upstairs' &&
+      Boolean(state.levels['level-upstairs'].tableRoomAmbushCutscene?.active);
     const toiletCutsceneActive =
       levelId === 'level-basement' &&
       Boolean(state.levels['level-basement'].toiletCutscene?.active);
     const isPlayerTranslucent =
       (cameraDistance !== undefined && cameraDistance < TILE_SIZE) ||
       rosannaCutsceneActive ||
+      tableRoomAmbushActive ||
       toiletCutsceneActive;
     const playerTargetBuilder = isPlayerTranslucent ? translucent : opaque;
     const playerStartVertex = playerTargetBuilder.vertexCount;
@@ -3680,6 +4162,7 @@ export function buildDynamicSceneMeshes(
         hair: hexToColor4('#4e433c'),
         equippedItem: 'uzi',
         uziReloadTimer: basement.arjanCombat.reloadTimer,
+        isCharred: basement.arjanCombat.mode === 'burning',
         weaponVibrationTimer: basement.arjanCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -3719,6 +4202,7 @@ export function buildDynamicSceneMeshes(
         hair: hexToColor4('#342618'),
         equippedItem: 'uzi',
         uziReloadTimer: basement.olexaCombat.reloadTimer,
+        isCharred: basement.olexaCombat.mode === 'burning',
         weaponVibrationTimer: basement.olexaCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -3764,6 +4248,7 @@ export function buildDynamicSceneMeshes(
           sitting: isSittingOnToilet,
           equippedItem: isSittingOnToilet ? 'empty' : 'uzi',
           uziReloadTimer: basement.hanneloesCombat.reloadTimer,
+          isCharred: basement.hanneloesCombat.mode === 'burning',
           weaponVibrationTimer: basement.hanneloesCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress:
@@ -3793,6 +4278,13 @@ export function buildDynamicSceneMeshes(
     }
 
     for (const door of basement.doors) {
+      if (
+        state.destroyingDoors.some(
+          (d) => d.levelId === 'level-basement' && d.doorId === door.id
+        )
+      ) {
+        continue;
+      }
       addDoorAndFog3D(opaque, door);
     }
     for (const door of basement.openedDoors) {
@@ -3801,18 +4293,27 @@ export function buildDynamicSceneMeshes(
 
     // Dynamic Spa Room Double Door & Hidden Room Fog (cols 14..17, rows 8..11)
     if (basement.spaDoorClosed) {
-      addLockedDoubleDoor3D(opaque, 16 * TILE_SIZE, 12.5 * TILE_SIZE, TILE_SIZE);
-      opaque.addBox(
-        BASEMENT_SPA_HIDDEN_MASK.x + BASEMENT_SPA_HIDDEN_MASK.width * 0.5,
-        0.2,
-        BASEMENT_SPA_HIDDEN_MASK.y + BASEMENT_SPA_HIDDEN_MASK.height * 0.5,
-        BASEMENT_SPA_HIDDEN_MASK.width,
-        INDOOR_WALL_HEIGHT + 0.4,
-        BASEMENT_SPA_HIDDEN_MASK.height,
-        rgb(12, 14, 22),
-        TexId.SOLID,
-        0
+      const spaDestroying = state.destroyingDoors.some(
+        (d) =>
+          d.levelId === 'level-basement' &&
+          d.doorId === 'basement-hall-north-door'
       );
+      if (!spaDestroying) {
+        addLockedDoubleDoor3D(opaque, 16 * TILE_SIZE, 12.5 * TILE_SIZE, TILE_SIZE);
+      }
+      if (!basement.spaFogCleared) {
+        opaque.addBox(
+          BASEMENT_SPA_HIDDEN_MASK.x + BASEMENT_SPA_HIDDEN_MASK.width * 0.5,
+          0.2,
+          BASEMENT_SPA_HIDDEN_MASK.y + BASEMENT_SPA_HIDDEN_MASK.height * 0.5,
+          BASEMENT_SPA_HIDDEN_MASK.width,
+          INDOOR_WALL_HEIGHT + 0.4,
+          BASEMENT_SPA_HIDDEN_MASK.height,
+          rgb(12, 14, 22),
+          TexId.SOLID,
+          0
+        );
+      }
     }
 
     // Armed / Blinking Landmine 1 tile south of Spa Doors
@@ -4032,17 +4533,17 @@ export function buildDynamicSceneMeshes(
     // Black Cat in Extra Room
     addCat3D(opaque, translucent, upstairs.cat, t);
 
-    // Rosanna Cutscene: second Santa running west-to-east outside the north kitchen windows
+    // Rosanna Cutscene: rises dramatically behind the center kitchen windows holding a bazooka, fires, then jumps through the window
     if (upstairs.rosannaCutscene?.active) {
       const cs = upstairs.rosannaCutscene;
       addHumanoid3D(
         opaque,
         cs.santaX + 8,
-        0,
+        cs.santaZ,
         cs.santaY + 8,
-        0,
+        cs.facingAngle,
         cs.walkTimer,
-        true,
+        cs.phase === 'jumping',
         {
           coat: rgb(216, 34, 42),
           trim: rgb(248, 250, 255),
@@ -4051,24 +4552,25 @@ export function buildDynamicSceneMeshes(
           hair: rgb(250, 252, 255),
           hat: rgb(220, 36, 42),
           hasBeard: true,
+          holdingBazooka: true,
         },
         true,
         false,
         translucent
       );
-      if (Math.floor(cs.elapsed * 10) % 2 === 0) {
+      if (cs.phase === 'rising' && Math.floor(cs.elapsed * 10) % 2 === 0) {
         addExclamationBadge3D(opaque, px, py, pz);
       }
     }
 
     const isTableRoomDoorOpen = !upstairs.doors.some(
-      (d) => d.id === 'upstairs-table-room-door'
+      (d) => d.id === 'upstairs-table-room-door' && d.hiddenRegions.length > 0
     );
     const isBedroomDoorOpen = !upstairs.doors.some(
-      (d) => d.id === 'upstairs-bedroom-door'
+      (d) => d.id === 'upstairs-bedroom-door' && d.hiddenRegions.length > 0
     );
     const isOfficeDoorOpen = !upstairs.doors.some(
-      (d) => d.id === 'upstairs-office-door'
+      (d) => d.id === 'upstairs-office-door' && d.hiddenRegions.length > 0
     );
 
     // Diana's Present in Bedroom
@@ -4093,6 +4595,16 @@ export function buildDynamicSceneMeshes(
       opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, 'z', rgb(255, 238, 84), TexId.SOLID, 0.4);
     }
 
+    // C4 Explosive charge in Arjan's Office (or armed beneath the Christmas tree)
+    if (isOfficeDoorOpen && !state.player.states.get(C4_TAKEN_STATE_KEY)) {
+      const c4Cx = UPSTAIRS_C4_BOUNDS.x + UPSTAIRS_C4_BOUNDS.width * 0.5;
+      const c4Cz = UPSTAIRS_C4_BOUNDS.y + UPSTAIRS_C4_BOUNDS.height * 0.5;
+      addC4Explosive3D(opaque, translucent, c4Cx, c4Cz, t, false);
+    }
+    if (state.player.states.get(C4_PLACED_STATE_KEY)) {
+      addC4Explosive3D(opaque, translucent, 3.1 * TILE_SIZE, 15.6 * TILE_SIZE, t, true);
+    }
+
     // Albin pacing in Dining Room
     addHumanoid3D(
       opaque,
@@ -4110,6 +4622,7 @@ export function buildDynamicSceneMeshes(
         hair: hexToColor4('#7a421c'),
         equippedItem: 'uzi',
         uziReloadTimer: upstairs.albinCombat.reloadTimer,
+        isCharred: upstairs.albinCombat.mode === 'burning',
         weaponVibrationTimer: upstairs.albinCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -4154,6 +4667,7 @@ export function buildDynamicSceneMeshes(
         hasPresentInLap: isDianaDistracted,
         equippedItem: 'uzi',
         uziReloadTimer: upstairs.dianaCombat.reloadTimer,
+        isCharred: upstairs.dianaCombat.mode === 'burning',
         weaponVibrationTimer: upstairs.dianaCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -4197,6 +4711,7 @@ export function buildDynamicSceneMeshes(
         hasPresentInLap: isSimonDistracted,
         equippedItem: 'uzi',
         uziReloadTimer: upstairs.simonCombat.reloadTimer,
+        isCharred: upstairs.simonCombat.mode === 'burning',
         weaponVibrationTimer: upstairs.simonCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -4235,8 +4750,8 @@ export function buildDynamicSceneMeshes(
           pants: rgb(42, 48, 62),
           skin: rgb(248, 206, 174),
           hair: hexToColor4('#6e4624'),
-          equippedItem: 'uzi',
-          uziReloadTimer: upstairs.henrikCombat.reloadTimer,
+          equippedItem: 'flamethrower',
+          isCharred: upstairs.henrikCombat.mode === 'burning',
           weaponVibrationTimer: upstairs.henrikCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress:
@@ -4273,8 +4788,8 @@ export function buildDynamicSceneMeshes(
           pants: rgb(44, 50, 64),
           skin: rgb(250, 208, 176),
           hair: hexToColor4('#743c20'),
-          equippedItem: 'uzi',
-          uziReloadTimer: upstairs.tanjaCombat.reloadTimer,
+          equippedItem: 'flamethrower',
+          isCharred: upstairs.tanjaCombat.mode === 'burning',
           weaponVibrationTimer: upstairs.tanjaCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress:
@@ -4314,9 +4829,12 @@ export function buildDynamicSceneMeshes(
           pants: rgb(46, 52, 66),
           skin: rgb(250, 212, 182),
           hair: hexToColor4('#c88642'),
-          equippedItem: 'uzi',
-          uziReloadTimer: upstairs.anneMarieCombat.reloadTimer,
-          weaponVibrationTimer: upstairs.anneMarieCombat.weaponVibrationTimer,
+          equippedItem: 'katana',
+          wildKatanaSwing:
+            (upstairs.anneMarieCombat.mode === 'hostile' &&
+              upstairs.anneMarieCombat.hostileAlertTimer <= 0) ||
+            upstairs.anneMarieCombat.mode === 'burning',
+          isCharred: upstairs.anneMarieCombat.mode === 'burning',
           elapsedTime: t,
           deadFallProgress:
             upstairs.anneMarieCombat.mode === 'dead'
@@ -4337,6 +4855,49 @@ export function buildDynamicSceneMeshes(
       }
     }
 
+    // Spawned Rosanna Bazooka Boss inside Kitchen
+    if (upstairs.rosannaSpawned) {
+      const rx = upstairs.rosannaNpc.x + upstairs.rosannaNpc.width * 0.5;
+      const rz = upstairs.rosannaNpc.y + upstairs.rosannaNpc.height * 0.5;
+      addHumanoid3D(
+        opaque,
+        rx,
+        0,
+        rz,
+        upstairs.rosannaCombat.aimYaw,
+        t,
+        upstairs.rosannaCombat.isMoving,
+        {
+          coat: rgb(216, 34, 42),
+          trim: rgb(248, 250, 255),
+          pants: rgb(186, 28, 36),
+          skin: rgb(250, 208, 176),
+          hair: rgb(250, 252, 255),
+          hat: rgb(220, 36, 42),
+          hasBeard: true,
+          holdingBazooka: true,
+          isCharred: upstairs.rosannaCombat.mode === 'burning',
+          weaponVibrationTimer: upstairs.rosannaCombat.weaponVibrationTimer,
+          elapsedTime: t,
+          deadFallProgress:
+            upstairs.rosannaCombat.mode === 'dead'
+              ? Math.max(0.05, upstairs.rosannaCombat.deadFallProgress)
+              : 0,
+        },
+        true,
+        false,
+        translucent
+      );
+      maybeBurnNpc('upstairs:Rosanna', rx, 0, rz);
+      if (
+        upstairs.rosannaCombat.mode === 'hostile' &&
+        upstairs.rosannaCombat.hostileAlertTimer > 0 &&
+        Math.floor(upstairs.rosannaCombat.hostileAlertTimer * 10) % 2 === 0
+      ) {
+        addExclamationBadge3D(opaque, rx, 0, rz);
+      }
+    }
+
     addConeOfSight3D(translucent, upstairs.albinCone);
     addConeOfSight3D(translucent, upstairs.dianaCone);
     addConeOfSight3D(translucent, upstairs.simonCone);
@@ -4347,8 +4908,18 @@ export function buildDynamicSceneMeshes(
     if (isBedroomDoorOpen) {
       addConeOfSight3D(translucent, upstairs.anneMarieCone);
     }
+    if (upstairs.rosannaSpawned) {
+      addConeOfSight3D(translucent, upstairs.rosannaCone);
+    }
 
     for (const door of upstairs.doors) {
+      if (
+        state.destroyingDoors.some(
+          (d) => d.levelId === 'level-upstairs' && d.doorId === door.id
+        )
+      ) {
+        continue;
+      }
       addDoorAndFog3D(opaque, door);
     }
     for (const door of upstairs.openedDoors) {
@@ -4413,6 +4984,241 @@ export function buildDynamicSceneMeshes(
     );
   }
 
+  // Dropped Flamethrowers (+20 flames from Henrik & Tanja)
+  for (const drop of state.droppedFlamethrowers) {
+    if (drop.levelId !== levelId) continue;
+    const bobY = drop.z + 2.8 + Math.sin(t * 3.4) * 0.65;
+    const spinYaw = drop.yaw + t * 1.4;
+    const cSpin = Math.cos(spinYaw);
+    const sSpin = Math.sin(spinYaw);
+    translucent.addShadowDisc(drop.x, drop.z, drop.y, 5.2, 5.2, 0.28);
+    translucent.addTorus(
+      drop.x,
+      drop.z + 0.35,
+      drop.y,
+      4.8,
+      0.45,
+      14,
+      6,
+      'y',
+      rgb(255, 168, 48, 0.78),
+      TexId.SOLID,
+      0
+    );
+    addFlamethrowerGeometry3D(
+      opaque,
+      drop.x - cSpin * 2.8,
+      bobY,
+      drop.y - sSpin * 2.8,
+      cSpin,
+      0,
+      sSpin,
+      0,
+      1,
+      0,
+      -sSpin,
+      cSpin,
+      spinYaw,
+      0,
+      0.95
+    );
+  }
+
+  // Dropped Katana Swords (from Anne-Marie)
+  for (const drop of state.droppedKatanas) {
+    if (drop.levelId !== levelId) continue;
+    const cDrop = Math.cos(drop.yaw);
+    const sDrop = Math.sin(drop.yaw);
+    translucent.addShadowDisc(drop.x, drop.z, drop.y, 4.5, 4.5, 0.28);
+    translucent.addTorus(
+      drop.x,
+      drop.z + 0.3,
+      drop.y,
+      5.2,
+      0.45,
+      14,
+      6,
+      'y',
+      rgb(245, 206, 72, 0.78),
+      TexId.SOLID,
+      0
+    );
+    addKatanaGeometry3D(
+      opaque,
+      drop.x - cDrop * 4.5,
+      drop.z + 1.8,
+      drop.y - sDrop * 4.5,
+      cDrop,
+      0,
+      sDrop,
+      0,
+      1,
+      0,
+      drop.yaw,
+      0,
+      0.9
+    );
+  }
+
+  // Dropped Bazooka (from Rosanna)
+  for (const drop of state.droppedBazookas) {
+    if (drop.levelId !== levelId) continue;
+    const bobY = drop.z + 3.0 + Math.sin(t * 3.4) * 0.65;
+    const spinYaw = drop.yaw + t * 1.4;
+    const cSpin = Math.cos(spinYaw);
+    const sSpin = Math.sin(spinYaw);
+    translucent.addShadowDisc(drop.x, drop.z, drop.y, 5.4, 5.4, 0.28);
+    translucent.addTorus(
+      drop.x,
+      drop.z + 0.35,
+      drop.y,
+      5.2,
+      0.45,
+      14,
+      6,
+      'y',
+      rgb(245, 206, 72, 0.82),
+      TexId.SOLID,
+      0
+    );
+    addBazookaGeometry3D(
+      opaque,
+      drop.x,
+      bobY,
+      drop.y,
+      cSpin,
+      sSpin,
+      0,
+      0,
+      spinYaw,
+      0.92
+    );
+  }
+
+  // Squishing & fading destroyed interior walls (turn black, squish height-wise, fade over 1s)
+  for (const wall of state.destroyingWalls) {
+    if (wall.levelId !== levelId) continue;
+    const p = Math.max(0, Math.min(1, wall.elapsed / Math.max(0.01, wall.duration)));
+    const alpha = Math.max(0.01, 1 - p);
+    const h = Math.max(0.4, INDOOR_WALL_HEIGHT * (1 - p));
+    translucent.addBox(
+      wall.col * TILE_SIZE + TILE_SIZE * 0.5,
+      0,
+      wall.row * TILE_SIZE + TILE_SIZE * 0.5,
+      TILE_SIZE,
+      h,
+      TILE_SIZE,
+      rgb(18, 18, 24, alpha),
+      TexId.SOLID,
+      0
+    );
+  }
+
+  // Squishing & fading destroyed interior doors (turn black, squish height-wise, fade over 1s)
+  for (const d of state.destroyingDoors) {
+    if (d.levelId !== levelId) continue;
+    const p = Math.max(0, Math.min(1, d.elapsed / Math.max(0.01, d.duration)));
+    const alpha = Math.max(0.01, 1 - p);
+    const h = Math.max(0.4, 24.0 * (1 - p));
+    translucent.addBox(
+      d.bounds.x + d.bounds.width * 0.5,
+      0,
+      d.bounds.y + d.bounds.height * 0.5,
+      d.bounds.width - 1.2,
+      h,
+      4.2,
+      rgb(18, 18, 24, alpha),
+      TexId.SOLID,
+      0
+    );
+  }
+
+  // Medkits (+25 HP): white box with red cross + glowing green floor circle
+  for (const medkit of state.medkits) {
+    if (medkit.levelId !== levelId) continue;
+    if (
+      medkit.id === 'basement-spa-medkit' &&
+      state.levels['level-basement'].spaDoorClosed &&
+      !state.levels['level-basement'].spaFogCleared
+    ) {
+      continue;
+    }
+    const bobY = medkit.z + 1.4 + Math.sin(t * 3.2) * 0.45;
+    translucent.addShadowDisc(medkit.x, medkit.z, medkit.y, 4.8, 4.8, 0.25);
+    // Green circle around the medkit on the floor
+    translucent.addTorus(
+      medkit.x,
+      medkit.z + 0.3,
+      medkit.y,
+      5.8,
+      0.55,
+      16,
+      6,
+      'y',
+      rgb(44, 224, 96, 0.82),
+      TexId.SOLID,
+      0
+    );
+    // White medkit box
+    opaque.addBeveledBox(
+      medkit.x,
+      bobY,
+      medkit.y,
+      7.0,
+      4.4,
+      5.2,
+      0.45,
+      rgb(248, 250, 255),
+      TexId.SOLID,
+      0.55
+    );
+    // Red cross on top and front/back faces
+    opaque.addBox(
+      medkit.x,
+      bobY + 4.35,
+      medkit.y,
+      3.8,
+      0.35,
+      1.2,
+      rgb(228, 32, 42),
+      TexId.SOLID,
+      0.2
+    );
+    opaque.addBox(
+      medkit.x,
+      bobY + 4.35,
+      medkit.y,
+      1.2,
+      0.35,
+      3.4,
+      rgb(228, 32, 42),
+      TexId.SOLID,
+      0.2
+    );
+    opaque.addBox(
+      medkit.x,
+      bobY + 1.65,
+      medkit.y,
+      3.2,
+      1.1,
+      5.45,
+      rgb(228, 32, 42),
+      TexId.SOLID,
+      0.2
+    );
+    opaque.addBox(
+      medkit.x,
+      bobY + 0.8,
+      medkit.y,
+      1.1,
+      2.8,
+      5.45,
+      rgb(228, 32, 42),
+      TexId.SOLID,
+      0.2
+    );
+  }
+
   for (const hole of state.bulletHoles) {
     if (hole.levelId !== levelId) continue;
     opaque.addBox(
@@ -4462,8 +5268,112 @@ export function buildDynamicSceneMeshes(
     );
   }
 
+  // Rocket / Explosion Fireball Bursts (matching the basement mine explosion animation)
+  for (const exp of state.explosions) {
+    if (exp.levelId !== levelId || exp.timer <= 0) continue;
+    const expAlpha = Math.max(0, Math.min(1, exp.timer / Math.max(0.01, exp.maxTimer)));
+    const radius = 5 + (1 - expAlpha) * 18;
+    translucent.addSphere(
+      exp.x,
+      exp.z + radius * 0.45,
+      exp.y,
+      radius,
+      radius * 0.85,
+      radius,
+      10,
+      12,
+      rgb(255, 138, 32, expAlpha * 0.85),
+      TexId.SOLID,
+      0
+    );
+    translucent.addSphere(
+      exp.x,
+      exp.z + 10,
+      exp.y,
+      radius * 0.72,
+      radius * 0.72,
+      radius * 0.72,
+      8,
+      10,
+      rgb(255, 224, 92, expAlpha * 0.9),
+      TexId.SOLID,
+      0
+    );
+  }
+
   for (const proj of state.projectiles) {
-    if (proj.kind === 'fireball') {
+    if (proj.kind === 'rocket') {
+      const fx = Math.cos(proj.yaw);
+      const fy = Math.sin(proj.yaw);
+      // Olive metallic rocket casing + red nose cone
+      opaque.addOrientedBox(
+        proj.x,
+        proj.z,
+        proj.y,
+        5.8,
+        1.7,
+        1.7,
+        proj.yaw,
+        0,
+        rgb(88, 108, 72),
+        TexId.SOLID,
+        0.4
+      );
+      opaque.addSphere(
+        proj.x + fx * 3.1,
+        proj.z,
+        proj.y + fy * 3.1,
+        1.15,
+        1.05,
+        1.05,
+        6,
+        8,
+        rgb(224, 48, 38),
+        TexId.SOLID,
+        0.25
+      );
+      // Tail stabilizer fins
+      opaque.addOrientedBox(
+        proj.x - fx * 2.5,
+        proj.z,
+        proj.y - fy * 2.5,
+        1.4,
+        2.7,
+        2.7,
+        proj.yaw,
+        0,
+        rgb(36, 40, 48),
+        TexId.SOLID,
+        0.25
+      );
+      // Glowing exhaust plume behind the rocket
+      const flamePulse = 1 + Math.sin(t * 32) * 0.2;
+      translucent.addSphere(
+        proj.x - fx * 4.0,
+        proj.z,
+        proj.y - fy * 4.0,
+        2.2 * flamePulse,
+        1.8 * flamePulse,
+        1.8 * flamePulse,
+        6,
+        8,
+        rgb(255, 144, 36, 0.9),
+        TexId.SOLID,
+        0
+      );
+      if (pointLights.length < 2) {
+        pointLights.push({
+          x: proj.x,
+          y: proj.z + 2,
+          z: proj.y,
+          r: 1.0,
+          g: 0.48,
+          b: 0.14,
+          radius: 58,
+          intensity: 0.85,
+        });
+      }
+    } else if (proj.kind === 'fireball') {
       const pulse = 1 + Math.sin(t * 28 + proj.x * 0.2) * 0.16;
       translucent.addSphere(
         proj.x,

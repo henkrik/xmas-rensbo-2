@@ -6,14 +6,17 @@ import {
   consumeSlotPress,
   InputState,
 } from '../core/input';
-import { updateCat } from '../entities/cat';
+import { applyCatDamage, updateCat } from '../entities/cat';
 import { createDog, Dog, updateDog } from '../entities/dog';
 import {
   applyNpcDamage,
   ArmedNpcState,
+  igniteNpc,
+  NPC_BAZOOKA_ROCKET_SPEED,
   NPC_BURN_DAMAGE_PER_SECOND,
   NPC_UZI_BULLET_DAMAGE,
   PLAYER_FIREBALL_NPC_DAMAGE,
+  PLAYER_KATANA_NPC_DAMAGE,
   PLAYER_PUNCH_NPC_DAMAGE,
   PLAYER_UZI_NPC_DAMAGE,
   propagateHostileAlert,
@@ -21,17 +24,22 @@ import {
 import { ConeOfSight } from '../entities/sight';
 import {
   applyPlayerDamage,
+  BAZOOKA_FIRE_INTERVAL_SECONDS,
   createPlayer,
+  DROPPED_FLAMETHROWER_AMMO,
   FLAMETHROWER_FIRE_INTERVAL_SECONDS,
   FLAMETHROWER_MAX_DISTANCE,
   FLAMETHROWER_PROJECTILE_SPEED,
   Footprint,
+  MAX_PLAYER_HEALTH,
   MAX_UZI_AMMO,
   Player,
   Rect,
   rectsIntersect,
   selectPlayerEquipmentSlot,
+  setPlayerHealth,
   triggerPlayerJump,
+  triggerPlayerKatanaSwing,
   triggerPlayerPunch,
   updateFootprints,
   updatePlayer,
@@ -58,6 +66,12 @@ import {
   rectEdgeDistance,
 } from './interaction';
 import {
+  BASEMENT_FRONT_DOOR_BOUNDS,
+  BASEMENT_HALL_NORTH_DOOR_BOUNDS,
+  BASEMENT_MINE_EXPLOSION_DAMAGE,
+  BASEMENT_MINE_EXPLOSION_RADIUS,
+  BASEMENT_SPA_HIDDEN_MASK,
+  BASEMENT_SPA_MEDKIT_POS,
   BASEMENT_STAIRS_SIDE_NORTH_BOUNDS,
   BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS,
   BASEMENT_STAIRS_TRIGGER_BOUNDS,
@@ -100,6 +114,7 @@ import {
   ROOF_CHIMNEY_BOUNDS,
   ROOF_WALK_Y,
   STARTER_MAP,
+  TILE_SIZE,
   TileMap,
   TileType,
 } from './tilemap';
@@ -111,9 +126,10 @@ export const BULLET_HOLE_DURATION_SECONDS = 10;
 export const BLOOD_POOL_DURATION_SECONDS = 20;
 
 export interface Projectile {
-  kind?: 'bullet' | 'fireball';
+  kind?: 'bullet' | 'fireball' | 'rocket';
   owner?: 'player' | 'npc';
   sourceNpcKey?: string;
+  cutsceneShot?: boolean;
   x: number;
   y: number;
   z: number;
@@ -124,6 +140,15 @@ export interface Projectile {
   distanceTraveled?: number;
   maxDistance?: number;
   fromRoof?: boolean;
+}
+
+export interface ExplosionBurst {
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+  timer: number;
+  maxTimer: number;
 }
 
 export interface BulletHole {
@@ -158,6 +183,7 @@ export interface BloodPool {
 }
 
 export const PLAYER_DROPPED_UZI_DURATION_SECONDS = 3.0;
+export const MEDKIT_HEAL_AMOUNT = 25;
 
 export interface DroppedUzi {
   levelId: LevelId;
@@ -166,8 +192,62 @@ export interface DroppedUzi {
   z: number;
   yaw: number;
   pickupable?: boolean;
+  ammo?: number;
   age?: number;
   maxAge?: number;
+}
+
+export interface DroppedFlamethrower {
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  ammo: number;
+}
+
+export interface MedkitPickup {
+  id: string;
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export const WALL_DESTRUCTION_DURATION_SECONDS = 1.0;
+export const ROCKET_WALL_BLAST_RADIUS = 1.0 * TILE_SIZE;
+
+export interface DroppedKatana {
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+}
+
+export interface DroppedBazooka {
+  levelId: LevelId;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+}
+
+export interface DestroyingWall {
+  levelId: LevelId;
+  col: number;
+  row: number;
+  elapsed: number;
+  duration: number;
+  replacementTile: TileType;
+}
+
+export interface DestroyingDoor {
+  levelId: LevelId;
+  doorId: string;
+  bounds: Rect;
+  elapsed: number;
+  duration: number;
 }
 
 export interface LevelRegistry {
@@ -200,6 +280,15 @@ export interface GameState {
   bloodParticles: BloodParticle[];
   bloodPools: BloodPool[];
   droppedUzis: DroppedUzi[];
+  droppedFlamethrowers: DroppedFlamethrower[];
+  droppedKatanas: DroppedKatana[];
+  droppedBazookas: DroppedBazooka[];
+  medkits: MedkitPickup[];
+  explosions: ExplosionBurst[];
+  destroyingWalls: DestroyingWall[];
+  destroyingDoors: DestroyingDoor[];
+  blackenedWalls: Set<string>;
+  mapVersion: number;
   burningNpcs: Set<string>;
   hasLadder: boolean;
   ladderPlaced: boolean;
@@ -215,6 +304,9 @@ export interface GameState {
   debugMode: boolean;
   cheatMode: boolean;
   worldFadedToBlack: boolean;
+  houseExploding: boolean;
+  houseExplosionTimer: number;
+  houseExplosionSpawnAccum: number;
   screenFade: ScreenFadeState | null;
   secretSantaDB: SecretSantaDB | null;
 }
@@ -270,6 +362,36 @@ export function refreshInteractables(state: GameState): void {
     isBusyOutside || isBusyUpstairs
       ? null
       : findNearbyInteractable(state.player, state.interactables);
+
+  if (
+    !state.nearbyInteractable &&
+    !isBusyOutside &&
+    !isBusyUpstairs &&
+    state.player.equippedItem === 'uzi' &&
+    state.player.unlockedUzi &&
+    !state.player.uziDepleted
+  ) {
+    for (const floorUzi of state.droppedUzis) {
+      if (!floorUzi.pickupable || floorUzi.levelId !== state.currentLevelId) {
+        continue;
+      }
+      const uziRect: Rect = {
+        x: floorUzi.x - 7,
+        y: floorUzi.y - 7,
+        width: 14,
+        height: 14,
+      };
+      if (rectsIntersect(state.player, uziRect)) {
+        state.nearbyInteractable = {
+          id: 'swap-floor-uzi',
+          bounds: uziRect,
+          promptText: 'Swap Uzi',
+          dialogueLines: [],
+        };
+        break;
+      }
+    }
+  }
 }
 
 /**
@@ -470,6 +592,23 @@ export function createGameState(
     bloodParticles: [],
     bloodPools: [],
     droppedUzis: [],
+    droppedFlamethrowers: [],
+    droppedKatanas: [],
+    droppedBazookas: [],
+    medkits: [
+      {
+        id: 'basement-spa-medkit',
+        levelId: 'level-basement',
+        x: BASEMENT_SPA_MEDKIT_POS.x,
+        y: BASEMENT_SPA_MEDKIT_POS.y,
+        z: 0,
+      },
+    ],
+    explosions: [],
+    destroyingWalls: [],
+    destroyingDoors: [],
+    blackenedWalls: new Set<string>(),
+    mapVersion: 0,
     burningNpcs: new Set<string>(),
     hasLadder: levelOutside.hasLadder,
     ladderPlaced: levelOutside.ladderPlaced,
@@ -485,6 +624,9 @@ export function createGameState(
     debugMode,
     cheatMode,
     worldFadedToBlack,
+    houseExploding: false,
+    houseExplosionTimer: 0,
+    houseExplosionSpawnAccum: 0,
     screenFade: null,
     secretSantaDB,
   };
@@ -816,6 +958,9 @@ function getLevelNpcTargets(state: GameState): NpcTarget[] {
     if (upstairs.anneMarieCombat.mode !== 'dead') {
       addTarget('upstairs:Anne-Marie', upstairs.anneMarieNpc);
     }
+    if (upstairs.rosannaSpawned && upstairs.rosannaCombat.mode !== 'dead') {
+      addTarget('upstairs:Rosanna', upstairs.rosannaNpc);
+    }
   } else if (state.currentLevelId === 'level-people') {
     for (const npc of state.levels['level-people'].npcs) {
       addTarget(`people:${npc.name}`, npc.bounds);
@@ -890,14 +1035,51 @@ function damageArmedNpc(
       maxAge: 999999,
     });
     const rightAngle = npc.aimYaw + Math.PI / 2;
-    state.droppedUzis.push({
-      levelId: state.currentLevelId,
-      x: hitX + Math.cos(rightAngle) * 5.2,
-      y: hitY + Math.sin(rightAngle) * 5.2,
-      z: groundZ,
-      yaw: npc.aimYaw + 0.4,
-      pickupable: true,
-    });
+    if (npc.weapon === 'katana') {
+      state.droppedKatanas.push({
+        levelId: state.currentLevelId,
+        x: hitX + Math.cos(rightAngle) * 5.2,
+        y: hitY + Math.sin(rightAngle) * 5.2,
+        z: groundZ,
+        yaw: npc.aimYaw + 0.4,
+      });
+    } else if (npc.weapon === 'flamethrower') {
+      state.droppedFlamethrowers.push({
+        levelId: state.currentLevelId,
+        x: hitX + Math.cos(rightAngle) * 5.2,
+        y: hitY + Math.sin(rightAngle) * 5.2,
+        z: groundZ,
+        yaw: npc.aimYaw + 0.4,
+        ammo: DROPPED_FLAMETHROWER_AMMO,
+      });
+    } else if (npc.weapon === 'bazooka') {
+      state.droppedBazookas.push({
+        levelId: state.currentLevelId,
+        x: hitX + Math.cos(rightAngle) * 5.2,
+        y: hitY + Math.sin(rightAngle) * 5.2,
+        z: groundZ,
+        yaw: npc.aimYaw + 0.4,
+      });
+    } else if (npc.weapon === 'uzi') {
+      state.droppedUzis.push({
+        levelId: state.currentLevelId,
+        x: hitX + Math.cos(rightAngle) * 5.2,
+        y: hitY + Math.sin(rightAngle) * 5.2,
+        z: groundZ,
+        yaw: npc.aimYaw + 0.4,
+        pickupable: true,
+        ammo: MAX_UZI_AMMO,
+      });
+    }
+    if (key === 'basement:Olexa') {
+      state.medkits.push({
+        id: 'olexa-drop-medkit',
+        levelId: state.currentLevelId,
+        x: hitX - Math.cos(rightAngle) * 5.5,
+        y: hitY - Math.sin(rightAngle) * 5.5,
+        z: groundZ,
+      });
+    }
   }
 }
 
@@ -937,6 +1119,481 @@ function fireNpcUziProjectile(
   });
 }
 
+function fireNpcFlamethrowerProjectile(
+  state: GameState,
+  npc: ArmedNpcState,
+  originX: number,
+  originY: number,
+  aimYaw: number
+): void {
+  const rightAngle = aimYaw + Math.PI / 2;
+  const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+
+  const spawnX =
+    originX + Math.cos(aimYaw) * 8.5 + Math.cos(rightAngle) * 3.5;
+  const spawnY =
+    originY + Math.sin(aimYaw) * 8.5 + Math.sin(rightAngle) * 3.5;
+  const spawnZ = groundZ + 9.5;
+
+  state.projectiles.push({
+    kind: 'fireball',
+    owner: 'npc',
+    sourceNpcKey: npc.key,
+    x: spawnX,
+    y: spawnY,
+    z: spawnZ,
+    vx: Math.cos(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+    vy: Math.sin(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+    vz: 0,
+    yaw: aimYaw,
+    distanceTraveled: 0,
+    maxDistance: FLAMETHROWER_MAX_DISTANCE,
+    fromRoof: false,
+  });
+}
+
+function fireNpcBazookaProjectile(
+  state: GameState,
+  originX: number,
+  originY: number,
+  aimYaw: number,
+  sourceNpcKey?: string,
+  cutsceneShot: boolean = false
+): void {
+  const rightAngle = aimYaw + Math.PI / 2;
+  const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+
+  const spawnX =
+    originX + Math.cos(aimYaw) * 9.0 + Math.cos(rightAngle) * 3.0;
+  const spawnY =
+    originY + Math.sin(aimYaw) * 9.0 + Math.sin(rightAngle) * 3.0;
+  const spawnZ = groundZ + 11.5;
+
+  state.projectiles.push({
+    kind: 'rocket',
+    owner: 'npc',
+    sourceNpcKey,
+    cutsceneShot,
+    x: spawnX,
+    y: spawnY,
+    z: spawnZ,
+    vx: Math.cos(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+    vy: Math.sin(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+    vz: 0,
+    yaw: aimYaw,
+    distanceTraveled: 0,
+    maxDistance: 320,
+    fromRoof: false,
+  });
+}
+
+export function isOuterBorderWallTile(
+  levelId: LevelId,
+  map: TileMap,
+  col: number,
+  row: number
+): boolean {
+  // Double-thick library north backing in basement is directly backed by the north outer border
+  if (levelId === 'level-basement' && row === 7 && col >= 6 && col <= 12) {
+    return true;
+  }
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const nr = row + dr;
+      const nc = col + dc;
+      if (nr < 0 || nc < 0 || nr >= map.rows || nc >= map.cols) {
+        return true;
+      }
+      if (map.tiles[nr][nc] === TileType.VoidBlack) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function getDestroyedWallReplacementTile(
+  map: TileMap,
+  col: number,
+  row: number
+): TileType {
+  const floorCandidates = [
+    TileType.BathroomTileFloor,
+    TileType.StoneTileFloor,
+    TileType.WoodFloor,
+    TileType.StairsFloor,
+  ];
+  for (const [dc, dr] of [
+    [0, 1],
+    [0, -1],
+    [-1, 0],
+    [1, 0],
+  ]) {
+    const t = map.tiles[row + dr]?.[col + dc];
+    if (t !== undefined && floorCandidates.includes(t)) {
+      return t;
+    }
+  }
+  return TileType.WoodFloor;
+}
+
+function distancePointToRect(x: number, y: number, r: Rect): number {
+  const dx = Math.max(r.x - x, 0, x - (r.x + r.width));
+  const dy = Math.max(r.y - y, 0, y - (r.y + r.height));
+  return Math.hypot(dx, dy);
+}
+
+function applyRocketExplosionToWallsAndDoors(
+  state: GameState,
+  x: number,
+  y: number
+): void {
+  const levelId = state.currentLevelId;
+  if (levelId !== 'level-basement' && levelId !== 'level-upstairs') {
+    return;
+  }
+  const map = state.map;
+  const ts = map.tileSize;
+  const minCol = Math.max(0, Math.floor((x - ROCKET_WALL_BLAST_RADIUS) / ts));
+  const maxCol = Math.min(
+    map.cols - 1,
+    Math.floor((x + ROCKET_WALL_BLAST_RADIUS) / ts)
+  );
+  const minRow = Math.max(0, Math.floor((y - ROCKET_WALL_BLAST_RADIUS) / ts));
+  const maxRow = Math.min(
+    map.rows - 1,
+    Math.floor((y + ROCKET_WALL_BLAST_RADIUS) / ts)
+  );
+
+  let changed = false;
+  const activeLevel = getActiveLevel(state);
+  const levelDoors =
+    levelId === 'level-basement'
+      ? state.levels['level-basement'].doors
+      : state.levels['level-upstairs'].doors;
+
+  const revealRoomsTouchingRect = (rect: Rect): void => {
+    const expanded: Rect = {
+      x: rect.x - ts - 2,
+      y: rect.y - ts - 2,
+      width: rect.width + ts * 2 + 4,
+      height: rect.height + ts * 2 + 4,
+    };
+    for (const d of levelDoors) {
+      if (d.hiddenRegions.some((hr) => rectsIntersect(expanded, hr))) {
+        d.hiddenRegions = [];
+        changed = true;
+      }
+    }
+    if (
+      levelId === 'level-basement' &&
+      !state.levels['level-basement'].spaFogCleared &&
+      rectsIntersect(expanded, BASEMENT_SPA_HIDDEN_MASK)
+    ) {
+      state.levels['level-basement'].spaFogCleared = true;
+      changed = true;
+    }
+  };
+
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
+      if (map.tiles[row]?.[col] !== TileType.InteriorWall) continue;
+      const tileRect: Rect = {
+        x: col * ts,
+        y: row * ts,
+        width: ts,
+        height: ts,
+      };
+      if (distancePointToRect(x, y, tileRect) > ROCKET_WALL_BLAST_RADIUS) {
+        continue;
+      }
+
+      if (isOuterBorderWallTile(levelId, map, col, row)) {
+        const key = `${levelId}:${col},${row}`;
+        if (!state.blackenedWalls.has(key)) {
+          state.blackenedWalls.add(key);
+          changed = true;
+        }
+      } else {
+        const alreadyDestroying = state.destroyingWalls.some(
+          (w) => w.levelId === levelId && w.col === col && w.row === row
+        );
+        if (!alreadyDestroying) {
+          state.destroyingWalls.push({
+            levelId,
+            col,
+            row,
+            elapsed: 0,
+            duration: WALL_DESTRUCTION_DURATION_SECONDS,
+            replacementTile: getDestroyedWallReplacementTile(map, col, row),
+          });
+          changed = true;
+        }
+        revealRoomsTouchingRect(tileRect);
+      }
+    }
+  }
+
+  // Interior doors within blast radius also turn black, squish & fade away over 1s
+  for (const door of levelDoors) {
+    if (distancePointToRect(x, y, door.bounds) <= ROCKET_WALL_BLAST_RADIUS) {
+      if (
+        !state.destroyingDoors.some(
+          (d) => d.levelId === levelId && d.doorId === door.id
+        )
+      ) {
+        state.destroyingDoors.push({
+          levelId,
+          doorId: door.id,
+          bounds: { ...door.bounds },
+          elapsed: 0,
+          duration: WALL_DESTRUCTION_DURATION_SECONDS,
+        });
+        door.hiddenRegions = [];
+        changed = true;
+      }
+    }
+  }
+
+  if (levelId === 'level-basement') {
+    const basement = state.levels['level-basement'];
+    // Interior Spa double door
+    if (
+      basement.spaDoorClosed &&
+      distancePointToRect(x, y, BASEMENT_HALL_NORTH_DOOR_BOUNDS) <=
+        ROCKET_WALL_BLAST_RADIUS &&
+      !state.destroyingDoors.some(
+        (d) =>
+          d.levelId === 'level-basement' &&
+          d.doorId === 'basement-hall-north-door'
+      )
+    ) {
+      state.destroyingDoors.push({
+        levelId: 'level-basement',
+        doorId: 'basement-hall-north-door',
+        bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
+        elapsed: 0,
+        duration: WALL_DESTRUCTION_DURATION_SECONDS,
+      });
+      basement.spaFogCleared = true;
+      changed = true;
+    }
+    // Exterior locked front door turns black but remains indestructible
+    if (
+      distancePointToRect(x, y, BASEMENT_FRONT_DOOR_BOUNDS) <=
+      ROCKET_WALL_BLAST_RADIUS
+    ) {
+      for (const fc of [15, 16]) {
+        const key = `level-basement:${fc},20`;
+        if (!state.blackenedWalls.has(key)) {
+          state.blackenedWalls.add(key);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  void activeLevel;
+  if (changed) {
+    state.mapVersion += 1;
+  }
+}
+
+function damageUpstairsCat(state: GameState, rawDamage: number): void {
+  if (state.currentLevelId !== 'level-upstairs') return;
+  const cat = state.levels['level-upstairs'].cat;
+  if (!applyCatDamage(cat, rawDamage)) return;
+  const ccx = cat.x + cat.width * 0.5;
+  const ccy = cat.y + cat.height * 0.5;
+  const groundZ = getTerrainHeight(ccx, ccy, state.currentLevelId);
+  spawnNpcBlood(state, ccx, ccy, groundZ + cat.jumpZ);
+}
+
+const UPSTAIRS_HOUSE_EXPLOSION_SPOTS: ReadonlyArray<readonly [number, number]> = [
+  [3, 15],
+  [6, 13],
+  [4, 7],
+  [11, 7],
+  [14, 11],
+  [18, 7],
+  [24, 7],
+  [22, 15],
+  [26, 15],
+  [11, 18],
+];
+
+function spawnHouseExplosionWave(state: GameState, jitter: boolean): void {
+  const ts = state.map.tileSize;
+  for (const [col, row] of UPSTAIRS_HOUSE_EXPLOSION_SPOTS) {
+    const jx = jitter ? (Math.random() - 0.5) * ts * 1.4 : 0;
+    const jy = jitter ? (Math.random() - 0.5) * ts * 1.4 : 0;
+    const jz = jitter ? Math.random() * 10 : 0;
+    state.explosions.push({
+      levelId: 'level-upstairs',
+      x: (col + 0.5) * ts + jx,
+      y: (row + 0.5) * ts + jy,
+      z: jz,
+      timer: 0.65,
+      maxTimer: 0.65,
+    });
+  }
+}
+
+function triggerUpstairsHouseExplosion(state: GameState): void {
+  state.houseExploding = true;
+  state.houseExplosionTimer = 2.0;
+  state.houseExplosionSpawnAccum = 0;
+
+  spawnHouseExplosionWave(state, false);
+
+  const upstairs = state.levels['level-upstairs'];
+  const map = upstairs.map;
+  let changed = false;
+
+  for (let row = 0; row < map.rows; row++) {
+    for (let col = 0; col < map.cols; col++) {
+      if (map.tiles[row]?.[col] !== TileType.InteriorWall) continue;
+      if (isOuterBorderWallTile('level-upstairs', map, col, row)) {
+        const key = `level-upstairs:${col},${row}`;
+        if (!state.blackenedWalls.has(key)) {
+          state.blackenedWalls.add(key);
+          changed = true;
+        }
+      } else {
+        const alreadyDestroying = state.destroyingWalls.some(
+          (w) => w.levelId === 'level-upstairs' && w.col === col && w.row === row
+        );
+        if (!alreadyDestroying) {
+          state.destroyingWalls.push({
+            levelId: 'level-upstairs',
+            col,
+            row,
+            elapsed: 0,
+            duration: WALL_DESTRUCTION_DURATION_SECONDS,
+            replacementTile: getDestroyedWallReplacementTile(map, col, row),
+          });
+          changed = true;
+        }
+      }
+    }
+  }
+
+  for (const door of upstairs.doors) {
+    door.hiddenRegions = [];
+    if (
+      !state.destroyingDoors.some(
+        (d) => d.levelId === 'level-upstairs' && d.doorId === door.id
+      )
+    ) {
+      state.destroyingDoors.push({
+        levelId: 'level-upstairs',
+        doorId: door.id,
+        bounds: { ...door.bounds },
+        elapsed: 0,
+        duration: WALL_DESTRUCTION_DURATION_SECONDS,
+      });
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    state.mapVersion += 1;
+  }
+}
+
+function detonateRocket(
+  state: GameState,
+  x: number,
+  y: number,
+  cutsceneShot: boolean = false,
+  sourceNpcKey?: string,
+  owner: 'player' | 'npc' = 'npc'
+): void {
+  const groundZ = getTerrainHeight(x, y, state.currentLevelId);
+  state.explosions.push({
+    levelId: state.currentLevelId,
+    x,
+    y,
+    z: groundZ,
+    timer: 0.65,
+    maxTimer: 0.65,
+  });
+
+  applyRocketExplosionToWallsAndDoors(state, x, y);
+
+  if (!cutsceneShot) {
+    if (owner === 'npc') {
+      const playerCx = state.player.x + state.player.width * 0.5;
+      const playerCy = state.player.y + state.player.height * 0.5;
+      if (
+        Math.hypot(playerCx - x, playerCy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS
+      ) {
+        damagePlayer(state, BASEMENT_MINE_EXPLOSION_DAMAGE);
+      }
+    }
+
+    if (owner === 'player' && state.currentLevelId === 'level-upstairs') {
+      const cat = state.levels['level-upstairs'].cat;
+      if (cat.mode !== 'dead') {
+        const ccx = cat.x + cat.width * 0.5;
+        const ccy = cat.y + cat.height * 0.5;
+        if (Math.hypot(ccx - x, ccy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+          damageUpstairsCat(state, BASEMENT_MINE_EXPLOSION_DAMAGE);
+        }
+      }
+    }
+
+    for (const target of getLevelNpcTargets(state)) {
+      if (target.key === sourceNpcKey) continue;
+      const ncx = target.rect.x + target.rect.width * 0.5;
+      const ncy = target.rect.y + target.rect.height * 0.5;
+      if (Math.hypot(ncx - x, ncy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+        damageArmedNpc(
+          state,
+          target.key,
+          BASEMENT_MINE_EXPLOSION_DAMAGE,
+          ncx,
+          ncy,
+          target.groundZ
+        );
+      }
+    }
+  }
+}
+
+function checkKatanaNpcHit(state: GameState): void {
+  const player = state.player;
+  const aimYaw =
+    typeof player.yaw === 'number'
+      ? player.yaw
+      : directionToYaw(player.facing);
+  const cx = player.x + player.width * 0.5 + Math.cos(aimYaw) * 10;
+  const cy = player.y + player.height * 0.5 + Math.sin(aimYaw) * 10;
+  const slashRect: Rect = {
+    x: cx - 15,
+    y: cy - 15,
+    width: 30,
+    height: 30,
+  };
+
+  for (const target of getLevelNpcTargets(state)) {
+    if (rectsIntersect(slashRect, target.rect)) {
+      const ncx = target.rect.x + target.rect.width * 0.5;
+      const ncy = target.rect.y + target.rect.height * 0.5;
+      spawnNpcBlood(state, ncx, ncy, target.groundZ);
+      damageArmedNpc(state, target.key, PLAYER_KATANA_NPC_DAMAGE, ncx, ncy, target.groundZ);
+    }
+  }
+
+  if (state.currentLevelId === 'level-upstairs') {
+    const cat = state.levels['level-upstairs'].cat;
+    if (cat.mode !== 'dead' && rectsIntersect(slashRect, cat)) {
+      damageUpstairsCat(state, PLAYER_KATANA_NPC_DAMAGE);
+    }
+  }
+}
+
 function checkPunchNpcHit(state: GameState): void {
   const player = state.player;
   const aimYaw =
@@ -958,6 +1615,13 @@ function checkPunchNpcHit(state: GameState): void {
       const ncy = target.rect.y + target.rect.height * 0.5;
       spawnNpcBlood(state, ncx, ncy, target.groundZ);
       damageArmedNpc(state, target.key, PLAYER_PUNCH_NPC_DAMAGE, ncx, ncy, target.groundZ);
+    }
+  }
+
+  if (state.currentLevelId === 'level-upstairs') {
+    const cat = state.levels['level-upstairs'].cat;
+    if (cat.mode !== 'dead' && rectsIntersect(punchRect, cat)) {
+      damageUpstairsCat(state, PLAYER_PUNCH_NPC_DAMAGE);
     }
   }
 }
@@ -986,6 +1650,47 @@ function updateEffectTimers(state: GameState, dtSeconds: number): void {
       if (drop.age >= drop.maxAge) {
         state.droppedUzis.splice(i, 1);
       }
+    }
+  }
+
+  for (let i = state.explosions.length - 1; i >= 0; i--) {
+    state.explosions[i].timer -= dtSeconds;
+    if (state.explosions[i].timer <= 0) {
+      state.explosions.splice(i, 1);
+    }
+  }
+
+  for (let i = state.destroyingWalls.length - 1; i >= 0; i--) {
+    const wall = state.destroyingWalls[i];
+    wall.elapsed += dtSeconds;
+    if (wall.elapsed >= wall.duration) {
+      const lvl = state.levels[wall.levelId];
+      lvl.map.tiles[wall.row][wall.col] = wall.replacementTile;
+      if (state.currentLevelId === wall.levelId) {
+        state.map.tiles[wall.row][wall.col] = wall.replacementTile;
+      }
+      state.destroyingWalls.splice(i, 1);
+      state.mapVersion += 1;
+    }
+  }
+
+  for (let i = state.destroyingDoors.length - 1; i >= 0; i--) {
+    const d = state.destroyingDoors[i];
+    d.elapsed += dtSeconds;
+    if (d.elapsed >= d.duration) {
+      if (d.levelId === 'level-basement') {
+        const basement = state.levels['level-basement'];
+        if (d.doorId === 'basement-hall-north-door') {
+          basement.spaDoorClosed = false;
+        } else {
+          basement.doors = basement.doors.filter((dr) => dr.id !== d.doorId);
+        }
+      } else if (d.levelId === 'level-upstairs') {
+        const upstairs = state.levels['level-upstairs'];
+        upstairs.doors = upstairs.doors.filter((dr) => dr.id !== d.doorId);
+      }
+      state.destroyingDoors.splice(i, 1);
+      state.mapVersion += 1;
     }
   }
 
@@ -1056,19 +1761,41 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
       p.distanceTraveled = (p.distanceTraveled ?? 0) + stepSpeed * subDt;
 
       if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
+        if (p.kind === 'rocket') {
+          detonateRocket(
+            state,
+            p.x,
+            p.y,
+            p.cutsceneShot,
+            p.sourceNpcKey,
+            p.owner ?? 'npc'
+          );
+        }
         removed = true;
         break;
       }
 
       if (typeof p.maxDistance === 'number' && p.distanceTraveled >= p.maxDistance) {
+        if (p.kind === 'rocket') {
+          detonateRocket(
+            state,
+            p.x,
+            p.y,
+            p.cutsceneShot,
+            p.sourceNpcKey,
+            p.owner ?? 'npc'
+          );
+        }
         removed = true;
         break;
       }
 
       const isFireball = p.kind === 'fireball';
-      const projRect: Rect = isFireball
-        ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 }
-        : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
+      const isRocket = p.kind === 'rocket';
+      const projRect: Rect =
+        isFireball || isRocket
+          ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 }
+          : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
 
       // Check per-tile stairs wood burn in basement when hit by a fireball
       if (isFireball && state.currentLevelId === 'level-basement') {
@@ -1079,10 +1806,14 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         }
       }
 
-      // NPC-fired projectiles damage the player (5 HP) without resetting the map
-      if (p.owner === 'npc') {
+      // NPC-fired projectiles damage the player (5 HP for bullets/flames, 50 HP explosion for rockets)
+      if (p.owner === 'npc' && !p.cutsceneShot) {
         if (rectsIntersect(projRect, state.player)) {
-          damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
+          if (isRocket) {
+            detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, 'npc');
+          } else {
+            damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
+          }
           removed = true;
           break;
         }
@@ -1093,9 +1824,22 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         (t) =>
           t.key !== p.sourceNpcKey && rectsIntersect(projRect, t.rect)
       );
-      if (hitNpc) {
-        if (isFireball) {
+      if (hitNpc && !p.cutsceneShot) {
+        if (isRocket) {
+          detonateRocket(
+            state,
+            p.x,
+            p.y,
+            false,
+            p.sourceNpcKey,
+            p.owner ?? 'npc'
+          );
+        } else if (isFireball) {
           state.burningNpcs.add(hitNpc.key);
+          const armed = getArmedNpcByKey(state, hitNpc.key);
+          if (armed) {
+            igniteNpc(armed);
+          }
           damageArmedNpc(
             state,
             hitNpc.key,
@@ -1121,6 +1865,33 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         break;
       }
 
+      // Check player-fired hits against the upstairs cat (1/10th armor damage -> turns hostile)
+      if (
+        p.owner !== 'npc' &&
+        !p.cutsceneShot &&
+        state.currentLevelId === 'level-upstairs'
+      ) {
+        const cat = state.levels['level-upstairs'].cat;
+        if (cat.mode !== 'dead' && rectsIntersect(projRect, cat)) {
+          if (isRocket) {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              false,
+              p.sourceNpcKey,
+              p.owner ?? 'player'
+            );
+          } else if (isFireball) {
+            damageUpstairsCat(state, PLAYER_FIREBALL_NPC_DAMAGE);
+          } else {
+            damageUpstairsCat(state, PLAYER_UZI_NPC_DAMAGE);
+          }
+          removed = true;
+          break;
+        }
+      }
+
       if (p.fromRoof) {
         const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
         const hitTallTreeOrEdge = isRectCollidingWithMap(
@@ -1138,7 +1909,7 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
             state.map.tiles[r][c] !== TileType.Tree
         );
         if (hitChimney || hitTallTreeOrEdge) {
-          if (!isFireball) {
+          if (!isFireball && !isRocket) {
             state.bulletHoles.push({
               levelId: state.currentLevelId,
               x: p.x,
@@ -1147,6 +1918,15 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
               age: 0,
               maxAge: BULLET_HOLE_DURATION_SECONDS,
             });
+          } else if (isRocket) {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              p.cutsceneShot,
+              p.sourceNpcKey,
+              p.owner ?? 'npc'
+            );
           }
           removed = true;
           break;
@@ -1160,30 +1940,50 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         projRect.y,
         projRect.width,
         projRect.height,
-        true
+        true,
+        p.cutsceneShot
+          ? (c, r) => {
+              const tile = state.map.tiles[r]?.[c];
+              // Cutscene rocket passes smoothly through row 4 north kitchen window and over low kitchen counter/island into the kitchen wall
+              if (r < 5) return true;
+              if (tile === TileType.FurnitureSolid) return true;
+              return false;
+            }
+          : undefined
       );
       const sourceNpcTarget = p.sourceNpcKey
         ? npcTargets.find((t) => t.key === p.sourceNpcKey)
         : undefined;
-      const hitObstacle = obstacles.some((obs) => {
-        if (
-          sourceNpcTarget &&
-          obs.x === sourceNpcTarget.rect.x &&
-          obs.y === sourceNpcTarget.rect.y &&
-          obs.width === sourceNpcTarget.rect.width &&
-          obs.height === sourceNpcTarget.rect.height
-        ) {
-          return false;
-        }
-        return rectsIntersect(projRect, obs);
-      });
+      const hitObstacle = p.cutsceneShot
+        ? false
+        : obstacles.some((obs) => {
+            if (
+              sourceNpcTarget &&
+              obs.x === sourceNpcTarget.rect.x &&
+              obs.y === sourceNpcTarget.rect.y &&
+              obs.width === sourceNpcTarget.rect.width &&
+              obs.height === sourceNpcTarget.rect.height
+            ) {
+              return false;
+            }
+            return rectsIntersect(projRect, obs);
+          });
       const hitOutsideDynamic =
         state.currentLevelId === 'level-outside' &&
         (rectsIntersect(projRect, state.dog) ||
           rectsIntersect(projRect, state.motorcycle));
 
       if (hitMap || hitObstacle || hitOutsideDynamic) {
-        if (!isFireball && (hitMap || hitObstacle)) {
+        if (isRocket) {
+          detonateRocket(
+            state,
+            p.x,
+            p.y,
+            p.cutsceneShot,
+            p.sourceNpcKey,
+            p.owner ?? 'npc'
+          );
+        } else if (!isFireball && (hitMap || hitObstacle)) {
           state.bulletHoles.push({
             levelId: state.currentLevelId,
             x: p.x,
@@ -1270,6 +2070,12 @@ function fireUziProjectile(state: GameState): void {
 
 function fireFlamethrowerProjectile(state: GameState): void {
   const player = state.player;
+  if (player.flamethrowerAmmo <= 0) {
+    return;
+  }
+  if (Number.isFinite(player.flamethrowerAmmo)) {
+    player.flamethrowerAmmo = Math.max(0, player.flamethrowerAmmo - 1);
+  }
   const aimYaw =
     typeof player.yaw === 'number'
       ? player.yaw
@@ -1306,6 +2112,42 @@ function fireFlamethrowerProjectile(state: GameState): void {
     player.weaponVibrationTimer,
     FLAMETHROWER_FIRE_INTERVAL_SECONDS + 0.05
   );
+}
+
+function firePlayerBazookaProjectile(state: GameState): void {
+  const player = state.player;
+  const aimYaw =
+    typeof player.yaw === 'number'
+      ? player.yaw
+      : directionToYaw(player.facing);
+  const rightAngle = aimYaw + Math.PI / 2;
+  const cx = player.x + player.width * 0.5;
+  const cy = player.y + player.height * 0.5;
+  const onRoof = state.currentLevelId === 'level-outside' && state.isOnRoof;
+  const groundZ = onRoof
+    ? getMainHouseRoofElevation(cx, cy)
+    : getTerrainHeight(cx, cy, state.currentLevelId);
+
+  const spawnX = cx + Math.cos(aimYaw) * 9.0 + Math.cos(rightAngle) * 3.0;
+  const spawnY = cy + Math.sin(aimYaw) * 9.0 + Math.sin(rightAngle) * 3.0;
+  const spawnZ = groundZ + (player.jumpOffset ?? 0) + 11.5;
+
+  state.projectiles.push({
+    kind: 'rocket',
+    owner: 'player',
+    x: spawnX,
+    y: spawnY,
+    z: spawnZ,
+    vx: Math.cos(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+    vy: Math.sin(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+    vz: 0,
+    yaw: aimYaw,
+    distanceTraveled: 0,
+    maxDistance: 320,
+    fromRoof: onRoof,
+  });
+
+  player.weaponVibrationTimer = Math.max(player.weaponVibrationTimer, 0.25);
 }
 
 export function updateGameState(
@@ -1379,6 +2221,22 @@ export function updateGameState(
     }
   }
 
+  // Animate full-house C4 demolition even while endgame dialogue is displayed
+  if (state.houseExploding) {
+    updateEffectTimers(state, dtSeconds);
+    if (state.houseExplosionTimer > 0) {
+      state.houseExplosionTimer = Math.max(0, state.houseExplosionTimer - dtSeconds);
+      state.houseExplosionSpawnAccum += dtSeconds;
+      while (state.houseExplosionSpawnAccum >= 0.12) {
+        state.houseExplosionSpawnAccum -= 0.12;
+        spawnHouseExplosionWave(state, true);
+      }
+      if (state.houseExplosionTimer <= 0) {
+        state.worldFadedToBlack = true;
+      }
+    }
+  }
+
   // If a dialogue box is currently open, pressing Space advances or closes it
   if (state.activeDialogue) {
     state.player.isMoving = false;
@@ -1391,6 +2249,9 @@ export function updateGameState(
         return;
       }
       state.activeDialogue.currentIndex += 1;
+      if (state.houseExploding && state.activeDialogue.currentIndex >= 1) {
+        state.worldFadedToBlack = true;
+      }
       if (
         state.activeDialogue.currentIndex >= state.activeDialogue.lines.length
       ) {
@@ -1432,17 +2293,107 @@ export function updateGameState(
         height: 12,
       };
       if (rectsIntersect(state.player, uziRect)) {
+        const pickedAmmo = uzi.ammo ?? MAX_UZI_AMMO;
         state.droppedUzis.splice(i, 1);
         state.player.unlockedUzi = true;
-        state.player.uziDepleted = false;
-        state.player.uziAmmo = MAX_UZI_AMMO;
+        state.player.uziDepleted = pickedAmmo <= 0;
+        state.player.uziAmmo = pickedAmmo;
         state.player.uziDropTimer = 0;
         state.player.uziCheatRefillTimer = 0;
-        state.player.equippedItem = 'uzi';
+        state.player.equippedItem = pickedAmmo > 0 ? 'uzi' : 'empty';
         state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
-        debugLog('Picked up Uzi from fallen NPC (30 rounds)');
+        debugLog(`Picked up Uzi from fallen NPC (${pickedAmmo} rounds)`);
         break;
       }
+    }
+  }
+
+  // Pick up dropped flamethrowers on touch (+20 flames each)
+  for (let i = state.droppedFlamethrowers.length - 1; i >= 0; i--) {
+    const flameDrop = state.droppedFlamethrowers[i];
+    if (flameDrop.levelId !== state.currentLevelId) continue;
+    const flameRect: Rect = {
+      x: flameDrop.x - 7,
+      y: flameDrop.y - 7,
+      width: 14,
+      height: 14,
+    };
+    if (rectsIntersect(state.player, flameRect)) {
+      state.droppedFlamethrowers.splice(i, 1);
+      state.player.unlockedFlamethrower = true;
+      if (Number.isFinite(state.player.flamethrowerAmmo)) {
+        state.player.flamethrowerAmmo += flameDrop.ammo;
+      } else {
+        state.player.flamethrowerAmmo = flameDrop.ammo;
+      }
+      if (state.player.equippedItem === 'empty') {
+        selectPlayerEquipmentSlot(state.player, 4);
+      }
+      debugLog(`Picked up Flamethrower (+${flameDrop.ammo} flames)`);
+      break;
+    }
+  }
+
+  // Pick up dropped katana sword on touch
+  for (let i = state.droppedKatanas.length - 1; i >= 0; i--) {
+    const katana = state.droppedKatanas[i];
+    if (katana.levelId !== state.currentLevelId) continue;
+    const katanaRect: Rect = {
+      x: katana.x - 7,
+      y: katana.y - 7,
+      width: 14,
+      height: 14,
+    };
+    if (rectsIntersect(state.player, katanaRect)) {
+      state.droppedKatanas.splice(i, 1);
+      state.player.unlockedKatana = true;
+      selectPlayerEquipmentSlot(state.player, 5);
+      debugLog('Picked up Katana!');
+      break;
+    }
+  }
+
+  // Pick up dropped bazooka (from Rosanna) on touch
+  for (let i = state.droppedBazookas.length - 1; i >= 0; i--) {
+    const bazooka = state.droppedBazookas[i];
+    if (bazooka.levelId !== state.currentLevelId) continue;
+    const bazookaRect: Rect = {
+      x: bazooka.x - 7,
+      y: bazooka.y - 7,
+      width: 14,
+      height: 14,
+    };
+    if (rectsIntersect(state.player, bazookaRect)) {
+      state.droppedBazookas.splice(i, 1);
+      state.player.unlockedBazooka = true;
+      selectPlayerEquipmentSlot(state.player, 6);
+      debugLog('Picked up Bazooka!');
+      break;
+    }
+  }
+
+  // Pick up medkit on touch (+25 HP)
+  for (let i = state.medkits.length - 1; i >= 0; i--) {
+    const medkit = state.medkits[i];
+    if (medkit.levelId !== state.currentLevelId) continue;
+    if (
+      medkit.id === 'basement-spa-medkit' &&
+      state.levels['level-basement'].spaDoorClosed
+    ) {
+      continue;
+    }
+    if (state.player.health >= MAX_PLAYER_HEALTH) continue;
+    const medkitRect: Rect = {
+      x: medkit.x - 7,
+      y: medkit.y - 7,
+      width: 14,
+      height: 14,
+    };
+    if (rectsIntersect(state.player, medkitRect)) {
+      state.medkits.splice(i, 1);
+      setPlayerHealth(state.player, state.player.health + MEDKIT_HEAL_AMOUNT);
+      debugLog(`Picked up Medkit (+${MEDKIT_HEAL_AMOUNT} HP)`);
+      break;
     }
   }
   updateEffectTimers(state, dtSeconds);
@@ -1484,6 +2435,31 @@ export function updateGameState(
       originY: number,
       aimYaw: number
     ) => fireNpcUziProjectile(state, npc, originX, originY, aimYaw),
+    fireNpcFlamethrower: (
+      npc: ArmedNpcState,
+      originX: number,
+      originY: number,
+      aimYaw: number
+    ) => fireNpcFlamethrowerProjectile(state, npc, originX, originY, aimYaw),
+    fireNpcBazooka: (
+      npc: ArmedNpcState,
+      originX: number,
+      originY: number,
+      aimYaw: number
+    ) => fireNpcBazookaProjectile(state, originX, originY, aimYaw, npc.key, false),
+    fireRosannaCutsceneRocket: (
+      originX: number,
+      originY: number,
+      aimYaw: number
+    ) =>
+      fireNpcBazookaProjectile(
+        state,
+        originX,
+        originY,
+        aimYaw,
+        'upstairs:Rosanna',
+        true
+      ),
     getSecretSantaReceiver: () => {
       if (!state.secretSantaDB) return undefined;
       const playerName = state.secretSantaDB.playerName;
@@ -1492,6 +2468,9 @@ export function updateGameState(
     },
     fadeWorldToBlack: () => {
       state.worldFadedToBlack = true;
+    },
+    detonateHouseC4: () => {
+      triggerUpstairsHouseExplosion(state);
     },
   };
 
@@ -1590,13 +2569,16 @@ export function updateGameState(
       state.player,
       dtSeconds,
       upstairs.map,
-      upstairs.getSolidObstacles()
+      upstairs.getSolidObstacles(),
+      (damage) => damagePlayer(state, damage)
     );
     // Re-check right after moving in case this step crossed into the kitchen
     if (upstairs.updateCutscene(0, state.player, transitionCtx)) {
       refreshInteractables(state);
       return;
     }
+    // Check west hallway ambush trigger & update Henrik/Tanja door-open zoom
+    upstairs.updateTableRoomAmbush(dtSeconds, state.player);
     // Update Upstairs NPCs sight detection
     upstairs.updateNpcSight(dtSeconds, state.player, transitionCtx);
     if (state.activeDialogue) {
@@ -1635,6 +2617,39 @@ export function updateGameState(
 
   // Check if Santa is close enough to an interactable object to show the Space prompt
   refreshInteractables(state);
+
+  // If already holding an Uzi in hand and standing on a pickupable floor Uzi, pressing Space swaps magazines & replays equip animation
+  if (
+    actionPressed &&
+    state.player.equippedItem === 'uzi' &&
+    state.player.unlockedUzi &&
+    !state.player.uziDepleted
+  ) {
+    for (const floorUzi of state.droppedUzis) {
+      if (!floorUzi.pickupable || floorUzi.levelId !== state.currentLevelId) continue;
+      const uziRect: Rect = {
+        x: floorUzi.x - 7,
+        y: floorUzi.y - 7,
+        width: 14,
+        height: 14,
+      };
+      if (rectsIntersect(state.player, uziRect)) {
+        const prevPlayerAmmo = state.player.uziAmmo;
+        const floorAmmo = floorUzi.ammo ?? MAX_UZI_AMMO;
+        state.player.uziAmmo = floorAmmo;
+        floorUzi.ammo = prevPlayerAmmo;
+        state.player.uziDepleted = floorAmmo <= 0;
+        state.player.equippedItem = state.player.uziDepleted ? 'empty' : 'uzi';
+        state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+        state.player.uziFireCooldown = 0;
+        state.player.punchTimer = 0;
+        debugLog(
+          `Swapped Uzi on floor (${prevPlayerAmmo} <-> ${floorAmmo} rounds)`
+        );
+        return;
+      }
+    }
+  }
 
   if (actionPressed && state.nearbyInteractable) {
     const target = state.nearbyInteractable;
@@ -1679,6 +2694,12 @@ export function updateGameState(
         checkPunchNpcHit(state);
       }
     }
+  } else if (state.player.equippedItem === 'katana') {
+    if (attackPressed || (!state.nearbyInteractable && actionPressed)) {
+      if (triggerPlayerKatanaSwing(state.player)) {
+        checkKatanaNpcHit(state);
+      }
+    }
   } else if (state.player.equippedItem === 'uzi') {
     const wantsToFire =
       attackPressed ||
@@ -1696,12 +2717,25 @@ export function updateGameState(
       attackPressed ||
       Boolean(input.attack) ||
       (!state.nearbyInteractable && (actionPressed || Boolean(input.action)));
-    if (wantsToFire && state.player.flamethrowerFireCooldown <= 1e-6) {
+    if (
+      wantsToFire &&
+      state.player.flamethrowerFireCooldown <= 1e-6 &&
+      state.player.flamethrowerAmmo > 0
+    ) {
       state.player.flamethrowerFireCooldown = Math.max(
         0.01,
         FLAMETHROWER_FIRE_INTERVAL_SECONDS - flameCooldownRemainder
       );
       fireFlamethrowerProjectile(state);
+    }
+  } else if (state.player.equippedItem === 'bazooka') {
+    const wantsToFire =
+      attackPressed ||
+      Boolean(input.attack) ||
+      (!state.nearbyInteractable && (actionPressed || Boolean(input.action)));
+    if (wantsToFire && state.player.bazookaFireCooldown <= 1e-6) {
+      state.player.bazookaFireCooldown = BAZOOKA_FIRE_INTERVAL_SECONDS;
+      firePlayerBazookaProjectile(state);
     }
   }
 }

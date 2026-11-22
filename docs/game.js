@@ -760,11 +760,15 @@
   var UZI_EQUIP_DURATION_SECONDS = 0.5;
   var UZI_DROP_DURATION_SECONDS = 0.45;
   var UZI_FIRE_INTERVAL_SECONDS = 0.1;
-  var UZI_PROJECTILE_SPEED = 16 * TILE_SIZE;
+  var UZI_PROJECTILE_SPEED = 24 * TILE_SIZE;
   var MAX_UZI_AMMO = 30;
   var FLAMETHROWER_FIRE_INTERVAL_SECONDS = 0.05;
   var FLAMETHROWER_PROJECTILE_SPEED = 5 * TILE_SIZE;
   var FLAMETHROWER_MAX_DISTANCE = 6 * TILE_SIZE;
+  var UPSTAIRS_INITIAL_FLAMETHROWER_AMMO = 10;
+  var DROPPED_FLAMETHROWER_AMMO = 20;
+  var KATANA_SWING_DURATION_SECONDS = 0.32;
+  var BAZOOKA_FIRE_INTERVAL_SECONDS = 0.9;
   function createPlayer(x, y) {
     return {
       x,
@@ -794,7 +798,12 @@
       uziDropTimer: 0,
       uziCheatRefillTimer: 0,
       unlockedFlamethrower: false,
+      flamethrowerAmmo: Infinity,
       flamethrowerFireCooldown: 0,
+      unlockedKatana: false,
+      katanaSwingTimer: 0,
+      unlockedBazooka: false,
+      bazookaFireCooldown: 0,
       weaponVibrationTimer: 0,
       punchTimer: 0,
       punchHand: "right",
@@ -848,6 +857,15 @@
         player.weaponVibrationTimer - dtSeconds
       );
     }
+    if (player.katanaSwingTimer > 0) {
+      player.katanaSwingTimer = Math.max(0, player.katanaSwingTimer - dtSeconds);
+    }
+    if (player.bazookaFireCooldown > 0) {
+      player.bazookaFireCooldown = Math.max(
+        0,
+        player.bazookaFireCooldown - dtSeconds
+      );
+    }
   }
   function triggerPlayerPunch(player) {
     if (player.equippedItem !== "unarmed") {
@@ -855,6 +873,13 @@
     }
     player.punchTimer = PUNCH_DURATION_SECONDS;
     player.punchHand = player.punchHand === "right" ? "left" : "right";
+    return true;
+  }
+  function triggerPlayerKatanaSwing(player) {
+    if (player.equippedItem !== "katana") {
+      return false;
+    }
+    player.katanaSwingTimer = KATANA_SWING_DURATION_SECONDS;
     return true;
   }
   function selectPlayerEquipmentSlot(player, slot) {
@@ -889,6 +914,24 @@
         return false;
       }
       player.equippedItem = "flamethrower";
+      player.uziEquipTimer = 0;
+      player.punchTimer = 0;
+      return true;
+    }
+    if (slot === 5) {
+      if (!player.unlockedKatana) {
+        return false;
+      }
+      player.equippedItem = "katana";
+      player.uziEquipTimer = 0;
+      player.punchTimer = 0;
+      return true;
+    }
+    if (slot === 6) {
+      if (!player.unlockedBazooka) {
+        return false;
+      }
+      player.equippedItem = "bazooka";
       player.uziEquipTimer = 0;
       player.punchTimer = 0;
       return true;
@@ -1293,6 +1336,2057 @@
   __publicField(_ConeOfSight, "cheatMode", false);
   var ConeOfSight = _ConeOfSight;
 
+  // src/entities/cat.ts
+  var CAT_START_X = 26.5 * TILE_SIZE;
+  var CAT_START_Y = 17 * TILE_SIZE;
+  var CAT_MAX_SPEED = 60;
+  var CAT_ACCELERATION = 120;
+  var CAT_DECELERATION = 100;
+  var EXTRA_ROOM_BOUNDS = {
+    x: 25.5 * TILE_SIZE,
+    y: 11 * TILE_SIZE,
+    width: 2.5 * TILE_SIZE,
+    height: 7 * TILE_SIZE
+  };
+  var CAT_STOP_FLEE_DISTANCE = 5 * TILE_SIZE;
+  var CAT_RETRIGGER_FLEE_DISTANCE = 2 * TILE_SIZE;
+  var MAX_CAT_HEALTH = 100;
+  var CAT_ARMOR_DAMAGE_MULTIPLIER = 0.1;
+  var CAT_HOSTILE_JUMP_SPEED = 95;
+  var CAT_JUMP_CYCLE_SECONDS = 0.55;
+  var CAT_JUMP_PEAK_Z = 13.5;
+  var CAT_LATCH_DURATION_SECONDS = 10;
+  var CAT_LATCH_DAMAGE_PER_SECOND = 5;
+  var CAT_LATCH_TICK_INTERVAL_SECONDS = 1;
+  var CAT_DELAYED_HEALTH_RATE = 40;
+  function createCat(x = CAT_START_X, y = CAT_START_Y) {
+    return {
+      x,
+      y,
+      width: 10,
+      height: 10,
+      vx: 0,
+      vy: 0,
+      maxSpeed: CAT_MAX_SPEED,
+      acceleration: CAT_ACCELERATION,
+      deceleration: CAT_DECELERATION,
+      mode: "standing",
+      facing: "left",
+      yaw: Math.PI / 2,
+      animTimer: 0,
+      hasBeenActivated: false,
+      wallForceDirX: 0,
+      wallForceDirY: 0,
+      health: MAX_CAT_HEALTH,
+      delayedHealth: MAX_CAT_HEALTH,
+      delayedHealthRate: CAT_DELAYED_HEALTH_RATE,
+      jumpZ: 0,
+      jumpPhase: 0,
+      latchTimer: 0,
+      latchDamageAccum: 0,
+      blinkRedTimer: 0
+    };
+  }
+  function applyCatDamage(cat, rawDamage) {
+    if (cat.mode === "dead" || rawDamage <= 0) {
+      return false;
+    }
+    const prevMode = cat.mode;
+    const armorDamage = rawDamage * CAT_ARMOR_DAMAGE_MULTIPLIER;
+    cat.health = Math.max(0, cat.health - armorDamage);
+    cat.blinkRedTimer = Math.max(cat.blinkRedTimer, 0.35);
+    if (cat.health <= 0) {
+      cat.mode = "dead";
+      cat.vx = 0;
+      cat.vy = 0;
+      cat.jumpZ = 0;
+      cat.latchTimer = 0;
+      cat.latchDamageAccum = 0;
+      debugLog(`Cat state changed: ${prevMode} -> dead`);
+      return true;
+    }
+    if (cat.mode !== "latched") {
+      cat.hasBeenActivated = true;
+      cat.mode = "hostile";
+      if (prevMode !== "hostile") {
+        cat.jumpPhase = 0;
+        debugLog(`Cat state changed: ${prevMode} -> hostile`);
+      }
+    }
+    return true;
+  }
+  function updateCat(cat, player, dtSeconds, map, solidObstacles = [], onDamagePlayer) {
+    if (cat.delayedHealth > cat.health) {
+      cat.delayedHealth = Math.max(
+        cat.health,
+        cat.delayedHealth - cat.delayedHealthRate * dtSeconds
+      );
+    } else if (cat.delayedHealth < cat.health) {
+      cat.delayedHealth = cat.health;
+    }
+    if (cat.mode === "dead") {
+      cat.vx = 0;
+      cat.vy = 0;
+      cat.jumpZ = 0;
+      return;
+    }
+    const catCenterX = cat.x + cat.width / 2;
+    const catCenterY = cat.y + cat.height / 2;
+    const playerCenterX = player.x + player.width / 2;
+    const playerCenterY = player.y + player.height / 2;
+    const dx = playerCenterX - catCenterX;
+    const dy = playerCenterY - catCenterY;
+    const dist = Math.hypot(dx, dy);
+    const collidesAt = (testX, testY) => {
+      if (isRectCollidingWithMap(map, testX, testY, cat.width, cat.height)) {
+        return true;
+      }
+      const testRect = {
+        x: testX,
+        y: testY,
+        width: cat.width,
+        height: cat.height
+      };
+      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
+    };
+    if (cat.mode === "latched") {
+      cat.blinkRedTimer += dtSeconds;
+      cat.animTimer += dtSeconds;
+      const playerYaw = typeof player.yaw === "number" ? player.yaw : player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
+      const faceOffset = 3.2;
+      cat.x = playerCenterX + Math.cos(playerYaw) * faceOffset - cat.width * 0.5;
+      cat.y = playerCenterY + Math.sin(playerYaw) * faceOffset - cat.height * 0.5;
+      cat.vx = 0;
+      cat.vy = 0;
+      cat.yaw = playerYaw + Math.PI;
+      cat.facing = Math.cos(cat.yaw) < 0 ? "left" : "right";
+      cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
+      const step = Math.min(dtSeconds, cat.latchTimer);
+      cat.latchTimer = Math.max(0, cat.latchTimer - dtSeconds);
+      cat.latchDamageAccum += step;
+      while (cat.latchDamageAccum >= CAT_LATCH_TICK_INTERVAL_SECONDS - 1e-6) {
+        cat.latchDamageAccum -= CAT_LATCH_TICK_INTERVAL_SECONDS;
+        onDamagePlayer?.(CAT_LATCH_DAMAGE_PER_SECOND);
+      }
+      if (cat.latchTimer <= 1e-6) {
+        cat.mode = "flee";
+        cat.hasBeenActivated = true;
+        cat.jumpZ = 0;
+        cat.jumpPhase = 0;
+        cat.latchTimer = 0;
+        cat.latchDamageAccum = 0;
+        cat.blinkRedTimer = 0;
+        const awayYaw = playerYaw;
+        const fleeKickX = Math.cos(awayYaw) * 8;
+        const fleeKickY = Math.sin(awayYaw) * 8;
+        if (!collidesAt(cat.x + fleeKickX, cat.y + fleeKickY)) {
+          cat.x += fleeKickX;
+          cat.y += fleeKickY;
+        }
+        cat.vx = Math.cos(awayYaw) * cat.maxSpeed;
+        cat.vy = Math.sin(awayYaw) * cat.maxSpeed;
+        cat.yaw = awayYaw;
+        cat.facing = cat.vx < 0 ? "left" : "right";
+        debugLog("Cat state changed: latched -> flee");
+      }
+      return;
+    }
+    if (cat.mode === "hostile") {
+      cat.blinkRedTimer += dtSeconds;
+      cat.animTimer += dtSeconds;
+      cat.jumpPhase = (cat.jumpPhase + dtSeconds / CAT_JUMP_CYCLE_SECONDS) % 1;
+      cat.jumpZ = 4 * CAT_JUMP_PEAK_Z * cat.jumpPhase * (1 - cat.jumpPhase);
+      const ux = dist > 1e-3 ? dx / dist : 1;
+      const uy = dist > 1e-3 ? dy / dist : 0;
+      cat.vx = ux * CAT_HOSTILE_JUMP_SPEED;
+      cat.vy = uy * CAT_HOSTILE_JUMP_SPEED;
+      cat.yaw = Math.atan2(uy, ux);
+      cat.facing = ux < 0 ? "left" : "right";
+      const stepDist = Math.min(dist, CAT_HOSTILE_JUMP_SPEED * dtSeconds);
+      const nextX = cat.x + ux * stepDist;
+      if (!collidesAt(nextX, cat.y)) {
+        cat.x = nextX;
+      } else {
+        cat.vx = 0;
+      }
+      const nextY = cat.y + uy * stepDist;
+      if (!collidesAt(cat.x, nextY)) {
+        cat.y = nextY;
+      } else {
+        cat.vy = 0;
+      }
+      const newDist = Math.hypot(
+        playerCenterX - (cat.x + cat.width * 0.5),
+        playerCenterY - (cat.y + cat.height * 0.5)
+      );
+      if (rectsIntersect(cat, player) || newDist <= 12) {
+        cat.mode = "latched";
+        cat.latchTimer = CAT_LATCH_DURATION_SECONDS;
+        cat.latchDamageAccum = 0;
+        cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
+        cat.vx = 0;
+        cat.vy = 0;
+        debugLog("Cat state changed: hostile -> latched");
+      }
+      return;
+    }
+    cat.jumpZ = 0;
+    cat.blinkRedTimer = 0;
+    const prevMode = cat.mode;
+    if (!cat.hasBeenActivated) {
+      if (rectsIntersect(player, EXTRA_ROOM_BOUNDS)) {
+        cat.hasBeenActivated = true;
+        cat.mode = "flee";
+      }
+    } else {
+      if (cat.mode === "flee") {
+        if (dist > CAT_STOP_FLEE_DISTANCE) {
+          cat.mode = "standing";
+        }
+      } else if (cat.mode === "standing") {
+        if (dist <= CAT_RETRIGGER_FLEE_DISTANCE) {
+          cat.mode = "flee";
+        }
+      }
+    }
+    if (cat.mode !== prevMode) {
+      debugLog(`Cat state changed: ${prevMode} -> ${cat.mode}`);
+    }
+    if (cat.mode === "flee") {
+      const lookDist = 8;
+      const wallWest = collidesAt(cat.x - lookDist, cat.y);
+      const wallEast = collidesAt(cat.x + lookDist, cat.y);
+      const wallNorth = collidesAt(cat.x, cat.y - lookDist);
+      const wallSouth = collidesAt(cat.x, cat.y + lookDist);
+      let forceDirX = 0;
+      let forceDirY = 0;
+      if (wallWest) forceDirX += 1;
+      if (wallEast) forceDirX -= 1;
+      if (wallNorth) forceDirY += 1;
+      if (wallSouth) forceDirY -= 1;
+      if (forceDirX !== cat.wallForceDirX || forceDirY !== cat.wallForceDirY) {
+        debugLog(
+          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (${forceDirX}, ${forceDirY})`
+        );
+        cat.wallForceDirX = forceDirX;
+        cat.wallForceDirY = forceDirY;
+      }
+      let ux = dist > 1e-3 ? -dx / dist : -1;
+      let uy = dist > 1e-3 ? -dy / dist : 0;
+      const targetVx = ux * cat.maxSpeed;
+      const targetVy = uy * cat.maxSpeed;
+      const dvx = targetVx - cat.vx;
+      const dvy = targetVy - cat.vy;
+      const dvLen = Math.hypot(dvx, dvy);
+      const maxDeltaV = cat.acceleration * dtSeconds;
+      if (dvLen <= maxDeltaV || dvLen === 0) {
+        cat.vx = targetVx;
+        cat.vy = targetVy;
+      } else {
+        cat.vx += dvx / dvLen * maxDeltaV;
+        cat.vy += dvy / dvLen * maxDeltaV;
+      }
+      if (forceDirX !== 0 || forceDirY !== 0) {
+        const forceLen = Math.hypot(forceDirX, forceDirY);
+        const normFx = forceDirX / forceLen;
+        const normFy = forceDirY / forceLen;
+        cat.vx += normFx * cat.acceleration * dtSeconds;
+        cat.vy += normFy * cat.acceleration * dtSeconds;
+      }
+      if (Math.abs(cat.vx) > 2) {
+        cat.facing = cat.vx < 0 ? "left" : "right";
+      } else if (Math.abs(dx) > 0.5) {
+        cat.facing = dx > 0 ? "left" : "right";
+      }
+    } else {
+      if (cat.wallForceDirX !== 0 || cat.wallForceDirY !== 0) {
+        debugLog(
+          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (0, 0)`
+        );
+        cat.wallForceDirX = 0;
+        cat.wallForceDirY = 0;
+      }
+      const speed = Math.hypot(cat.vx, cat.vy);
+      const maxDrop = cat.deceleration * dtSeconds;
+      if (speed <= maxDrop) {
+        cat.vx = 0;
+        cat.vy = 0;
+      } else {
+        cat.vx -= cat.vx / speed * maxDrop;
+        cat.vy -= cat.vy / speed * maxDrop;
+      }
+    }
+    if (cat.vx !== 0 || cat.vy !== 0) {
+      if (Math.hypot(cat.vx, cat.vy) > 0.5) {
+        cat.yaw = Math.atan2(cat.vy, cat.vx);
+      }
+      cat.animTimer += dtSeconds;
+      const nextX = cat.x + cat.vx * dtSeconds;
+      if (!collidesAt(nextX, cat.y)) {
+        cat.x = nextX;
+      } else {
+        cat.vx = 0;
+      }
+      const nextY = cat.y + cat.vy * dtSeconds;
+      if (!collidesAt(cat.x, nextY)) {
+        cat.y = nextY;
+      } else {
+        cat.vy = 0;
+      }
+    }
+  }
+
+  // src/world/pathfinding.ts
+  var AStarPathfinder = class {
+    constructor(map, options) {
+      __publicField(this, "map");
+      __publicField(this, "allowDiagonal");
+      __publicField(this, "obstacles");
+      __publicField(this, "customWalkable");
+      this.map = map;
+      this.allowDiagonal = options?.allowDiagonal ?? false;
+      this.obstacles = options?.obstacles ?? [];
+      this.customWalkable = options?.isWalkable;
+    }
+    isTileWalkable(col, row) {
+      if (col < 0 || row < 0 || col >= this.map.cols || row >= this.map.rows) {
+        return false;
+      }
+      if (this.customWalkable) {
+        return this.customWalkable(col, row);
+      }
+      if (isSolidTile(this.map, col, row)) {
+        return false;
+      }
+      if (this.obstacles.length > 0) {
+        const ts = this.map.tileSize;
+        const tileRect = {
+          x: col * ts + 1,
+          y: row * ts + 1,
+          width: ts - 2,
+          height: ts - 2
+        };
+        for (const obs of this.obstacles) {
+          if (rectsIntersect(tileRect, obs)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+    heuristic(a, b) {
+      const dx = Math.abs(a.col - b.col);
+      const dy = Math.abs(a.row - b.row);
+      if (this.allowDiagonal) {
+        const min = Math.min(dx, dy);
+        const max = Math.max(dx, dy);
+        return min * Math.SQRT2 + (max - min);
+      }
+      return dx + dy;
+    }
+    keyOf(col, row) {
+      return row * this.map.cols + col;
+    }
+    /**
+     * Returns the shortest path of tiles from `start` to `goal` (inclusive),
+     * or an empty array if no valid path exists.
+     */
+    findPath(start, goal) {
+      if (start.col < 0 || start.row < 0 || start.col >= this.map.cols || start.row >= this.map.rows || goal.col < 0 || goal.row < 0 || goal.col >= this.map.cols || goal.row >= this.map.rows) {
+        return [];
+      }
+      if (!this.isTileWalkable(goal.col, goal.row)) {
+        return [];
+      }
+      if (start.col === goal.col && start.row === goal.row) {
+        return [{ col: start.col, row: start.row }];
+      }
+      const startKey = this.keyOf(start.col, start.row);
+      const goalKey = this.keyOf(goal.col, goal.row);
+      const openSet = /* @__PURE__ */ new Set([startKey]);
+      const closedSet = /* @__PURE__ */ new Set();
+      const cameFrom = /* @__PURE__ */ new Map();
+      const gScore = /* @__PURE__ */ new Map([[startKey, 0]]);
+      const fScore = /* @__PURE__ */ new Map([
+        [startKey, this.heuristic(start, goal)]
+      ]);
+      const cardinalDirs = [
+        [0, -1, 1],
+        [1, 0, 1],
+        [0, 1, 1],
+        [-1, 0, 1]
+      ];
+      const diagonalDirs = [
+        [1, -1, Math.SQRT2],
+        [1, 1, Math.SQRT2],
+        [-1, 1, Math.SQRT2],
+        [-1, -1, Math.SQRT2]
+      ];
+      while (openSet.size > 0) {
+        let currentKey = -1;
+        let bestF = Infinity;
+        for (const k of openSet) {
+          const f = fScore.get(k) ?? Infinity;
+          if (f < bestF) {
+            bestF = f;
+            currentKey = k;
+          }
+        }
+        if (currentKey === goalKey) {
+          const path = [];
+          let trace = currentKey;
+          while (trace !== void 0) {
+            const r = Math.floor(trace / this.map.cols);
+            const c = trace % this.map.cols;
+            path.push({ col: c, row: r });
+            trace = cameFrom.get(trace);
+          }
+          path.reverse();
+          return path;
+        }
+        openSet.delete(currentKey);
+        closedSet.add(currentKey);
+        const curRow = Math.floor(currentKey / this.map.cols);
+        const curCol = currentKey % this.map.cols;
+        const curG = gScore.get(currentKey) ?? Infinity;
+        const dirs = this.allowDiagonal ? [...cardinalDirs, ...diagonalDirs] : cardinalDirs;
+        for (const [dc, dr, stepCost] of dirs) {
+          const nc = curCol + dc;
+          const nr = curRow + dr;
+          if (!this.isTileWalkable(nc, nr)) {
+            continue;
+          }
+          if (dc !== 0 && dr !== 0) {
+            if (!this.isTileWalkable(curCol + dc, curRow) || !this.isTileWalkable(curCol, curRow + dr)) {
+              continue;
+            }
+          }
+          const neighborKey = this.keyOf(nc, nr);
+          if (closedSet.has(neighborKey)) {
+            continue;
+          }
+          const tentativeG = curG + stepCost;
+          if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
+            cameFrom.set(neighborKey, currentKey);
+            gScore.set(neighborKey, tentativeG);
+            fScore.set(
+              neighborKey,
+              tentativeG + this.heuristic({ col: nc, row: nr }, goal)
+            );
+            openSet.add(neighborKey);
+          }
+        }
+      }
+      return [];
+    }
+    /**
+     * Convenience wrapper accepting world pixel coordinates.
+     */
+    findPathWorld(startX, startY, goalX, goalY) {
+      const ts = this.map.tileSize;
+      return this.findPath(
+        { col: Math.floor(startX / ts), row: Math.floor(startY / ts) },
+        { col: Math.floor(goalX / ts), row: Math.floor(goalY / ts) }
+      );
+    }
+  };
+
+  // src/entities/npcCombat.ts
+  var MAX_NPC_HEALTH = 100;
+  var NPC_HOSTILE_LOSE_SIGHT_SECONDS = 5;
+  var NPC_HOSTILE_ALERT_SECONDS = 1;
+  var NPC_HOSTILE_PROPAGATION_DELAY_SECONDS = 2;
+  var NPC_HOSTILE_PATH_RECALC_SECONDS = 1;
+  var NPC_HOSTILE_WALK_SPEED = 24;
+  var NPC_BURNING_RUN_SPEED = NPC_HOSTILE_WALK_SPEED * 2;
+  var NPC_BURNING_DIR_INTERVAL_SECONDS = 1;
+  var NPC_HOSTILE_STOP_DISTANCE = 18;
+  var NPC_HOSTILE_ALERT_RADIUS = 5 * TILE_SIZE;
+  var NPC_UZI_BULLET_DAMAGE = 5;
+  var NPC_UZI_MAGAZINE_SIZE = 30;
+  var NPC_UZI_RELOAD_SECONDS = 2.5;
+  var PLAYER_UZI_NPC_DAMAGE = 30;
+  var PLAYER_PUNCH_NPC_DAMAGE = 15;
+  var PLAYER_KATANA_NPC_DAMAGE = 50;
+  var PLAYER_FIREBALL_NPC_DAMAGE = 15;
+  var NPC_BURN_DAMAGE_PER_SECOND = 20;
+  var NPC_KATANA_MELEE_DAMAGE = 15;
+  var NPC_KATANA_MELEE_COOLDOWN = 0.45;
+  var NPC_KATANA_MELEE_RANGE = 24;
+  var NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS = 0.12;
+  var NPC_BAZOOKA_SHOT_INTERVAL_SECONDS = 2.4;
+  var NPC_BAZOOKA_ROCKET_SPEED = 75;
+  var NPC_DEATH_FALL_DURATION = 0.45;
+  function createArmedNpcState(key, name, initialAimYaw, weapon = "uzi") {
+    return {
+      key,
+      name,
+      weapon,
+      mode: "passive",
+      health: MAX_NPC_HEALTH,
+      delayedHealth: MAX_NPC_HEALTH,
+      delayedHealthRate: 0,
+      unseenTimer: 0,
+      hostileAlertTimer: 0,
+      pendingHostileAlertTimer: 0,
+      fireCooldown: 0,
+      meleeCooldown: 0,
+      shotsFiredInMag: 0,
+      reloadTimer: 0,
+      weaponVibrationTimer: 0,
+      aimYaw: initialAimYaw,
+      deadFallProgress: 0,
+      path: [],
+      pathTimer: 0,
+      isMoving: false,
+      burnDirYaw: initialAimYaw,
+      burnDirTimer: 0
+    };
+  }
+  function applyNpcDamage(npc, damage) {
+    if (npc.mode === "dead" || damage <= 0) {
+      return false;
+    }
+    const nextHealth = Math.max(0, Math.min(MAX_NPC_HEALTH, npc.health - damage));
+    npc.health = nextHealth;
+    npc.delayedHealthRate = Math.abs(npc.delayedHealth - npc.health);
+    if (npc.health <= 0) {
+      npc.mode = "dead";
+      npc.hostileAlertTimer = 0;
+      npc.pendingHostileAlertTimer = 0;
+      npc.fireCooldown = 0;
+      npc.reloadTimer = 0;
+      npc.weaponVibrationTimer = 0;
+      npc.unseenTimer = 0;
+      npc.deadFallProgress = 0;
+      npc.isMoving = false;
+      npc.path = [];
+      npc.pathTimer = 0;
+      return true;
+    }
+    if (npc.mode !== "burning") {
+      enterHostileMode(npc);
+    }
+    return false;
+  }
+  function enterHostileMode(npc) {
+    if (npc.mode === "dead" || npc.mode === "burning") return;
+    if (npc.mode === "passive") {
+      npc.mode = "hostile";
+      npc.hostileAlertTimer = NPC_HOSTILE_ALERT_SECONDS;
+      npc.pendingHostileAlertTimer = 0;
+      npc.pathTimer = 0;
+    }
+    npc.unseenTimer = 0;
+  }
+  function igniteNpc(npc) {
+    if (npc.mode === "dead") return;
+    npc.mode = "burning";
+    npc.hostileAlertTimer = 0;
+    npc.pendingHostileAlertTimer = 0;
+    npc.unseenTimer = 0;
+    npc.path = [];
+    if (npc.burnDirTimer <= 0) {
+      npc.burnDirYaw = Math.random() * Math.PI * 2;
+      npc.burnDirTimer = NPC_BURNING_DIR_INTERVAL_SECONDS;
+    }
+    npc.isMoving = true;
+  }
+  function updateNpcHealthAndTimers(npc, dtSeconds) {
+    if (dtSeconds <= 0) return;
+    if (npc.delayedHealth !== npc.health) {
+      const step = npc.delayedHealthRate * dtSeconds;
+      if (npc.delayedHealth > npc.health) {
+        npc.delayedHealth = Math.max(npc.health, npc.delayedHealth - step);
+      } else {
+        npc.delayedHealth = Math.min(npc.health, npc.delayedHealth + step);
+      }
+      if (npc.delayedHealth === npc.health) {
+        npc.delayedHealthRate = 0;
+      }
+    }
+    if (npc.hostileAlertTimer > 0) {
+      npc.hostileAlertTimer = Math.max(0, npc.hostileAlertTimer - dtSeconds);
+    }
+    if (npc.mode === "passive" && npc.pendingHostileAlertTimer > 0) {
+      npc.pendingHostileAlertTimer = Math.max(
+        0,
+        npc.pendingHostileAlertTimer - dtSeconds
+      );
+      if (npc.pendingHostileAlertTimer === 0) {
+        enterHostileMode(npc);
+      }
+    }
+    if (npc.meleeCooldown > 0) {
+      npc.meleeCooldown = Math.max(0, npc.meleeCooldown - dtSeconds);
+    }
+    if (npc.weaponVibrationTimer > 0) {
+      npc.weaponVibrationTimer = Math.max(0, npc.weaponVibrationTimer - dtSeconds);
+    }
+    if (npc.fireCooldown > 0) {
+      npc.fireCooldown = Math.max(0, npc.fireCooldown - dtSeconds);
+    }
+    if (npc.reloadTimer > 0) {
+      npc.reloadTimer = Math.max(0, npc.reloadTimer - dtSeconds);
+      if (npc.reloadTimer === 0) {
+        npc.shotsFiredInMag = 0;
+      }
+    }
+    if (npc.mode === "dead" && npc.deadFallProgress < 1) {
+      npc.deadFallProgress = Math.min(
+        1,
+        npc.deadFallProgress + dtSeconds / NPC_DEATH_FALL_DURATION
+      );
+    }
+  }
+  function tryFireHostileNpcUzi(npc, originX, originY, aimYaw, fireNpcUzi) {
+    if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || npc.reloadTimer > 0 || npc.fireCooldown > 0) {
+      return false;
+    }
+    fireNpcUzi?.(npc, originX, originY, aimYaw);
+    npc.fireCooldown = UZI_FIRE_INTERVAL_SECONDS;
+    npc.weaponVibrationTimer = Math.max(
+      npc.weaponVibrationTimer,
+      UZI_FIRE_INTERVAL_SECONDS + 0.05
+    );
+    npc.shotsFiredInMag += 1;
+    if (npc.shotsFiredInMag >= NPC_UZI_MAGAZINE_SIZE) {
+      npc.shotsFiredInMag = 0;
+      npc.reloadTimer = NPC_UZI_RELOAD_SECONDS;
+    }
+    return true;
+  }
+  function tryFireHostileNpcFlamethrower(npc, originX, originY, aimYaw, fireNpcFlamethrower) {
+    if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || npc.fireCooldown > 0) {
+      return false;
+    }
+    fireNpcFlamethrower?.(npc, originX, originY, aimYaw);
+    npc.fireCooldown = NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS;
+    npc.weaponVibrationTimer = Math.max(
+      npc.weaponVibrationTimer,
+      NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS + 0.05
+    );
+    return true;
+  }
+  function tryFireHostileNpcBazooka(npc, originX, originY, aimYaw, fireNpcBazooka) {
+    if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || npc.fireCooldown > 0) {
+      return false;
+    }
+    fireNpcBazooka?.(npc, originX, originY, aimYaw);
+    npc.fireCooldown = NPC_BAZOOKA_SHOT_INTERVAL_SECONDS;
+    npc.weaponVibrationTimer = Math.max(npc.weaponVibrationTimer, 0.25);
+    return true;
+  }
+  function isNpcBillboardVisible(npc) {
+    return npc.mode !== "dead" && npc.hostileAlertTimer <= 0 && (npc.mode === "hostile" || npc.mode === "burning" || npc.health < MAX_NPC_HEALTH);
+  }
+  function propagateHostileAlert(entries, sourceKey) {
+    const source = entries.find((e) => e.state.key === sourceKey);
+    if (!source) return;
+    const sx = source.bounds.x + source.bounds.width * 0.5;
+    const sy = source.bounds.y + source.bounds.height * 0.5;
+    for (const other of entries) {
+      if (other.state.key === sourceKey) continue;
+      if (!other.visible || other.state.mode !== "passive") continue;
+      const ox = other.bounds.x + other.bounds.width * 0.5;
+      const oy = other.bounds.y + other.bounds.height * 0.5;
+      if (Math.hypot(ox - sx, oy - sy) <= NPC_HOSTILE_ALERT_RADIUS) {
+        if (other.state.pendingHostileAlertTimer <= 0) {
+          other.state.pendingHostileAlertTimer = NPC_HOSTILE_PROPAGATION_DELAY_SECONDS;
+        }
+      }
+    }
+  }
+  function stepBurningNpc(npc, bounds, player, map, solidObstacles, dtSeconds, fireNpcUzi, fireNpcFlamethrower, fireNpcBazooka) {
+    if (npc.mode !== "burning" || dtSeconds <= 0) return;
+    npc.burnDirTimer -= dtSeconds;
+    if (npc.burnDirTimer <= 0) {
+      npc.burnDirTimer = NPC_BURNING_DIR_INTERVAL_SECONDS;
+      npc.burnDirYaw = Math.random() * Math.PI * 2;
+    }
+    npc.aimYaw = npc.burnDirYaw;
+    const otherObstacles = solidObstacles.filter(
+      (obs) => !(obs.x === bounds.x && obs.y === bounds.y && obs.width === bounds.width && obs.height === bounds.height)
+    );
+    const step = NPC_BURNING_RUN_SPEED * dtSeconds;
+    const vx = Math.cos(npc.burnDirYaw) * step;
+    const vy = Math.sin(npc.burnDirYaw) * step;
+    const canMoveTo = (nx, ny) => {
+      const candidate = {
+        x: nx,
+        y: ny,
+        width: bounds.width,
+        height: bounds.height
+      };
+      if (isRectCollidingWithMap(map, nx, ny, bounds.width, bounds.height, true)) {
+        return false;
+      }
+      if (rectsIntersect(candidate, player)) {
+        return false;
+      }
+      for (const obs of otherObstacles) {
+        if (rectsIntersect(candidate, obs)) {
+          return false;
+        }
+      }
+      return true;
+    };
+    let moved = false;
+    if (Math.abs(vx) > 1e-4 && canMoveTo(bounds.x + vx, bounds.y)) {
+      bounds.x += vx;
+      moved = true;
+    }
+    if (Math.abs(vy) > 1e-4 && canMoveTo(bounds.x, bounds.y + vy)) {
+      bounds.y += vy;
+      moved = true;
+    }
+    if (!moved) {
+      npc.burnDirYaw = Math.random() * Math.PI * 2;
+    }
+    npc.isMoving = true;
+    if (npc.fireCooldown <= 0) {
+      const ox = bounds.x + bounds.width * 0.5;
+      const oy = bounds.y + bounds.height * 0.5;
+      const randomYaw = Math.random() * Math.PI * 2;
+      if (npc.weapon === "uzi") {
+        fireNpcUzi?.(npc, ox, oy, randomYaw);
+        npc.fireCooldown = UZI_FIRE_INTERVAL_SECONDS;
+        npc.weaponVibrationTimer = Math.max(
+          npc.weaponVibrationTimer,
+          UZI_FIRE_INTERVAL_SECONDS + 0.05
+        );
+      } else if (npc.weapon === "flamethrower") {
+        fireNpcFlamethrower?.(npc, ox, oy, randomYaw);
+        npc.fireCooldown = NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS;
+        npc.weaponVibrationTimer = Math.max(
+          npc.weaponVibrationTimer,
+          NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS + 0.05
+        );
+      } else if (npc.weapon === "bazooka") {
+        fireNpcBazooka?.(npc, ox, oy, randomYaw);
+        npc.fireCooldown = NPC_BAZOOKA_SHOT_INTERVAL_SECONDS;
+        npc.weaponVibrationTimer = Math.max(npc.weaponVibrationTimer, 0.25);
+      }
+    }
+  }
+  function stepHostileNpcAlongPath(npc, bounds, player, map, solidObstacles, dtSeconds) {
+    if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || dtSeconds <= 0) {
+      npc.isMoving = false;
+      return;
+    }
+    const ts = map.tileSize;
+    const npcCx = bounds.x + bounds.width * 0.5;
+    const npcCy = bounds.y + bounds.height * 0.5;
+    const playerCx = player.x + player.width * 0.5;
+    const playerCy = player.y + player.height * 0.5;
+    const otherObstacles = solidObstacles.filter(
+      (obs) => !(obs.x === bounds.x && obs.y === bounds.y && obs.width === bounds.width && obs.height === bounds.height)
+    );
+    npc.pathTimer -= dtSeconds;
+    if (npc.pathTimer <= 0) {
+      npc.pathTimer = NPC_HOSTILE_PATH_RECALC_SECONDS;
+      const pathfinder = new AStarPathfinder(map, { obstacles: otherObstacles });
+      const fullPath = pathfinder.findPathWorld(npcCx, npcCy, playerCx, playerCy);
+      if (fullPath.length > 1) {
+        npc.path = fullPath.slice(1);
+      } else {
+        npc.path = fullPath;
+      }
+    }
+    const distToPlayer = Math.hypot(playerCx - npcCx, playerCy - npcCy);
+    if (distToPlayer <= NPC_HOSTILE_STOP_DISTANCE || npc.path.length === 0) {
+      npc.isMoving = false;
+      return;
+    }
+    const nextTile = npc.path[0];
+    const targetX = nextTile.col * ts + ts * 0.5;
+    const targetY = nextTile.row * ts + ts * 0.5;
+    const dx = targetX - npcCx;
+    const dy = targetY - npcCy;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= 2) {
+      npc.path.shift();
+      if (npc.path.length === 0) {
+        npc.isMoving = false;
+        return;
+      }
+    }
+    const activeTile = npc.path[0];
+    const ax = activeTile.col * ts + ts * 0.5 - npcCx;
+    const ay = activeTile.row * ts + ts * 0.5 - npcCy;
+    const adist = Math.hypot(ax, ay);
+    if (adist <= 1e-3) {
+      npc.isMoving = false;
+      return;
+    }
+    const step = Math.min(adist, NPC_HOSTILE_WALK_SPEED * dtSeconds);
+    const vx = ax / adist * step;
+    const vy = ay / adist * step;
+    const canMoveTo = (nx, ny) => {
+      const candidate = {
+        x: nx,
+        y: ny,
+        width: bounds.width,
+        height: bounds.height
+      };
+      if (isRectCollidingWithMap(map, nx, ny, bounds.width, bounds.height, true)) {
+        return false;
+      }
+      if (rectsIntersect(candidate, player)) {
+        return false;
+      }
+      for (const obs of otherObstacles) {
+        if (rectsIntersect(candidate, obs)) {
+          return false;
+        }
+      }
+      return true;
+    };
+    let moved = false;
+    if (Math.abs(vx) > 1e-4 && canMoveTo(bounds.x + vx, bounds.y)) {
+      bounds.x += vx;
+      moved = true;
+    }
+    if (Math.abs(vy) > 1e-4 && canMoveTo(bounds.x, bounds.y + vy)) {
+      bounds.y += vy;
+      moved = true;
+    }
+    npc.isMoving = moved;
+  }
+
+  // src/world/levels/levelUpstairs.ts
+  var V = 20 /* VoidBlack */;
+  var W = 21 /* InteriorWall */;
+  var F = 16 /* WoodFloor */;
+  var B = 18 /* BathroomTileFloor */;
+  var T = 19 /* StairsFloor */;
+  var O = 22 /* FurnitureSolid */;
+  var UPSTAIRS_TILES = [
+    //0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 0
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 1
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 2: Exterior strip north of kitchen windows
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 3
+    [V, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, V, V, V],
+    // 4: North wall (Dining | Kitchen windows | Shower | Bedroom with window at 24..25)
+    [V, W, F, F, F, F, F, F, F, F, F, F, F, F, F, O, W, B, B, B, W, W, F, F, F, F, F, F, W, V, V, V],
+    // 5: Shortened dining table walk path (4..5) | Shower (17..19) | Bedroom (22..27)
+    [V, W, O, F, O, O, F, F, F, F, O, O, F, F, F, O, W, B, B, B, W, W, F, F, F, F, O, O, W, V, V, V],
+    // 6: Cupboard (2) | Dining Table (4..5) | Island (10..11) | Bed (26..27)
+    [V, W, O, F, O, O, F, F, F, F, O, O, F, F, F, O, W, O, B, B, W, W, F, F, F, F, O, O, W, V, V, V],
+    // 7: Cupboard (2) | Dining Table (4..5) | Shower sink (17) | Bed (26..27)
+    [V, W, F, F, O, O, F, F, F, F, F, F, F, F, F, O, W, O, B, O, W, W, F, F, F, F, F, F, W, V, V, V],
+    // 8: Dining table (4..5) | Shower sink (17) & toilet (19) | Bedroom
+    [V, W, F, F, O, O, F, F, F, W, W, W, W, F, F, W, W, B, B, B, W, W, F, F, F, F, F, F, W, V, V, V],
+    // 9: North wall of altar alcove (9..12) | Kitchen entrance (13..14)
+    [V, W, F, F, F, F, F, F, F, W, O, O, W, F, F, W, W, W, B, W, W, W, W, W, F, W, W, W, W, V, V, V],
+    // 10: Altar (10..11) | Altar east wall (12) | Kitchen entrance (13..14) | Shower door (18) | Bedroom door (24)
+    [V, W, F, F, O, O, O, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, W, V, V, V],
+    // 11: Colorful Couch (4..6) | Narrow Hallway (rows 11..12) -> Extra Room (26..27)
+    [V, W, O, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, W, V, V, V],
+    // 12: Left Colorful Armchair (2) | Narrow Hallway (rows 11..12)
+    [V, W, F, F, F, F, F, O, F, F, F, F, F, F, W, T, T, T, T, W, W, F, W, W, W, W, F, F, W, V, V, V],
+    // 13: Right Armchair (7) | Open breathing room (8..13) | Stairs (15..18) | Office door (21)
+    [V, W, O, O, F, F, F, F, F, F, F, F, F, F, W, T, T, T, T, W, F, F, F, F, F, W, F, F, W, V, V, V],
+    // 14: Xmas Tree (2..3) | Stairs | Aligned Office (20..24) | Extra Room (26..27)
+    [V, W, O, O, F, F, F, F, F, W, W, F, W, W, W, T, T, T, T, W, O, F, F, F, F, W, F, F, W, V, V, V],
+    // 15: Xmas Tree (2..3) | Table Room door (11) | Office side desk (20)
+    [V, W, O, O, F, F, F, F, F, W, F, F, F, F, W, T, T, T, T, W, O, O, O, F, F, W, F, F, W, V, V, V],
+    // 16: Xmas Tree (2..3) | Table Room floor | Stairs trigger (15..18) | Office PC desk (20..22)
+    [V, W, W, W, W, W, W, W, W, W, F, O, O, F, W, T, T, T, T, W, O, O, O, F, F, W, F, F, W, V, V, V],
+    // 17: Living Room south wall (3..4, 6..7) | Office PC desk/chair (20..22)
+    [V, V, V, V, V, V, V, V, V, W, F, O, O, F, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, V, V, V],
+    // 18: Aligned South Wall across Stairs (15..18), Office (19..25 with window), Extra Room (26..28)
+    [V, V, V, V, V, V, V, V, V, W, F, F, F, F, W, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 19: Table Room floor | Void under aligned office
+    [V, V, V, V, V, V, V, V, V, W, F, F, F, F, W, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 20: Table Room floor
+    [V, V, V, V, V, V, V, V, V, W, W, W, W, W, W, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 21: Table Room south wall (windows at 10..13)
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 22
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 23
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 24
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 25
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
+    // 26
+    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V]
+    // 27
+  ];
+  var UPSTAIRS_STAIRS_SPAWN = {
+    x: 16 * TILE_SIZE + 2,
+    y: 13 * TILE_SIZE + 2,
+    facing: "up"
+  };
+  var UPSTAIRS_STAIRS_TRIGGER_BOUNDS = {
+    x: 15 * TILE_SIZE,
+    y: 16 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: 2 * TILE_SIZE
+  };
+  var UPSTAIRS_SHOWER_DOOR_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 10 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var UPSTAIRS_SHOWER_HIDDEN_MASK = {
+    x: 17 * TILE_SIZE,
+    y: 4 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: 6 * TILE_SIZE
+  };
+  var UPSTAIRS_BEDROOM_DOOR_BOUNDS = {
+    x: 24 * TILE_SIZE,
+    y: 10 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var UPSTAIRS_BEDROOM_HIDDEN_MASK = {
+    x: 21 * TILE_SIZE,
+    y: 4 * TILE_SIZE,
+    width: 8 * TILE_SIZE,
+    height: 6 * TILE_SIZE
+  };
+  var UPSTAIRS_OFFICE_DOOR_BOUNDS = {
+    x: 21 * TILE_SIZE,
+    y: 13 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var UPSTAIRS_OFFICE_HIDDEN_MASK = {
+    x: 20 * TILE_SIZE,
+    y: 14 * TILE_SIZE,
+    width: 5 * TILE_SIZE,
+    height: 5 * TILE_SIZE
+  };
+  var UPSTAIRS_ALBIN_START_Y = 5 * TILE_SIZE + 2;
+  var UPSTAIRS_ALBIN_END_Y = 9 * TILE_SIZE + 2;
+  var UPSTAIRS_ALBIN_X = 7 * TILE_SIZE + 2;
+  var UPSTAIRS_ALBIN_SPEED = 15;
+  var UPSTAIRS_INTRO_STATE_KEY = "upstairsIntroTriggered";
+  var DIANA_PRESENT_TAKEN_KEY = "upstairsDianaPresentTaken";
+  var SIMON_PRESENT_TAKEN_KEY = "upstairsSimonPresentTaken";
+  var DIANA_DISTRACTED_KEY = "upstairsDianaDistracted";
+  var SIMON_DISTRACTED_KEY = "upstairsSimonDistracted";
+  var UPSTAIRS_DIANA_PRESENT_BOUNDS = {
+    x: 25.5 * TILE_SIZE + 2,
+    y: 8 * TILE_SIZE + 4,
+    width: 10,
+    height: 10
+  };
+  var UPSTAIRS_SIMON_PRESENT_BOUNDS = {
+    x: 24 * TILE_SIZE + 3,
+    y: 17 * TILE_SIZE + 3,
+    width: 10,
+    height: 10
+  };
+  var UPSTAIRS_XMAS_TREE_BOUNDS = {
+    x: 2 * TILE_SIZE,
+    y: 14 * TILE_SIZE,
+    width: 2 * TILE_SIZE,
+    height: 3 * TILE_SIZE
+  };
+  var UPSTAIRS_HENRIK_NPC = {
+    x: 10 * TILE_SIZE + 2,
+    y: 17 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "down"
+  };
+  var UPSTAIRS_TANJA_NPC = {
+    x: 13 * TILE_SIZE + 2,
+    y: 17 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "up"
+  };
+  var UPSTAIRS_DIANA_NPC = {
+    x: 5 * TILE_SIZE + 2,
+    // 1 tile south of couch (col 5, row 12)
+    y: 12 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "down"
+  };
+  var UPSTAIRS_SIMON_NPC = {
+    x: 7 * TILE_SIZE + 2,
+    // 1 tile south of right armchair (col 7, row 14)
+    y: 14 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "left"
+  };
+  var UPSTAIRS_ANNE_MARIE_NPC = {
+    x: 24 * TILE_SIZE + 2,
+    y: 5 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "up"
+  };
+  var UPSTAIRS_CUPBOARD_BOUNDS = {
+    x: 2 * TILE_SIZE,
+    y: 6 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: 2 * TILE_SIZE
+  };
+  var UPSTAIRS_COMPUTER_BOUNDS = {
+    x: 21 * TILE_SIZE,
+    y: 16 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var C4_TAKEN_STATE_KEY = "upstairsC4Taken";
+  var C4_PLACED_STATE_KEY = "upstairsC4Placed";
+  var UPSTAIRS_C4_BOUNDS = {
+    x: 23 * TILE_SIZE + 2,
+    y: 15 * TILE_SIZE + 3,
+    width: 12,
+    height: 10
+  };
+  var UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS = {
+    x: 11 * TILE_SIZE,
+    y: 15 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var UPSTAIRS_TABLE_ROOM_HIDDEN_MASKS = [
+    // Rows 16..17: interior cols 10..13 (excluding west wall col 9 & east wall col 14)
+    {
+      x: 10 * TILE_SIZE,
+      y: 16 * TILE_SIZE,
+      width: 4 * TILE_SIZE,
+      height: 2 * TILE_SIZE
+    },
+    // Row 18: west wall col 9 + interior cols 10..13 (starts west wall fog at row 18, excluding east wall col 14)
+    {
+      x: 9 * TILE_SIZE,
+      y: 18 * TILE_SIZE,
+      width: 5 * TILE_SIZE,
+      height: 1 * TILE_SIZE
+    },
+    // Rows 19..21: full width cols 9..14 (starts east wall fog at row 19, full width for south wall)
+    {
+      x: 9 * TILE_SIZE,
+      y: 19 * TILE_SIZE,
+      width: 6 * TILE_SIZE,
+      height: 3 * TILE_SIZE
+    }
+  ];
+  var UPSTAIRS_TABLE_ROOM_HIDDEN_MASK = UPSTAIRS_TABLE_ROOM_HIDDEN_MASKS[0];
+  var KITCHEN_TRIGGER_BOUNDS = {
+    x: 9 * TILE_SIZE,
+    y: 5 * TILE_SIZE,
+    width: 6 * TILE_SIZE,
+    height: 3.5 * TILE_SIZE
+  };
+  var KITCHEN_ROSANNA_STATE_KEY = "kitchenRosannaEventTriggered";
+  var ROSANNA_SANTA_START_X = 11 * TILE_SIZE;
+  var ROSANNA_SANTA_END_X = 12 * TILE_SIZE;
+  var ROSANNA_SANTA_Y = 2.5 * TILE_SIZE;
+  var ROSANNA_INTERIOR_X = 12.5 * TILE_SIZE - 6;
+  var ROSANNA_INTERIOR_Y = 5.5 * TILE_SIZE - 6;
+  var TABLE_ROOM_AMBUSH_STATE_KEY = "upstairsTableRoomAmbushTriggered";
+  var TABLE_ROOM_AMBUSH_TRIGGER_BOUNDS = {
+    x: 9 * TILE_SIZE,
+    y: 11 * TILE_SIZE,
+    width: 5.5 * TILE_SIZE,
+    height: 2.8 * TILE_SIZE
+  };
+  var LevelUpstairs = class {
+    constructor() {
+      __publicField(this, "id", "level-upstairs");
+      __publicField(this, "map", {
+        cols: MAP_COLS,
+        rows: MAP_ROWS,
+        tileSize: TILE_SIZE,
+        tiles: UPSTAIRS_TILES.map((row) => [...row])
+      });
+      __publicField(this, "doors");
+      __publicField(this, "openedDoors", []);
+      __publicField(this, "rosannaCutscene", null);
+      __publicField(this, "tableRoomAmbushCutscene", {
+        active: false,
+        timer: 0
+      });
+      __publicField(this, "rosannaSpawned", false);
+      __publicField(this, "rosannaNpc", {
+        x: ROSANNA_INTERIOR_X,
+        y: ROSANNA_INTERIOR_Y,
+        width: 12,
+        height: 12
+      });
+      __publicField(this, "rosannaCone", null);
+      __publicField(this, "rosannaCombat");
+      __publicField(this, "cat");
+      // Upstairs NPCs
+      __publicField(this, "albinX", UPSTAIRS_ALBIN_X);
+      __publicField(this, "albinY", UPSTAIRS_ALBIN_START_Y);
+      __publicField(this, "albinDir", 1);
+      // 1 = walking down (south), -1 = walking up (north)
+      __publicField(this, "albinCone");
+      __publicField(this, "albinCombat");
+      __publicField(this, "henrikNpc", { ...UPSTAIRS_HENRIK_NPC });
+      __publicField(this, "henrikAngle", Math.PI / 2);
+      // Facing south initially
+      __publicField(this, "henrikTimer", 0);
+      __publicField(this, "henrikCone");
+      __publicField(this, "henrikCombat");
+      __publicField(this, "tanjaNpc", { ...UPSTAIRS_TANJA_NPC });
+      __publicField(this, "tanjaCone");
+      __publicField(this, "tanjaCombat");
+      __publicField(this, "dianaNpc", { ...UPSTAIRS_DIANA_NPC });
+      __publicField(this, "dianaCone", null);
+      __publicField(this, "dianaCombat");
+      __publicField(this, "simonNpc", { ...UPSTAIRS_SIMON_NPC });
+      __publicField(this, "simonCone", null);
+      __publicField(this, "simonCombat");
+      __publicField(this, "anneMarieNpc", { ...UPSTAIRS_ANNE_MARIE_NPC });
+      __publicField(this, "anneMarieAngle", Math.PI / 2);
+      // Facing south toward the bedroom door
+      __publicField(this, "anneMarieTimer", 0);
+      __publicField(this, "anneMarieCone");
+      __publicField(this, "anneMarieCombat");
+      __publicField(this, "intruderDetected", false);
+      this.cat = createCat();
+      this.doors = [
+        {
+          id: "upstairs-shower-door",
+          bounds: { ...UPSTAIRS_SHOWER_DOOR_BOUNDS },
+          hiddenRegions: [{ ...UPSTAIRS_SHOWER_HIDDEN_MASK }]
+        },
+        {
+          id: "upstairs-bedroom-door",
+          bounds: { ...UPSTAIRS_BEDROOM_DOOR_BOUNDS },
+          hiddenRegions: [{ ...UPSTAIRS_BEDROOM_HIDDEN_MASK }]
+        },
+        {
+          id: "upstairs-office-door",
+          bounds: { ...UPSTAIRS_OFFICE_DOOR_BOUNDS },
+          hiddenRegions: [{ ...UPSTAIRS_OFFICE_HIDDEN_MASK }]
+        },
+        {
+          id: "upstairs-table-room-door",
+          bounds: { ...UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS },
+          hiddenRegions: UPSTAIRS_TABLE_ROOM_HIDDEN_MASKS.map((r) => ({ ...r }))
+        }
+      ];
+      this.albinCombat = createArmedNpcState("upstairs:Albin", "Albin", Math.PI / 2);
+      this.henrikCombat = createArmedNpcState(
+        "upstairs:Henrik",
+        "Henrik",
+        this.henrikAngle,
+        "flamethrower"
+      );
+      this.tanjaCombat = createArmedNpcState(
+        "upstairs:Tanja",
+        "Tanja",
+        -Math.PI / 2,
+        "flamethrower"
+      );
+      this.rosannaCombat = createArmedNpcState(
+        "upstairs:Rosanna",
+        "Rosanna",
+        Math.PI / 2,
+        "bazooka"
+      );
+      this.albinCone = new ConeOfSight(
+        { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
+        Math.PI / 2,
+        // south
+        void 0,
+        this.map
+      );
+      this.henrikCone = new ConeOfSight(
+        { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
+        this.henrikAngle,
+        void 0,
+        this.map
+      );
+      this.tanjaCone = new ConeOfSight(
+        { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
+        -Math.PI / 2,
+        // north
+        void 0,
+        this.map
+      );
+      const dianaTreeAngle = Math.atan2(
+        15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
+        3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
+      );
+      this.dianaCombat = createArmedNpcState("upstairs:Diana", "Diana", dianaTreeAngle);
+      this.dianaCone = new ConeOfSight(
+        { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
+        dianaTreeAngle,
+        DEFAULT_CONE_OF_SIGHT_DISTANCE,
+        this.map,
+        DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+      );
+      const simonTreeAngle = Math.atan2(
+        15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
+        3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
+      );
+      this.simonCombat = createArmedNpcState("upstairs:Simon", "Simon", simonTreeAngle);
+      this.simonCone = new ConeOfSight(
+        { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
+        simonTreeAngle,
+        DEFAULT_CONE_OF_SIGHT_DISTANCE,
+        this.map,
+        DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+      );
+      this.anneMarieCombat = createArmedNpcState(
+        "upstairs:Anne-Marie",
+        "Anne-Marie",
+        this.anneMarieAngle,
+        "katana"
+      );
+      this.anneMarieCone = new ConeOfSight(
+        { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
+        this.anneMarieAngle,
+        void 0,
+        this.map
+      );
+    }
+    getArmedNpcs() {
+      const isTableRoomDoorOpen = !this.doors.some(
+        (d) => d.id === "upstairs-table-room-door" && d.hiddenRegions.length > 0
+      );
+      const isBedroomDoorOpen = !this.doors.some(
+        (d) => d.id === "upstairs-bedroom-door" && d.hiddenRegions.length > 0
+      );
+      return [
+        {
+          state: this.albinCombat,
+          bounds: { x: this.albinX, y: this.albinY, width: 12, height: 12 },
+          visible: true
+        },
+        { state: this.henrikCombat, bounds: this.henrikNpc, visible: isTableRoomDoorOpen },
+        { state: this.tanjaCombat, bounds: this.tanjaNpc, visible: isTableRoomDoorOpen },
+        { state: this.dianaCombat, bounds: this.dianaNpc, visible: true },
+        { state: this.simonCombat, bounds: this.simonNpc, visible: true },
+        { state: this.anneMarieCombat, bounds: this.anneMarieNpc, visible: isBedroomDoorOpen },
+        ...this.rosannaSpawned ? [{ state: this.rosannaCombat, bounds: this.rosannaNpc, visible: true }] : []
+      ];
+    }
+    getArmedNpcByKey(key) {
+      for (const entry of this.getArmedNpcs()) {
+        if (entry.state.key === key) return entry.state;
+      }
+      return void 0;
+    }
+    enter(player) {
+      player.x = UPSTAIRS_STAIRS_SPAWN.x;
+      player.y = UPSTAIRS_STAIRS_SPAWN.y;
+      player.facing = UPSTAIRS_STAIRS_SPAWN.facing;
+      player.yaw = -Math.PI / 2;
+      player.renderYaw = -Math.PI / 2;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
+      player.isMoving = false;
+      player.walkTimer = 0;
+      if (!Number.isFinite(player.flamethrowerAmmo)) {
+        player.flamethrowerAmmo = UPSTAIRS_INITIAL_FLAMETHROWER_AMMO;
+      }
+      this.intruderDetected = false;
+      if (this.albinCombat.mode !== "dead") {
+        this.albinCombat.mode = "passive";
+        this.albinCombat.unseenTimer = 0;
+        this.albinY = UPSTAIRS_ALBIN_START_Y;
+        this.albinDir = 1;
+        this.albinCombat.aimYaw = Math.PI / 2;
+        this.albinCone = new ConeOfSight(
+          { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
+          Math.PI / 2,
+          void 0,
+          this.map
+        );
+      } else {
+        this.albinCone = null;
+      }
+      if (this.henrikCombat.mode !== "dead") {
+        this.henrikCombat.mode = "passive";
+        this.henrikCombat.unseenTimer = 0;
+        this.henrikAngle = Math.PI / 2;
+        this.henrikTimer = 0;
+        this.henrikCombat.aimYaw = this.henrikAngle;
+        this.henrikCone = new ConeOfSight(
+          { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
+          this.henrikAngle,
+          void 0,
+          this.map
+        );
+      } else {
+        this.henrikCone = null;
+      }
+      if (this.tanjaCombat.mode !== "dead") {
+        this.tanjaCombat.mode = "passive";
+        this.tanjaCombat.unseenTimer = 0;
+        this.tanjaCombat.aimYaw = -Math.PI / 2;
+        this.tanjaCone = new ConeOfSight(
+          { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
+          -Math.PI / 2,
+          void 0,
+          this.map
+        );
+      } else {
+        this.tanjaCone = null;
+      }
+      if (this.dianaCombat.mode !== "dead" && !player.states.get(DIANA_DISTRACTED_KEY)) {
+        this.dianaCombat.mode = "passive";
+        this.dianaCombat.unseenTimer = 0;
+        const dianaTreeAngle = Math.atan2(
+          15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
+          3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
+        );
+        this.dianaCombat.aimYaw = dianaTreeAngle;
+        this.dianaCone = new ConeOfSight(
+          { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
+          dianaTreeAngle,
+          DEFAULT_CONE_OF_SIGHT_DISTANCE,
+          this.map,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+        );
+      } else {
+        this.dianaCone = null;
+      }
+      if (this.simonCombat.mode !== "dead" && !player.states.get(SIMON_DISTRACTED_KEY)) {
+        this.simonCombat.mode = "passive";
+        this.simonCombat.unseenTimer = 0;
+        const simonTreeAngle = Math.atan2(
+          15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
+          3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
+        );
+        this.simonCombat.aimYaw = simonTreeAngle;
+        this.simonCone = new ConeOfSight(
+          { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
+          simonTreeAngle,
+          DEFAULT_CONE_OF_SIGHT_DISTANCE,
+          this.map,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+        );
+      } else {
+        this.simonCone = null;
+      }
+      if (this.anneMarieCombat.mode !== "dead") {
+        this.anneMarieCombat.mode = "passive";
+        this.anneMarieCombat.unseenTimer = 0;
+        this.anneMarieAngle = Math.PI / 2;
+        this.anneMarieTimer = 0;
+        this.anneMarieCombat.aimYaw = this.anneMarieAngle;
+        this.anneMarieCone = new ConeOfSight(
+          { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
+          this.anneMarieAngle,
+          void 0,
+          this.map
+        );
+      } else {
+        this.anneMarieCone = null;
+      }
+      if (this.rosannaSpawned && this.rosannaCombat.mode !== "dead") {
+        this.rosannaCombat.mode = "passive";
+        this.rosannaCombat.unseenTimer = 0;
+        this.rosannaCombat.aimYaw = Math.PI / 2;
+        this.rosannaCone = new ConeOfSight(
+          { x: this.rosannaNpc.x + 6, y: this.rosannaNpc.y + 6 },
+          Math.PI / 2,
+          void 0,
+          this.map
+        );
+      }
+    }
+    getSolidObstacles() {
+      const obs = [
+        UPSTAIRS_STAIRS_TRIGGER_BOUNDS,
+        ...this.doors.map((d) => d.bounds)
+      ];
+      if (this.albinCombat.mode !== "dead") {
+        obs.push({ x: this.albinX, y: this.albinY, width: 12, height: 12 });
+      }
+      if (this.henrikCombat.mode !== "dead") obs.push(this.henrikNpc);
+      if (this.tanjaCombat.mode !== "dead") obs.push(this.tanjaNpc);
+      if (this.dianaCombat.mode !== "dead") obs.push(this.dianaNpc);
+      if (this.simonCombat.mode !== "dead") obs.push(this.simonNpc);
+      if (this.anneMarieCombat.mode !== "dead") obs.push(this.anneMarieNpc);
+      if (this.rosannaSpawned && this.rosannaCombat.mode !== "dead") {
+        obs.push(this.rosannaNpc);
+      }
+      return obs;
+    }
+    getInteractables(player) {
+      const list = [
+        {
+          id: "upstairs-office-pc",
+          bounds: { ...UPSTAIRS_COMPUTER_BOUNDS },
+          promptText: "Start PC",
+          dialogueLines: [
+            "Hmm... is this where Arjan pretends to work? It's just a bunch of pictures of Anne-Marie.",
+            "Hey there's actually a python script here, shall we run it?",
+            "You are now addicted to Olexa's text-based christmas adventure."
+          ]
+        }
+      ];
+      if (!player?.states.get(C4_TAKEN_STATE_KEY)) {
+        list.push({
+          id: "upstairs-office-c4",
+          bounds: { ...UPSTAIRS_C4_BOUNDS },
+          promptText: "Pick up C4",
+          dialogueLines: []
+        });
+      }
+      if (!player?.states.get(DIANA_PRESENT_TAKEN_KEY)) {
+        list.push({
+          id: "upstairs-diana-present",
+          bounds: { ...UPSTAIRS_DIANA_PRESENT_BOUNDS },
+          promptText: "Take Diana's Present",
+          dialogueLines: []
+        });
+      }
+      if (!player?.states.get(SIMON_PRESENT_TAKEN_KEY)) {
+        list.push({
+          id: "upstairs-simon-present",
+          bounds: { ...UPSTAIRS_SIMON_PRESENT_BOUNDS },
+          promptText: "Take Simon's Present",
+          dialogueLines: []
+        });
+      }
+      if (player?.states.get(C4_TAKEN_STATE_KEY) && !player?.states.get(C4_PLACED_STATE_KEY)) {
+        list.push({
+          id: "upstairs-xmas-tree",
+          bounds: { ...UPSTAIRS_XMAS_TREE_BOUNDS },
+          promptText: "Place C4",
+          dialogueLines: []
+        });
+      }
+      for (const door of this.doors) {
+        list.push({
+          id: door.id,
+          bounds: { ...door.bounds },
+          promptText: "Open door",
+          dialogueLines: []
+        });
+      }
+      return list;
+    }
+    handleInteraction(interactableId, player, ctx) {
+      if (interactableId === "upstairs-office-c4") {
+        player.states.set(C4_TAKEN_STATE_KEY, true);
+        ctx.openDialogue([
+          "You picked up a block of military-grade C4 explosive! Now plant it under the Christmas tree..."
+        ]);
+        return true;
+      }
+      if (interactableId === "upstairs-diana-present") {
+        player.states.set(DIANA_PRESENT_TAKEN_KEY, true);
+        ctx.openDialogue(["You picked up Diana's Present."]);
+        return true;
+      }
+      if (interactableId === "upstairs-simon-present") {
+        player.states.set(SIMON_PRESENT_TAKEN_KEY, true);
+        ctx.openDialogue(["You picked up Simon's present."]);
+        return true;
+      }
+      if (interactableId === "upstairs-xmas-tree") {
+        if (!player.states.get(C4_TAKEN_STATE_KEY)) {
+          return false;
+        }
+        player.states.set(C4_PLACED_STATE_KEY, true);
+        if (ctx.detonateHouseC4) {
+          ctx.detonateHouseC4();
+        } else if (ctx.fadeWorldToBlack) {
+          ctx.fadeWorldToBlack();
+        }
+        const receiver = ctx.getSecretSantaReceiver ? ctx.getSecretSantaReceiver() : void 0;
+        const finalLine = receiver ?? "Ehm... this is awkward. An error occurred, gift receiver unknown.";
+        ctx.openDialogue(
+          [
+            "KABOOM! The C4 detonates under the Christmas tree, blowing the entire Rensbo house sky-high!",
+            'CONGRATULATIONS! You have "saved" Christmas \u2014 not a single witness, wall, or hostile Santa left standing.',
+            "As a reward for your explosive holiday spirit...",
+            "You will learn who your secret santa gift receiver is...",
+            "And that person is...",
+            finalLine
+          ],
+          void 0,
+          void 0,
+          true
+        );
+        return true;
+      }
+      const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
+      if (doorIdx !== -1) {
+        const door = this.doors[doorIdx];
+        if (door.id === "upstairs-office-door") {
+          ctx.openDialogue([
+            "The office door is locked tight. You will need something explosive to blast through the wall!"
+          ]);
+          return true;
+        }
+        if (door.id === "upstairs-table-room-door") {
+          player.states.set(TABLE_ROOM_AMBUSH_STATE_KEY, true);
+        }
+        this.doors.splice(doorIdx, 1);
+        this.openedDoors.push({
+          id: door.id,
+          bounds: { ...door.bounds },
+          progress: 0,
+          swingDirection: player.y >= door.bounds.y ? -1 : 1
+        });
+        return true;
+      }
+      if (interactableId === "upstairs-stairs-down") {
+        ctx.loadLevel("level-basement");
+        return true;
+      }
+      return false;
+    }
+    triggerTableRoomAmbush(player) {
+      player.states.set(TABLE_ROOM_AMBUSH_STATE_KEY, true);
+      const doorIdx = this.doors.findIndex((d) => d.id === "upstairs-table-room-door");
+      if (doorIdx !== -1) {
+        const door = this.doors[doorIdx];
+        this.doors.splice(doorIdx, 1);
+        this.openedDoors.push({
+          id: door.id,
+          bounds: { ...door.bounds },
+          progress: 0,
+          swingDirection: 1
+        });
+      }
+      this.tableRoomAmbushCutscene = { active: true, timer: 0 };
+      for (const combat of [this.henrikCombat, this.tanjaCombat]) {
+        if (combat.mode !== "dead" && combat.mode !== "burning") {
+          combat.mode = "hostile";
+          combat.hostileAlertTimer = 0;
+          combat.pendingHostileAlertTimer = 0;
+          combat.unseenTimer = 0;
+          combat.pathTimer = 0;
+        }
+      }
+    }
+    updateTableRoomAmbush(dtSeconds, player) {
+      if (!player.states.get(TABLE_ROOM_AMBUSH_STATE_KEY) && rectsIntersect(player, TABLE_ROOM_AMBUSH_TRIGGER_BOUNDS)) {
+        this.triggerTableRoomAmbush(player);
+      }
+      if (this.tableRoomAmbushCutscene.active && dtSeconds > 0) {
+        this.tableRoomAmbushCutscene.timer += dtSeconds;
+        if (this.tableRoomAmbushCutscene.timer >= 1.6) {
+          this.tableRoomAmbushCutscene.active = false;
+        }
+      }
+    }
+    /**
+     * Updates the one-time Kitchen Rosanna bazooka reveal, window jump, and boss spawn cutscene.
+     * Returns true if player movement is currently locked by the active cutscene.
+     */
+    updateCutscene(dtSeconds, player, ctx) {
+      if (this.rosannaCutscene?.active) {
+        const cs = this.rosannaCutscene;
+        player.isMoving = false;
+        player.walkTimer = 0;
+        player.facing = "up";
+        cs.elapsed += dtSeconds;
+        if (cs.elapsed < 1) {
+          cs.phase = "rising";
+          const p = Math.min(1, cs.elapsed / 1);
+          cs.santaZ = -14 + p * 16;
+        } else if (cs.elapsed < 2.35) {
+          cs.phase = "firing";
+          cs.santaZ = 2;
+          if (!cs.firedShot) {
+            cs.firedShot = true;
+            const originX = cs.santaX + 8;
+            const originY = cs.santaY + 8;
+            const playerCx = player.x + player.width * 0.5;
+            const targetX = Math.max(
+              9.5 * TILE_SIZE,
+              Math.min(12.2 * TILE_SIZE, playerCx - 2.8 * TILE_SIZE)
+            );
+            const targetY = 9.05 * TILE_SIZE;
+            const shotYaw = Math.atan2(targetY - originY, targetX - originX);
+            ctx.fireRosannaCutsceneRocket?.(originX, originY, shotYaw);
+          }
+        } else if (cs.elapsed < 3.15) {
+          cs.phase = "jumping";
+          cs.walkTimer += dtSeconds;
+          const jp = Math.min(1, (cs.elapsed - 2.35) / 0.8);
+          cs.santaX = ROSANNA_SANTA_START_X + jp * (ROSANNA_SANTA_END_X - ROSANNA_SANTA_START_X);
+          cs.santaY = ROSANNA_SANTA_Y + jp * (ROSANNA_INTERIOR_Y + 6 - (ROSANNA_SANTA_Y + 8));
+          cs.santaZ = Math.sin(jp * Math.PI) * 14;
+        } else {
+          cs.active = false;
+          this.rosannaCutscene = null;
+          this.rosannaSpawned = true;
+          this.rosannaNpc.x = ROSANNA_INTERIOR_X;
+          this.rosannaNpc.y = ROSANNA_INTERIOR_Y;
+          this.rosannaCombat.mode = "hostile";
+          this.rosannaCombat.hostileAlertTimer = 0;
+          this.rosannaCombat.unseenTimer = 0;
+          this.rosannaCombat.pathTimer = 0;
+          this.rosannaCombat.fireCooldown = 1.2;
+        }
+        return true;
+      }
+      if (!player.states.get(KITCHEN_ROSANNA_STATE_KEY) && rectsIntersect(player, KITCHEN_TRIGGER_BOUNDS)) {
+        player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
+        player.isMoving = false;
+        player.walkTimer = 0;
+        player.facing = "up";
+        this.rosannaCutscene = {
+          active: true,
+          phase: "rising",
+          santaX: ROSANNA_SANTA_START_X,
+          santaY: ROSANNA_SANTA_Y,
+          santaZ: -14,
+          facingAngle: Math.PI / 2,
+          walkTimer: 0,
+          elapsed: 0,
+          firedShot: false
+        };
+        return true;
+      }
+      return false;
+    }
+    updateHostileNpc(combat, bounds, player, dtSeconds, ctx, fov = DEFAULT_CONE_OF_SIGHT_FOV) {
+      stepHostileNpcAlongPath(
+        combat,
+        bounds,
+        player,
+        this.map,
+        this.getSolidObstacles(),
+        dtSeconds
+      );
+      const originX = bounds.x + bounds.width * 0.5;
+      const originY = bounds.y + bounds.height * 0.5;
+      const playerCx = player.x + player.width * 0.5;
+      const playerCy = player.y + player.height * 0.5;
+      const aimYaw = Math.atan2(playerCy - originY, playerCx - originX);
+      combat.aimYaw = aimYaw;
+      const cone = new ConeOfSight(
+        { x: originX, y: originY },
+        aimYaw,
+        DEFAULT_CONE_OF_SIGHT_DISTANCE,
+        this.map,
+        fov
+      );
+      if (cone.checkDetection(player)) {
+        combat.unseenTimer = 0;
+      } else {
+        combat.unseenTimer += dtSeconds;
+      }
+      if (combat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+        combat.mode = "passive";
+        combat.unseenTimer = 0;
+        combat.isMoving = false;
+        combat.path = [];
+        combat.pathTimer = 0;
+      } else if (combat.weapon === "katana") {
+        if (combat.hostileAlertTimer <= 0 && combat.meleeCooldown <= 0 && Math.hypot(playerCx - originX, playerCy - originY) <= NPC_KATANA_MELEE_RANGE) {
+          ctx.damagePlayer?.(NPC_KATANA_MELEE_DAMAGE);
+          combat.meleeCooldown = NPC_KATANA_MELEE_COOLDOWN;
+        }
+      } else if (combat.weapon === "flamethrower") {
+        tryFireHostileNpcFlamethrower(
+          combat,
+          originX,
+          originY,
+          aimYaw,
+          ctx.fireNpcFlamethrower
+        );
+      } else if (combat.weapon === "bazooka") {
+        tryFireHostileNpcBazooka(
+          combat,
+          originX,
+          originY,
+          aimYaw,
+          ctx.fireNpcBazooka
+        );
+      } else {
+        tryFireHostileNpcUzi(combat, originX, originY, aimYaw, ctx.fireNpcUzi);
+      }
+      return cone;
+    }
+    /**
+     * Updates all Upstairs NPCs' patrol, cones of sight, and hostile Uzi combat.
+     */
+    updateNpcSight(dtSeconds, player, ctx) {
+      const playerCx = player.x + player.width * 0.5;
+      const playerCy = player.y + player.height * 0.5;
+      updateNpcHealthAndTimers(this.albinCombat, dtSeconds);
+      if (this.albinCombat.mode === "dead") {
+        this.albinCone = null;
+      } else if (this.albinCombat.mode === "burning") {
+        this.albinCone = null;
+        const albinBounds = { x: this.albinX, y: this.albinY, width: 12, height: 12 };
+        stepBurningNpc(
+          this.albinCombat,
+          albinBounds,
+          player,
+          this.map,
+          this.getSolidObstacles(),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
+        this.albinX = albinBounds.x;
+        this.albinY = albinBounds.y;
+      } else if (this.albinCombat.mode === "hostile") {
+        const albinBounds = { x: this.albinX, y: this.albinY, width: 12, height: 12 };
+        this.albinCone = this.updateHostileNpc(
+          this.albinCombat,
+          albinBounds,
+          player,
+          dtSeconds,
+          ctx
+        );
+        this.albinX = albinBounds.x;
+        this.albinY = albinBounds.y;
+      } else {
+        this.albinY += this.albinDir * UPSTAIRS_ALBIN_SPEED * dtSeconds;
+        if (this.albinDir === 1 && this.albinY >= UPSTAIRS_ALBIN_END_Y) {
+          this.albinY = UPSTAIRS_ALBIN_END_Y;
+          this.albinDir = -1;
+        } else if (this.albinDir === -1 && this.albinY <= UPSTAIRS_ALBIN_START_Y) {
+          this.albinY = UPSTAIRS_ALBIN_START_Y;
+          this.albinDir = 1;
+        }
+        const albinAngle = this.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2;
+        this.albinCombat.aimYaw = albinAngle;
+        this.albinCone = new ConeOfSight(
+          { x: this.albinX + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
+          albinAngle,
+          void 0,
+          this.map
+        );
+        if (this.albinCone.checkDetection(player)) {
+          enterHostileMode(this.albinCombat);
+          const aimYaw = Math.atan2(playerCy - (this.albinY + 6), playerCx - (this.albinX + 6));
+          this.albinCombat.aimYaw = aimYaw;
+          this.albinCone = new ConeOfSight(
+            { x: this.albinX + 6, y: this.albinY + 6 },
+            aimYaw,
+            void 0,
+            this.map
+          );
+          propagateHostileAlert(this.getArmedNpcs(), this.albinCombat.key);
+        }
+      }
+      const isTableRoomDoorOpen = !this.doors.some(
+        (d) => d.id === "upstairs-table-room-door" && d.hiddenRegions.length > 0
+      );
+      updateNpcHealthAndTimers(this.henrikCombat, dtSeconds);
+      updateNpcHealthAndTimers(this.tanjaCombat, dtSeconds);
+      if (isTableRoomDoorOpen) {
+        if (this.henrikCombat.mode === "dead") {
+          this.henrikCone = null;
+        } else if (this.henrikCombat.mode === "burning") {
+          this.henrikCone = null;
+          stepBurningNpc(
+            this.henrikCombat,
+            this.henrikNpc,
+            player,
+            this.map,
+            this.getSolidObstacles(),
+            dtSeconds,
+            ctx.fireNpcUzi,
+            ctx.fireNpcFlamethrower,
+            ctx.fireNpcBazooka
+          );
+        } else if (this.henrikCombat.mode === "hostile") {
+          this.henrikCone = this.updateHostileNpc(
+            this.henrikCombat,
+            this.henrikNpc,
+            player,
+            dtSeconds,
+            ctx
+          );
+        } else {
+          this.henrikTimer += dtSeconds;
+          if (this.henrikTimer >= 1) {
+            this.henrikTimer -= 1;
+            this.henrikAngle -= Math.PI / 4;
+            this.henrikCone = new ConeOfSight(
+              { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
+              this.henrikAngle,
+              void 0,
+              this.map
+            );
+          }
+          this.henrikCombat.aimYaw = this.henrikCone?.direction ?? this.henrikAngle;
+          if (this.henrikCone?.checkDetection(player)) {
+            enterHostileMode(this.henrikCombat);
+            const aimYaw = Math.atan2(playerCy - (this.henrikNpc.y + 6), playerCx - (this.henrikNpc.x + 6));
+            this.henrikCombat.aimYaw = aimYaw;
+            this.henrikCone = new ConeOfSight(
+              { x: this.henrikNpc.x + 6, y: this.henrikNpc.y + 6 },
+              aimYaw,
+              void 0,
+              this.map
+            );
+            propagateHostileAlert(this.getArmedNpcs(), this.henrikCombat.key);
+          }
+        }
+        if (this.tanjaCombat.mode === "dead") {
+          this.tanjaCone = null;
+        } else if (this.tanjaCombat.mode === "burning") {
+          this.tanjaCone = null;
+          stepBurningNpc(
+            this.tanjaCombat,
+            this.tanjaNpc,
+            player,
+            this.map,
+            this.getSolidObstacles(),
+            dtSeconds,
+            ctx.fireNpcUzi,
+            ctx.fireNpcFlamethrower,
+            ctx.fireNpcBazooka
+          );
+        } else if (this.tanjaCombat.mode === "hostile") {
+          this.tanjaCone = this.updateHostileNpc(
+            this.tanjaCombat,
+            this.tanjaNpc,
+            player,
+            dtSeconds,
+            ctx
+          );
+        } else {
+          if (!this.tanjaCone) {
+            this.tanjaCone = new ConeOfSight(
+              { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
+              -Math.PI / 2,
+              void 0,
+              this.map
+            );
+          }
+          this.tanjaCombat.aimYaw = this.tanjaCone.direction;
+          if (this.tanjaCone.checkDetection(player)) {
+            enterHostileMode(this.tanjaCombat);
+            const aimYaw = Math.atan2(playerCy - (this.tanjaNpc.y + 6), playerCx - (this.tanjaNpc.x + 6));
+            this.tanjaCombat.aimYaw = aimYaw;
+            this.tanjaCone = new ConeOfSight(
+              { x: this.tanjaNpc.x + 6, y: this.tanjaNpc.y + 6 },
+              aimYaw,
+              void 0,
+              this.map
+            );
+            propagateHostileAlert(this.getArmedNpcs(), this.tanjaCombat.key);
+          }
+        }
+      }
+      updateNpcHealthAndTimers(this.dianaCombat, dtSeconds);
+      if (this.dianaCombat.mode === "dead") {
+        this.dianaCone = null;
+      } else if (this.dianaCombat.mode === "burning") {
+        this.dianaCone = null;
+        stepBurningNpc(
+          this.dianaCombat,
+          this.dianaNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
+      } else if (this.dianaCombat.mode === "hostile") {
+        this.dianaCone = this.updateHostileNpc(
+          this.dianaCombat,
+          this.dianaNpc,
+          player,
+          dtSeconds,
+          ctx,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+        );
+        if (this.dianaCombat.mode === "passive") {
+          if (player.states.get(DIANA_DISTRACTED_KEY)) {
+            this.dianaCone = null;
+          } else {
+            const dianaTreeAngle = Math.atan2(
+              15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
+              3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
+            );
+            this.dianaCombat.aimYaw = dianaTreeAngle;
+            this.dianaCone = new ConeOfSight(
+              { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
+              dianaTreeAngle,
+              DEFAULT_CONE_OF_SIGHT_DISTANCE,
+              this.map,
+              DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+            );
+          }
+        }
+      } else if (this.dianaCone && this.dianaCone.checkDetection(player)) {
+        enterHostileMode(this.dianaCombat);
+        const aimYaw = Math.atan2(playerCy - (this.dianaNpc.y + 6), playerCx - (this.dianaNpc.x + 6));
+        this.dianaCombat.aimYaw = aimYaw;
+        this.dianaCone = new ConeOfSight(
+          { x: this.dianaNpc.x + 6, y: this.dianaNpc.y + 6 },
+          aimYaw,
+          DEFAULT_CONE_OF_SIGHT_DISTANCE,
+          this.map,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+        );
+        propagateHostileAlert(this.getArmedNpcs(), this.dianaCombat.key);
+      }
+      updateNpcHealthAndTimers(this.simonCombat, dtSeconds);
+      if (this.simonCombat.mode === "dead") {
+        this.simonCone = null;
+      } else if (this.simonCombat.mode === "burning") {
+        this.simonCone = null;
+        stepBurningNpc(
+          this.simonCombat,
+          this.simonNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
+      } else if (this.simonCombat.mode === "hostile") {
+        this.simonCone = this.updateHostileNpc(
+          this.simonCombat,
+          this.simonNpc,
+          player,
+          dtSeconds,
+          ctx,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+        );
+        if (this.simonCombat.mode === "passive") {
+          if (player.states.get(SIMON_DISTRACTED_KEY)) {
+            this.simonCone = null;
+          } else {
+            const simonTreeAngle = Math.atan2(
+              15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
+              3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
+            );
+            this.simonCombat.aimYaw = simonTreeAngle;
+            this.simonCone = new ConeOfSight(
+              { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
+              simonTreeAngle,
+              DEFAULT_CONE_OF_SIGHT_DISTANCE,
+              this.map,
+              DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+            );
+          }
+        }
+      } else if (this.simonCone && this.simonCone.checkDetection(player)) {
+        enterHostileMode(this.simonCombat);
+        const aimYaw = Math.atan2(playerCy - (this.simonNpc.y + 6), playerCx - (this.simonNpc.x + 6));
+        this.simonCombat.aimYaw = aimYaw;
+        this.simonCone = new ConeOfSight(
+          { x: this.simonNpc.x + 6, y: this.simonNpc.y + 6 },
+          aimYaw,
+          DEFAULT_CONE_OF_SIGHT_DISTANCE,
+          this.map,
+          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
+        );
+        propagateHostileAlert(this.getArmedNpcs(), this.simonCombat.key);
+      }
+      const isBedroomDoorOpen = !this.doors.some(
+        (d) => d.id === "upstairs-bedroom-door" && d.hiddenRegions.length > 0
+      );
+      updateNpcHealthAndTimers(this.anneMarieCombat, dtSeconds);
+      if (isBedroomDoorOpen) {
+        if (this.anneMarieCombat.mode === "dead") {
+          this.anneMarieCone = null;
+        } else if (this.anneMarieCombat.mode === "burning") {
+          this.anneMarieCone = null;
+          stepBurningNpc(
+            this.anneMarieCombat,
+            this.anneMarieNpc,
+            player,
+            this.map,
+            this.getSolidObstacles(),
+            dtSeconds,
+            ctx.fireNpcUzi
+          );
+        } else if (this.anneMarieCombat.mode === "hostile") {
+          this.anneMarieCone = this.updateHostileNpc(
+            this.anneMarieCombat,
+            this.anneMarieNpc,
+            player,
+            dtSeconds,
+            ctx
+          );
+        } else {
+          this.anneMarieAngle = Math.PI / 2;
+          this.anneMarieCombat.aimYaw = this.anneMarieAngle;
+          this.anneMarieCone = new ConeOfSight(
+            { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
+            this.anneMarieAngle,
+            void 0,
+            this.map
+          );
+          if (this.anneMarieCone.checkDetection(player)) {
+            enterHostileMode(this.anneMarieCombat);
+            const aimYaw = Math.atan2(playerCy - (this.anneMarieNpc.y + 6), playerCx - (this.anneMarieNpc.x + 6));
+            this.anneMarieCombat.aimYaw = aimYaw;
+            this.anneMarieCone = new ConeOfSight(
+              { x: this.anneMarieNpc.x + 6, y: this.anneMarieNpc.y + 6 },
+              aimYaw,
+              void 0,
+              this.map
+            );
+            propagateHostileAlert(this.getArmedNpcs(), this.anneMarieCombat.key);
+          }
+        }
+      }
+      if (this.rosannaSpawned) {
+        updateNpcHealthAndTimers(this.rosannaCombat, dtSeconds);
+        if (this.rosannaCombat.mode === "dead") {
+          this.rosannaCone = null;
+        } else if (this.rosannaCombat.mode === "burning") {
+          this.rosannaCone = null;
+          stepBurningNpc(
+            this.rosannaCombat,
+            this.rosannaNpc,
+            player,
+            this.map,
+            this.getSolidObstacles(),
+            dtSeconds,
+            ctx.fireNpcUzi,
+            ctx.fireNpcFlamethrower,
+            ctx.fireNpcBazooka
+          );
+        } else if (this.rosannaCombat.mode === "hostile") {
+          this.rosannaCone = this.updateHostileNpc(
+            this.rosannaCombat,
+            this.rosannaNpc,
+            player,
+            dtSeconds,
+            ctx
+          );
+        } else {
+          this.rosannaCone = new ConeOfSight(
+            { x: this.rosannaNpc.x + 6, y: this.rosannaNpc.y + 6 },
+            this.rosannaCombat.aimYaw,
+            void 0,
+            this.map
+          );
+          if (this.rosannaCone.checkDetection(player)) {
+            enterHostileMode(this.rosannaCombat);
+            const aimYaw = Math.atan2(
+              playerCy - (this.rosannaNpc.y + 6),
+              playerCx - (this.rosannaNpc.x + 6)
+            );
+            this.rosannaCombat.aimYaw = aimYaw;
+            this.rosannaCone = new ConeOfSight(
+              { x: this.rosannaNpc.x + 6, y: this.rosannaNpc.y + 6 },
+              aimYaw,
+              void 0,
+              this.map
+            );
+            propagateHostileAlert(this.getArmedNpcs(), this.rosannaCombat.key);
+          }
+        }
+      }
+    }
+  };
+
   // src/rendering/math3d.ts
   var MAIN_HOUSE_WALL_HEIGHT = 34;
   var MAIN_HOUSE_ROOF_PEAK_ADD = 16;
@@ -1653,7 +3747,7 @@
         );
       }
     }
-    const isCutsceneOrSpecialLock = state.currentLevelId === "level-outside" && (state.motorcycle.status === "driving" || state.climbing !== null) || state.currentLevelId === "level-upstairs" && state.levels["level-upstairs"].rosannaCutscene?.active === true || state.currentLevelId === "level-basement" && state.levels["level-basement"].toiletCutscene?.active === true;
+    const isCutsceneOrSpecialLock = state.currentLevelId === "level-outside" && (state.motorcycle.status === "driving" || state.climbing !== null) || state.currentLevelId === "level-upstairs" && (state.levels["level-upstairs"].rosannaCutscene?.active === true || state.levels["level-upstairs"].tableRoomAmbushCutscene?.active === true) || state.currentLevelId === "level-basement" && state.levels["level-basement"].toiletCutscene?.active === true;
     if (typeof input.cameraYaw === "number" && player.equippedItem !== "empty" && !isCutsceneOrSpecialLock) {
       player.yaw = wrapAngle(input.cameraYaw);
       player.facing = yawToDirection(player.yaw);
@@ -1695,9 +3789,10 @@
       z: pz
     };
     const rosannaCutscene = state.currentLevelId === "level-upstairs" ? state.levels["level-upstairs"].rosannaCutscene : null;
+    const tableRoomAmbush = state.currentLevelId === "level-upstairs" ? state.levels["level-upstairs"].tableRoomAmbushCutscene : null;
     const toiletCutscene = state.currentLevelId === "level-basement" ? state.levels["level-basement"].toiletCutscene : null;
     let zoomEase = 0;
-    if (rosannaCutscene?.active || toiletCutscene?.active) {
+    if (rosannaCutscene?.active || tableRoomAmbush?.active || toiletCutscene?.active) {
       let targetYaw = -Math.PI / 2;
       let elapsed = 0;
       let targetOffsetX = 0;
@@ -1712,6 +3807,14 @@
         targetOffsetX = (tx - px) * 0.45;
         targetOffsetY = 1.5;
         targetOffsetZ = (tz - pz) * 0.45;
+      } else if (tableRoomAmbush?.active) {
+        const doorX = UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.x + UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.width * 0.5;
+        const doorZ = UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.y + UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.height * 0.5;
+        targetYaw = Math.atan2(doorZ - pz, doorX - px);
+        elapsed = tableRoomAmbush.timer;
+        targetOffsetX = (doorX - px) * 0.45;
+        targetOffsetY = 1.5;
+        targetOffsetZ = (doorZ - pz) * 0.45;
       } else if (rosannaCutscene?.active) {
         elapsed = rosannaCutscene.elapsed;
       }
@@ -1738,7 +3841,7 @@
     const backX = -Math.cos(cam.yaw) * cosPitch;
     const backZ = -Math.sin(cam.yaw) * cosPitch;
     const backY = sinPitch;
-    const wantsShoulderOffset = player.equippedItem !== "empty" && !rosannaCutscene?.active && !toiletCutscene?.active && !(state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") && !state.climbing;
+    const wantsShoulderOffset = player.equippedItem !== "empty" && !rosannaCutscene?.active && !tableRoomAmbush?.active && !toiletCutscene?.active && !(state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") && !state.climbing;
     const desiredShoulder = wantsShoulderOffset ? 10.3125 : 0;
     const shoulderBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 10) : 1;
     cam.shoulderOffset = (cam.shoulderOffset ?? 0) + (desiredShoulder - (cam.shoulderOffset ?? 0)) * shoulderBlend;
@@ -1790,1550 +3893,6 @@
     cam.projMatrix = mat4Perspective(cam.fovY, aspect, cam.near, cam.far);
     cam.viewProjMatrix = mat4Multiply(cam.projMatrix, cam.viewMatrix);
   }
-
-  // src/world/pathfinding.ts
-  var AStarPathfinder = class {
-    constructor(map, options) {
-      __publicField(this, "map");
-      __publicField(this, "allowDiagonal");
-      __publicField(this, "obstacles");
-      __publicField(this, "customWalkable");
-      this.map = map;
-      this.allowDiagonal = options?.allowDiagonal ?? false;
-      this.obstacles = options?.obstacles ?? [];
-      this.customWalkable = options?.isWalkable;
-    }
-    isTileWalkable(col, row) {
-      if (col < 0 || row < 0 || col >= this.map.cols || row >= this.map.rows) {
-        return false;
-      }
-      if (this.customWalkable) {
-        return this.customWalkable(col, row);
-      }
-      if (isSolidTile(this.map, col, row)) {
-        return false;
-      }
-      if (this.obstacles.length > 0) {
-        const ts = this.map.tileSize;
-        const tileRect = {
-          x: col * ts + 1,
-          y: row * ts + 1,
-          width: ts - 2,
-          height: ts - 2
-        };
-        for (const obs of this.obstacles) {
-          if (rectsIntersect(tileRect, obs)) {
-            return false;
-          }
-        }
-      }
-      return true;
-    }
-    heuristic(a, b) {
-      const dx = Math.abs(a.col - b.col);
-      const dy = Math.abs(a.row - b.row);
-      if (this.allowDiagonal) {
-        const min = Math.min(dx, dy);
-        const max = Math.max(dx, dy);
-        return min * Math.SQRT2 + (max - min);
-      }
-      return dx + dy;
-    }
-    keyOf(col, row) {
-      return row * this.map.cols + col;
-    }
-    /**
-     * Returns the shortest path of tiles from `start` to `goal` (inclusive),
-     * or an empty array if no valid path exists.
-     */
-    findPath(start, goal) {
-      if (start.col < 0 || start.row < 0 || start.col >= this.map.cols || start.row >= this.map.rows || goal.col < 0 || goal.row < 0 || goal.col >= this.map.cols || goal.row >= this.map.rows) {
-        return [];
-      }
-      if (!this.isTileWalkable(goal.col, goal.row)) {
-        return [];
-      }
-      if (start.col === goal.col && start.row === goal.row) {
-        return [{ col: start.col, row: start.row }];
-      }
-      const startKey = this.keyOf(start.col, start.row);
-      const goalKey = this.keyOf(goal.col, goal.row);
-      const openSet = /* @__PURE__ */ new Set([startKey]);
-      const closedSet = /* @__PURE__ */ new Set();
-      const cameFrom = /* @__PURE__ */ new Map();
-      const gScore = /* @__PURE__ */ new Map([[startKey, 0]]);
-      const fScore = /* @__PURE__ */ new Map([
-        [startKey, this.heuristic(start, goal)]
-      ]);
-      const cardinalDirs = [
-        [0, -1, 1],
-        [1, 0, 1],
-        [0, 1, 1],
-        [-1, 0, 1]
-      ];
-      const diagonalDirs = [
-        [1, -1, Math.SQRT2],
-        [1, 1, Math.SQRT2],
-        [-1, 1, Math.SQRT2],
-        [-1, -1, Math.SQRT2]
-      ];
-      while (openSet.size > 0) {
-        let currentKey = -1;
-        let bestF = Infinity;
-        for (const k of openSet) {
-          const f = fScore.get(k) ?? Infinity;
-          if (f < bestF) {
-            bestF = f;
-            currentKey = k;
-          }
-        }
-        if (currentKey === goalKey) {
-          const path = [];
-          let trace = currentKey;
-          while (trace !== void 0) {
-            const r = Math.floor(trace / this.map.cols);
-            const c = trace % this.map.cols;
-            path.push({ col: c, row: r });
-            trace = cameFrom.get(trace);
-          }
-          path.reverse();
-          return path;
-        }
-        openSet.delete(currentKey);
-        closedSet.add(currentKey);
-        const curRow = Math.floor(currentKey / this.map.cols);
-        const curCol = currentKey % this.map.cols;
-        const curG = gScore.get(currentKey) ?? Infinity;
-        const dirs = this.allowDiagonal ? [...cardinalDirs, ...diagonalDirs] : cardinalDirs;
-        for (const [dc, dr, stepCost] of dirs) {
-          const nc = curCol + dc;
-          const nr = curRow + dr;
-          if (!this.isTileWalkable(nc, nr)) {
-            continue;
-          }
-          if (dc !== 0 && dr !== 0) {
-            if (!this.isTileWalkable(curCol + dc, curRow) || !this.isTileWalkable(curCol, curRow + dr)) {
-              continue;
-            }
-          }
-          const neighborKey = this.keyOf(nc, nr);
-          if (closedSet.has(neighborKey)) {
-            continue;
-          }
-          const tentativeG = curG + stepCost;
-          if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
-            cameFrom.set(neighborKey, currentKey);
-            gScore.set(neighborKey, tentativeG);
-            fScore.set(
-              neighborKey,
-              tentativeG + this.heuristic({ col: nc, row: nr }, goal)
-            );
-            openSet.add(neighborKey);
-          }
-        }
-      }
-      return [];
-    }
-    /**
-     * Convenience wrapper accepting world pixel coordinates.
-     */
-    findPathWorld(startX, startY, goalX, goalY) {
-      const ts = this.map.tileSize;
-      return this.findPath(
-        { col: Math.floor(startX / ts), row: Math.floor(startY / ts) },
-        { col: Math.floor(goalX / ts), row: Math.floor(goalY / ts) }
-      );
-    }
-  };
-
-  // src/entities/npcCombat.ts
-  var MAX_NPC_HEALTH = 100;
-  var NPC_HOSTILE_LOSE_SIGHT_SECONDS = 5;
-  var NPC_HOSTILE_ALERT_SECONDS = 1;
-  var NPC_HOSTILE_PATH_RECALC_SECONDS = 1;
-  var NPC_HOSTILE_WALK_SPEED = 24;
-  var NPC_HOSTILE_STOP_DISTANCE = 18;
-  var NPC_HOSTILE_ALERT_RADIUS = 5 * TILE_SIZE;
-  var NPC_UZI_BULLET_DAMAGE = 5;
-  var NPC_UZI_MAGAZINE_SIZE = 30;
-  var NPC_UZI_RELOAD_SECONDS = 2.5;
-  var PLAYER_UZI_NPC_DAMAGE = 30;
-  var PLAYER_PUNCH_NPC_DAMAGE = 15;
-  var PLAYER_FIREBALL_NPC_DAMAGE = 15;
-  var NPC_BURN_DAMAGE_PER_SECOND = 12;
-  var NPC_DEATH_FALL_DURATION = 0.45;
-  function createArmedNpcState(key, name, initialAimYaw) {
-    return {
-      key,
-      name,
-      mode: "passive",
-      health: MAX_NPC_HEALTH,
-      delayedHealth: MAX_NPC_HEALTH,
-      delayedHealthRate: 0,
-      unseenTimer: 0,
-      hostileAlertTimer: 0,
-      fireCooldown: 0,
-      shotsFiredInMag: 0,
-      reloadTimer: 0,
-      weaponVibrationTimer: 0,
-      aimYaw: initialAimYaw,
-      deadFallProgress: 0,
-      path: [],
-      pathTimer: 0,
-      isMoving: false
-    };
-  }
-  function applyNpcDamage(npc, damage) {
-    if (npc.mode === "dead" || damage <= 0) {
-      return false;
-    }
-    const nextHealth = Math.max(0, Math.min(MAX_NPC_HEALTH, npc.health - damage));
-    npc.health = nextHealth;
-    npc.delayedHealthRate = Math.abs(npc.delayedHealth - npc.health);
-    if (npc.health <= 0) {
-      npc.mode = "dead";
-      npc.hostileAlertTimer = 0;
-      npc.fireCooldown = 0;
-      npc.reloadTimer = 0;
-      npc.weaponVibrationTimer = 0;
-      npc.unseenTimer = 0;
-      npc.deadFallProgress = 0;
-      npc.isMoving = false;
-      npc.path = [];
-      npc.pathTimer = 0;
-      return true;
-    }
-    enterHostileMode(npc);
-    return false;
-  }
-  function enterHostileMode(npc) {
-    if (npc.mode === "dead") return;
-    if (npc.mode === "passive") {
-      npc.mode = "hostile";
-      npc.hostileAlertTimer = NPC_HOSTILE_ALERT_SECONDS;
-      npc.pathTimer = 0;
-    }
-    npc.unseenTimer = 0;
-  }
-  function updateNpcHealthAndTimers(npc, dtSeconds) {
-    if (dtSeconds <= 0) return;
-    if (npc.delayedHealth !== npc.health) {
-      const step = npc.delayedHealthRate * dtSeconds;
-      if (npc.delayedHealth > npc.health) {
-        npc.delayedHealth = Math.max(npc.health, npc.delayedHealth - step);
-      } else {
-        npc.delayedHealth = Math.min(npc.health, npc.delayedHealth + step);
-      }
-      if (npc.delayedHealth === npc.health) {
-        npc.delayedHealthRate = 0;
-      }
-    }
-    if (npc.hostileAlertTimer > 0) {
-      npc.hostileAlertTimer = Math.max(0, npc.hostileAlertTimer - dtSeconds);
-    }
-    if (npc.weaponVibrationTimer > 0) {
-      npc.weaponVibrationTimer = Math.max(0, npc.weaponVibrationTimer - dtSeconds);
-    }
-    if (npc.fireCooldown > 0) {
-      npc.fireCooldown = Math.max(0, npc.fireCooldown - dtSeconds);
-    }
-    if (npc.reloadTimer > 0) {
-      npc.reloadTimer = Math.max(0, npc.reloadTimer - dtSeconds);
-      if (npc.reloadTimer === 0) {
-        npc.shotsFiredInMag = 0;
-      }
-    }
-    if (npc.mode === "dead" && npc.deadFallProgress < 1) {
-      npc.deadFallProgress = Math.min(
-        1,
-        npc.deadFallProgress + dtSeconds / NPC_DEATH_FALL_DURATION
-      );
-    }
-  }
-  function tryFireHostileNpcUzi(npc, originX, originY, aimYaw, fireNpcUzi) {
-    if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || npc.reloadTimer > 0 || npc.fireCooldown > 0) {
-      return false;
-    }
-    fireNpcUzi?.(npc, originX, originY, aimYaw);
-    npc.fireCooldown = UZI_FIRE_INTERVAL_SECONDS;
-    npc.weaponVibrationTimer = Math.max(
-      npc.weaponVibrationTimer,
-      UZI_FIRE_INTERVAL_SECONDS + 0.05
-    );
-    npc.shotsFiredInMag += 1;
-    if (npc.shotsFiredInMag >= NPC_UZI_MAGAZINE_SIZE) {
-      npc.shotsFiredInMag = 0;
-      npc.reloadTimer = NPC_UZI_RELOAD_SECONDS;
-    }
-    return true;
-  }
-  function isNpcBillboardVisible(npc) {
-    return npc.mode !== "dead" && npc.hostileAlertTimer <= 0 && (npc.mode === "hostile" || npc.health < MAX_NPC_HEALTH);
-  }
-  function propagateHostileAlert(entries, sourceKey) {
-    const source = entries.find((e) => e.state.key === sourceKey);
-    if (!source) return;
-    const sx = source.bounds.x + source.bounds.width * 0.5;
-    const sy = source.bounds.y + source.bounds.height * 0.5;
-    for (const other of entries) {
-      if (other.state.key === sourceKey) continue;
-      if (!other.visible || other.state.mode !== "passive") continue;
-      const ox = other.bounds.x + other.bounds.width * 0.5;
-      const oy = other.bounds.y + other.bounds.height * 0.5;
-      if (Math.hypot(ox - sx, oy - sy) <= NPC_HOSTILE_ALERT_RADIUS) {
-        enterHostileMode(other.state);
-      }
-    }
-  }
-  function stepHostileNpcAlongPath(npc, bounds, player, map, solidObstacles, dtSeconds) {
-    if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || dtSeconds <= 0) {
-      npc.isMoving = false;
-      return;
-    }
-    const ts = map.tileSize;
-    const npcCx = bounds.x + bounds.width * 0.5;
-    const npcCy = bounds.y + bounds.height * 0.5;
-    const playerCx = player.x + player.width * 0.5;
-    const playerCy = player.y + player.height * 0.5;
-    const otherObstacles = solidObstacles.filter(
-      (obs) => !(obs.x === bounds.x && obs.y === bounds.y && obs.width === bounds.width && obs.height === bounds.height)
-    );
-    npc.pathTimer -= dtSeconds;
-    if (npc.pathTimer <= 0) {
-      npc.pathTimer = NPC_HOSTILE_PATH_RECALC_SECONDS;
-      const pathfinder = new AStarPathfinder(map, { obstacles: otherObstacles });
-      const fullPath = pathfinder.findPathWorld(npcCx, npcCy, playerCx, playerCy);
-      if (fullPath.length > 1) {
-        npc.path = fullPath.slice(1);
-      } else {
-        npc.path = fullPath;
-      }
-    }
-    const distToPlayer = Math.hypot(playerCx - npcCx, playerCy - npcCy);
-    if (distToPlayer <= NPC_HOSTILE_STOP_DISTANCE || npc.path.length === 0) {
-      npc.isMoving = false;
-      return;
-    }
-    const nextTile = npc.path[0];
-    const targetX = nextTile.col * ts + ts * 0.5;
-    const targetY = nextTile.row * ts + ts * 0.5;
-    const dx = targetX - npcCx;
-    const dy = targetY - npcCy;
-    const dist = Math.hypot(dx, dy);
-    if (dist <= 2) {
-      npc.path.shift();
-      if (npc.path.length === 0) {
-        npc.isMoving = false;
-        return;
-      }
-    }
-    const activeTile = npc.path[0];
-    const ax = activeTile.col * ts + ts * 0.5 - npcCx;
-    const ay = activeTile.row * ts + ts * 0.5 - npcCy;
-    const adist = Math.hypot(ax, ay);
-    if (adist <= 1e-3) {
-      npc.isMoving = false;
-      return;
-    }
-    const step = Math.min(adist, NPC_HOSTILE_WALK_SPEED * dtSeconds);
-    const vx = ax / adist * step;
-    const vy = ay / adist * step;
-    const canMoveTo = (nx, ny) => {
-      const candidate = {
-        x: nx,
-        y: ny,
-        width: bounds.width,
-        height: bounds.height
-      };
-      if (isRectCollidingWithMap(map, nx, ny, bounds.width, bounds.height, true)) {
-        return false;
-      }
-      if (rectsIntersect(candidate, player)) {
-        return false;
-      }
-      for (const obs of otherObstacles) {
-        if (rectsIntersect(candidate, obs)) {
-          return false;
-        }
-      }
-      return true;
-    };
-    let moved = false;
-    if (Math.abs(vx) > 1e-4 && canMoveTo(bounds.x + vx, bounds.y)) {
-      bounds.x += vx;
-      moved = true;
-    }
-    if (Math.abs(vy) > 1e-4 && canMoveTo(bounds.x, bounds.y + vy)) {
-      bounds.y += vy;
-      moved = true;
-    }
-    npc.isMoving = moved;
-  }
-
-  // src/entities/cat.ts
-  var CAT_START_X = 26.5 * TILE_SIZE;
-  var CAT_START_Y = 17 * TILE_SIZE;
-  var CAT_MAX_SPEED = 60;
-  var CAT_ACCELERATION = 120;
-  var CAT_DECELERATION = 100;
-  var EXTRA_ROOM_BOUNDS = {
-    x: 25.5 * TILE_SIZE,
-    y: 11 * TILE_SIZE,
-    width: 2.5 * TILE_SIZE,
-    height: 7 * TILE_SIZE
-  };
-  var CAT_STOP_FLEE_DISTANCE = 5 * TILE_SIZE;
-  var CAT_RETRIGGER_FLEE_DISTANCE = 2 * TILE_SIZE;
-  function createCat(x = CAT_START_X, y = CAT_START_Y) {
-    return {
-      x,
-      y,
-      width: 10,
-      height: 10,
-      vx: 0,
-      vy: 0,
-      maxSpeed: CAT_MAX_SPEED,
-      acceleration: CAT_ACCELERATION,
-      deceleration: CAT_DECELERATION,
-      mode: "standing",
-      facing: "left",
-      yaw: Math.PI / 2,
-      animTimer: 0,
-      hasBeenActivated: false,
-      wallForceDirX: 0,
-      wallForceDirY: 0
-    };
-  }
-  function updateCat(cat, player, dtSeconds, map, solidObstacles = []) {
-    const catCenterX = cat.x + cat.width / 2;
-    const catCenterY = cat.y + cat.height / 2;
-    const playerCenterX = player.x + player.width / 2;
-    const playerCenterY = player.y + player.height / 2;
-    const dx = playerCenterX - catCenterX;
-    const dy = playerCenterY - catCenterY;
-    const dist = Math.hypot(dx, dy);
-    const collidesAt = (testX, testY) => {
-      if (isRectCollidingWithMap(map, testX, testY, cat.width, cat.height)) {
-        return true;
-      }
-      const testRect = {
-        x: testX,
-        y: testY,
-        width: cat.width,
-        height: cat.height
-      };
-      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
-    };
-    const prevMode = cat.mode;
-    if (!cat.hasBeenActivated) {
-      if (rectsIntersect(player, EXTRA_ROOM_BOUNDS)) {
-        cat.hasBeenActivated = true;
-        cat.mode = "flee";
-      }
-    } else {
-      if (cat.mode === "flee") {
-        if (dist > CAT_STOP_FLEE_DISTANCE) {
-          cat.mode = "standing";
-        }
-      } else if (cat.mode === "standing") {
-        if (dist <= CAT_RETRIGGER_FLEE_DISTANCE) {
-          cat.mode = "flee";
-        }
-      }
-    }
-    if (cat.mode !== prevMode) {
-      debugLog(`Cat state changed: ${prevMode} -> ${cat.mode}`);
-    }
-    if (cat.mode === "flee") {
-      const lookDist = 8;
-      const wallWest = collidesAt(cat.x - lookDist, cat.y);
-      const wallEast = collidesAt(cat.x + lookDist, cat.y);
-      const wallNorth = collidesAt(cat.x, cat.y - lookDist);
-      const wallSouth = collidesAt(cat.x, cat.y + lookDist);
-      let forceDirX = 0;
-      let forceDirY = 0;
-      if (wallWest) forceDirX += 1;
-      if (wallEast) forceDirX -= 1;
-      if (wallNorth) forceDirY += 1;
-      if (wallSouth) forceDirY -= 1;
-      if (forceDirX !== cat.wallForceDirX || forceDirY !== cat.wallForceDirY) {
-        debugLog(
-          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (${forceDirX}, ${forceDirY})`
-        );
-        cat.wallForceDirX = forceDirX;
-        cat.wallForceDirY = forceDirY;
-      }
-      let ux = dist > 1e-3 ? -dx / dist : -1;
-      let uy = dist > 1e-3 ? -dy / dist : 0;
-      const targetVx = ux * cat.maxSpeed;
-      const targetVy = uy * cat.maxSpeed;
-      const dvx = targetVx - cat.vx;
-      const dvy = targetVy - cat.vy;
-      const dvLen = Math.hypot(dvx, dvy);
-      const maxDeltaV = cat.acceleration * dtSeconds;
-      if (dvLen <= maxDeltaV || dvLen === 0) {
-        cat.vx = targetVx;
-        cat.vy = targetVy;
-      } else {
-        cat.vx += dvx / dvLen * maxDeltaV;
-        cat.vy += dvy / dvLen * maxDeltaV;
-      }
-      if (forceDirX !== 0 || forceDirY !== 0) {
-        const forceLen = Math.hypot(forceDirX, forceDirY);
-        const normFx = forceDirX / forceLen;
-        const normFy = forceDirY / forceLen;
-        cat.vx += normFx * cat.acceleration * dtSeconds;
-        cat.vy += normFy * cat.acceleration * dtSeconds;
-      }
-      if (Math.abs(cat.vx) > 2) {
-        cat.facing = cat.vx < 0 ? "left" : "right";
-      } else if (Math.abs(dx) > 0.5) {
-        cat.facing = dx > 0 ? "left" : "right";
-      }
-    } else {
-      if (cat.wallForceDirX !== 0 || cat.wallForceDirY !== 0) {
-        debugLog(
-          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (0, 0)`
-        );
-        cat.wallForceDirX = 0;
-        cat.wallForceDirY = 0;
-      }
-      const speed = Math.hypot(cat.vx, cat.vy);
-      const maxDrop = cat.deceleration * dtSeconds;
-      if (speed <= maxDrop) {
-        cat.vx = 0;
-        cat.vy = 0;
-      } else {
-        cat.vx -= cat.vx / speed * maxDrop;
-        cat.vy -= cat.vy / speed * maxDrop;
-      }
-    }
-    if (cat.vx !== 0 || cat.vy !== 0) {
-      if (Math.hypot(cat.vx, cat.vy) > 0.5) {
-        cat.yaw = Math.atan2(cat.vy, cat.vx);
-      }
-      cat.animTimer += dtSeconds;
-      const nextX = cat.x + cat.vx * dtSeconds;
-      if (!collidesAt(nextX, cat.y)) {
-        cat.x = nextX;
-      } else {
-        cat.vx = 0;
-      }
-      const nextY = cat.y + cat.vy * dtSeconds;
-      if (!collidesAt(cat.x, nextY)) {
-        cat.y = nextY;
-      } else {
-        cat.vy = 0;
-      }
-    }
-  }
-
-  // src/world/levels/levelUpstairs.ts
-  var V = 20 /* VoidBlack */;
-  var W = 21 /* InteriorWall */;
-  var F = 16 /* WoodFloor */;
-  var B = 18 /* BathroomTileFloor */;
-  var T = 19 /* StairsFloor */;
-  var O = 22 /* FurnitureSolid */;
-  var UPSTAIRS_TILES = [
-    //0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 0
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 1
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 2: Exterior strip north of kitchen windows
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 3
-    [V, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, V, V, V],
-    // 4: North wall (Dining | Kitchen windows | Shower | Bedroom with window at 24..25)
-    [V, W, F, F, F, F, F, F, F, F, F, F, F, F, F, O, W, B, B, B, W, W, F, F, F, F, F, F, W, V, V, V],
-    // 5: Shortened dining table walk path (4..5) | Shower (17..19) | Bedroom (22..27)
-    [V, W, O, F, O, O, F, F, F, F, O, O, F, F, F, O, W, B, B, B, W, W, F, F, F, F, O, O, W, V, V, V],
-    // 6: Cupboard (2) | Dining Table (4..5) | Island (10..11) | Bed (26..27)
-    [V, W, O, F, O, O, F, F, F, F, O, O, F, F, F, O, W, O, B, B, W, W, F, F, F, F, O, O, W, V, V, V],
-    // 7: Cupboard (2) | Dining Table (4..5) | Shower sink (17) | Bed (26..27)
-    [V, W, F, F, O, O, F, F, F, F, F, F, F, F, F, O, W, O, B, O, W, W, F, F, F, F, F, F, W, V, V, V],
-    // 8: Dining table (4..5) | Shower sink (17) & toilet (19) | Bedroom
-    [V, W, F, F, O, O, F, F, F, W, W, W, W, F, F, W, W, B, B, B, W, W, F, F, F, F, F, F, W, V, V, V],
-    // 9: North wall of altar alcove (9..12) | Kitchen entrance (13..14)
-    [V, W, F, F, F, F, F, F, F, W, O, O, W, F, F, W, W, W, B, W, W, W, W, W, F, W, W, W, W, V, V, V],
-    // 10: Altar (10..11) | Altar east wall (12) | Kitchen entrance (13..14) | Shower door (18) | Bedroom door (24)
-    [V, W, F, F, O, O, O, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, W, V, V, V],
-    // 11: Colorful Couch (4..6) | Narrow Hallway (rows 11..12) -> Extra Room (26..27)
-    [V, W, O, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, F, W, V, V, V],
-    // 12: Left Colorful Armchair (2) | Narrow Hallway (rows 11..12)
-    [V, W, F, F, F, F, F, O, F, F, F, F, F, F, W, T, T, T, T, W, W, F, W, W, W, W, F, F, W, V, V, V],
-    // 13: Right Armchair (7) | Open breathing room (8..13) | Stairs (15..18) | Office door (21)
-    [V, W, O, O, F, F, F, F, F, F, F, F, F, F, W, T, T, T, T, W, F, F, F, F, F, W, F, F, W, V, V, V],
-    // 14: Xmas Tree (2..3) | Stairs | Aligned Office (20..24) | Extra Room (26..27)
-    [V, W, O, O, F, F, F, F, F, W, W, F, W, W, W, T, T, T, T, W, O, F, F, F, F, W, F, F, W, V, V, V],
-    // 15: Xmas Tree (2..3) | Table Room door (11) | Office side desk (20)
-    [V, W, O, O, F, F, F, F, F, W, F, F, F, F, W, T, T, T, T, W, O, O, O, F, F, W, F, F, W, V, V, V],
-    // 16: Xmas Tree (2..3) | Table Room floor | Stairs trigger (15..18) | Office PC desk (20..22)
-    [V, W, W, W, W, W, W, W, W, W, F, O, O, F, W, T, T, T, T, W, O, O, O, F, F, W, F, F, W, V, V, V],
-    // 17: Living Room south wall (3..4, 6..7) | Office PC desk/chair (20..22)
-    [V, V, V, V, V, V, V, V, V, W, F, O, O, F, W, W, W, W, W, W, W, W, W, W, W, W, W, W, W, V, V, V],
-    // 18: Aligned South Wall across Stairs (15..18), Office (19..25 with window), Extra Room (26..28)
-    [V, V, V, V, V, V, V, V, V, W, F, F, F, F, W, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 19: Table Room floor | Void under aligned office
-    [V, V, V, V, V, V, V, V, V, W, F, F, F, F, W, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 20: Table Room floor
-    [V, V, V, V, V, V, V, V, V, W, W, W, W, W, W, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 21: Table Room south wall (windows at 10..13)
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 22
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 23
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 24
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 25
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V],
-    // 26
-    [V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V, V]
-    // 27
-  ];
-  var UPSTAIRS_MAP = {
-    cols: MAP_COLS,
-    rows: MAP_ROWS,
-    tileSize: TILE_SIZE,
-    tiles: UPSTAIRS_TILES
-  };
-  var UPSTAIRS_STAIRS_SPAWN = {
-    x: 16 * TILE_SIZE + 2,
-    y: 13 * TILE_SIZE + 2,
-    facing: "up"
-  };
-  var UPSTAIRS_STAIRS_TRIGGER_BOUNDS = {
-    x: 15 * TILE_SIZE,
-    y: 16 * TILE_SIZE,
-    width: 4 * TILE_SIZE,
-    height: 2 * TILE_SIZE
-  };
-  var UPSTAIRS_SHOWER_DOOR_BOUNDS = {
-    x: 18 * TILE_SIZE,
-    y: 10 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var UPSTAIRS_SHOWER_HIDDEN_MASK = {
-    x: 17 * TILE_SIZE,
-    y: 4 * TILE_SIZE,
-    width: 4 * TILE_SIZE,
-    height: 6 * TILE_SIZE
-  };
-  var UPSTAIRS_BEDROOM_DOOR_BOUNDS = {
-    x: 24 * TILE_SIZE,
-    y: 10 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var UPSTAIRS_BEDROOM_HIDDEN_MASK = {
-    x: 21 * TILE_SIZE,
-    y: 4 * TILE_SIZE,
-    width: 8 * TILE_SIZE,
-    height: 6 * TILE_SIZE
-  };
-  var UPSTAIRS_OFFICE_DOOR_BOUNDS = {
-    x: 21 * TILE_SIZE,
-    y: 13 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var UPSTAIRS_OFFICE_HIDDEN_MASK = {
-    x: 20 * TILE_SIZE,
-    y: 14 * TILE_SIZE,
-    width: 5 * TILE_SIZE,
-    height: 5 * TILE_SIZE
-  };
-  var UPSTAIRS_ALBIN_START_Y = 5 * TILE_SIZE + 2;
-  var UPSTAIRS_ALBIN_END_Y = 9 * TILE_SIZE + 2;
-  var UPSTAIRS_ALBIN_X = 7 * TILE_SIZE + 2;
-  var UPSTAIRS_ALBIN_SPEED = 15;
-  var UPSTAIRS_INTRO_STATE_KEY = "upstairsIntroTriggered";
-  var DIANA_PRESENT_TAKEN_KEY = "upstairsDianaPresentTaken";
-  var SIMON_PRESENT_TAKEN_KEY = "upstairsSimonPresentTaken";
-  var DIANA_DISTRACTED_KEY = "upstairsDianaDistracted";
-  var SIMON_DISTRACTED_KEY = "upstairsSimonDistracted";
-  var UPSTAIRS_DIANA_PRESENT_BOUNDS = {
-    x: 25.5 * TILE_SIZE + 2,
-    y: 8 * TILE_SIZE + 4,
-    width: 10,
-    height: 10
-  };
-  var UPSTAIRS_SIMON_PRESENT_BOUNDS = {
-    x: 24 * TILE_SIZE + 3,
-    y: 17 * TILE_SIZE + 3,
-    width: 10,
-    height: 10
-  };
-  var UPSTAIRS_XMAS_TREE_BOUNDS = {
-    x: 2 * TILE_SIZE,
-    y: 14 * TILE_SIZE,
-    width: 2 * TILE_SIZE,
-    height: 3 * TILE_SIZE
-  };
-  var UPSTAIRS_HENRIK_NPC = {
-    x: 10 * TILE_SIZE + 2,
-    y: 17 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "down"
-  };
-  var UPSTAIRS_TANJA_NPC = {
-    x: 13 * TILE_SIZE + 2,
-    y: 17 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "up"
-  };
-  var UPSTAIRS_DIANA_NPC = {
-    x: 5 * TILE_SIZE + 2,
-    // 1 tile south of couch (col 5, row 12)
-    y: 12 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "down"
-  };
-  var UPSTAIRS_SIMON_NPC = {
-    x: 7 * TILE_SIZE + 2,
-    // 1 tile south of right armchair (col 7, row 14)
-    y: 14 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "left"
-  };
-  var UPSTAIRS_ANNE_MARIE_NPC = {
-    x: 24 * TILE_SIZE + 2,
-    y: 5 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "up"
-  };
-  var UPSTAIRS_CUPBOARD_BOUNDS = {
-    x: 2 * TILE_SIZE,
-    y: 6 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: 2 * TILE_SIZE
-  };
-  var UPSTAIRS_COMPUTER_BOUNDS = {
-    x: 21 * TILE_SIZE,
-    y: 16 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var ARJAN_KEY_STATE_KEY = "upstairsArjanKey";
-  var UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS = {
-    x: 11 * TILE_SIZE,
-    y: 15 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var UPSTAIRS_TABLE_ROOM_HIDDEN_MASKS = [
-    // Rows 16..17: interior cols 10..13 (excluding west wall col 9 & east wall col 14)
-    {
-      x: 10 * TILE_SIZE,
-      y: 16 * TILE_SIZE,
-      width: 4 * TILE_SIZE,
-      height: 2 * TILE_SIZE
-    },
-    // Row 18: west wall col 9 + interior cols 10..13 (starts west wall fog at row 18, excluding east wall col 14)
-    {
-      x: 9 * TILE_SIZE,
-      y: 18 * TILE_SIZE,
-      width: 5 * TILE_SIZE,
-      height: 1 * TILE_SIZE
-    },
-    // Rows 19..21: full width cols 9..14 (starts east wall fog at row 19, full width for south wall)
-    {
-      x: 9 * TILE_SIZE,
-      y: 19 * TILE_SIZE,
-      width: 6 * TILE_SIZE,
-      height: 3 * TILE_SIZE
-    }
-  ];
-  var UPSTAIRS_TABLE_ROOM_HIDDEN_MASK = UPSTAIRS_TABLE_ROOM_HIDDEN_MASKS[0];
-  var KITCHEN_TRIGGER_BOUNDS = {
-    x: 9 * TILE_SIZE,
-    y: 5 * TILE_SIZE,
-    width: 6 * TILE_SIZE,
-    height: 3.5 * TILE_SIZE
-  };
-  var KITCHEN_ROSANNA_STATE_KEY = "kitchenRosannaEventTriggered";
-  var ROSANNA_SANTA_START_X = 8 * TILE_SIZE;
-  var ROSANNA_SANTA_END_X = 14.5 * TILE_SIZE;
-  var ROSANNA_SANTA_Y = 2.5 * TILE_SIZE;
-  var ROSANNA_SANTA_SPEED = 56;
-  var LevelUpstairs = class {
-    constructor() {
-      __publicField(this, "id", "level-upstairs");
-      __publicField(this, "map", UPSTAIRS_MAP);
-      __publicField(this, "doors");
-      __publicField(this, "openedDoors", []);
-      __publicField(this, "rosannaCutscene", null);
-      __publicField(this, "cat");
-      // Upstairs NPCs
-      __publicField(this, "albinX", UPSTAIRS_ALBIN_X);
-      __publicField(this, "albinY", UPSTAIRS_ALBIN_START_Y);
-      __publicField(this, "albinDir", 1);
-      // 1 = walking down (south), -1 = walking up (north)
-      __publicField(this, "albinCone");
-      __publicField(this, "albinCombat");
-      __publicField(this, "henrikNpc", { ...UPSTAIRS_HENRIK_NPC });
-      __publicField(this, "henrikAngle", Math.PI / 2);
-      // Facing south initially
-      __publicField(this, "henrikTimer", 0);
-      __publicField(this, "henrikCone");
-      __publicField(this, "henrikCombat");
-      __publicField(this, "tanjaNpc", { ...UPSTAIRS_TANJA_NPC });
-      __publicField(this, "tanjaCone");
-      __publicField(this, "tanjaCombat");
-      __publicField(this, "dianaNpc", { ...UPSTAIRS_DIANA_NPC });
-      __publicField(this, "dianaCone", null);
-      __publicField(this, "dianaCombat");
-      __publicField(this, "simonNpc", { ...UPSTAIRS_SIMON_NPC });
-      __publicField(this, "simonCone", null);
-      __publicField(this, "simonCombat");
-      __publicField(this, "anneMarieNpc", { ...UPSTAIRS_ANNE_MARIE_NPC });
-      __publicField(this, "anneMarieAngle", -Math.PI / 2);
-      // Facing north initially
-      __publicField(this, "anneMarieTimer", 0);
-      __publicField(this, "anneMarieCone");
-      __publicField(this, "anneMarieCombat");
-      __publicField(this, "intruderDetected", false);
-      this.cat = createCat();
-      this.doors = [
-        {
-          id: "upstairs-shower-door",
-          bounds: { ...UPSTAIRS_SHOWER_DOOR_BOUNDS },
-          hiddenRegions: [{ ...UPSTAIRS_SHOWER_HIDDEN_MASK }]
-        },
-        {
-          id: "upstairs-bedroom-door",
-          bounds: { ...UPSTAIRS_BEDROOM_DOOR_BOUNDS },
-          hiddenRegions: [{ ...UPSTAIRS_BEDROOM_HIDDEN_MASK }]
-        },
-        {
-          id: "upstairs-office-door",
-          bounds: { ...UPSTAIRS_OFFICE_DOOR_BOUNDS },
-          hiddenRegions: [{ ...UPSTAIRS_OFFICE_HIDDEN_MASK }]
-        },
-        {
-          id: "upstairs-table-room-door",
-          bounds: { ...UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS },
-          hiddenRegions: UPSTAIRS_TABLE_ROOM_HIDDEN_MASKS.map((r) => ({ ...r }))
-        }
-      ];
-      this.albinCombat = createArmedNpcState("upstairs:Albin", "Albin", Math.PI / 2);
-      this.henrikCombat = createArmedNpcState("upstairs:Henrik", "Henrik", this.henrikAngle);
-      this.tanjaCombat = createArmedNpcState("upstairs:Tanja", "Tanja", -Math.PI / 2);
-      this.albinCone = new ConeOfSight(
-        { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
-        Math.PI / 2,
-        // south
-        void 0,
-        this.map
-      );
-      this.henrikCone = new ConeOfSight(
-        { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
-        this.henrikAngle,
-        void 0,
-        this.map
-      );
-      this.tanjaCone = new ConeOfSight(
-        { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
-        -Math.PI / 2,
-        // north
-        void 0,
-        this.map
-      );
-      const dianaTreeAngle = Math.atan2(
-        15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
-        3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
-      );
-      this.dianaCombat = createArmedNpcState("upstairs:Diana", "Diana", dianaTreeAngle);
-      this.dianaCone = new ConeOfSight(
-        { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
-        dianaTreeAngle,
-        DEFAULT_CONE_OF_SIGHT_DISTANCE,
-        this.map,
-        DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-      );
-      const simonTreeAngle = Math.atan2(
-        15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
-        3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
-      );
-      this.simonCombat = createArmedNpcState("upstairs:Simon", "Simon", simonTreeAngle);
-      this.simonCone = new ConeOfSight(
-        { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
-        simonTreeAngle,
-        DEFAULT_CONE_OF_SIGHT_DISTANCE,
-        this.map,
-        DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-      );
-      this.anneMarieCombat = createArmedNpcState(
-        "upstairs:Anne-Marie",
-        "Anne-Marie",
-        this.anneMarieAngle
-      );
-      this.anneMarieCone = new ConeOfSight(
-        { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
-        this.anneMarieAngle,
-        void 0,
-        this.map
-      );
-    }
-    getArmedNpcs() {
-      const isTableRoomDoorOpen = !this.doors.some(
-        (d) => d.id === "upstairs-table-room-door"
-      );
-      const isBedroomDoorOpen = !this.doors.some(
-        (d) => d.id === "upstairs-bedroom-door"
-      );
-      return [
-        {
-          state: this.albinCombat,
-          bounds: { x: this.albinX, y: this.albinY, width: 12, height: 12 },
-          visible: true
-        },
-        { state: this.henrikCombat, bounds: this.henrikNpc, visible: isTableRoomDoorOpen },
-        { state: this.tanjaCombat, bounds: this.tanjaNpc, visible: isTableRoomDoorOpen },
-        { state: this.dianaCombat, bounds: this.dianaNpc, visible: true },
-        { state: this.simonCombat, bounds: this.simonNpc, visible: true },
-        { state: this.anneMarieCombat, bounds: this.anneMarieNpc, visible: isBedroomDoorOpen }
-      ];
-    }
-    getArmedNpcByKey(key) {
-      for (const entry of this.getArmedNpcs()) {
-        if (entry.state.key === key) return entry.state;
-      }
-      return void 0;
-    }
-    enter(player) {
-      player.x = UPSTAIRS_STAIRS_SPAWN.x;
-      player.y = UPSTAIRS_STAIRS_SPAWN.y;
-      player.facing = UPSTAIRS_STAIRS_SPAWN.facing;
-      player.yaw = -Math.PI / 2;
-      player.renderYaw = -Math.PI / 2;
-      player.jumpOffset = 0;
-      player.jumpVelocity = 0;
-      player.isMoving = false;
-      player.walkTimer = 0;
-      this.intruderDetected = false;
-      if (this.albinCombat.mode !== "dead") {
-        this.albinCombat.mode = "passive";
-        this.albinCombat.unseenTimer = 0;
-        this.albinY = UPSTAIRS_ALBIN_START_Y;
-        this.albinDir = 1;
-        this.albinCombat.aimYaw = Math.PI / 2;
-        this.albinCone = new ConeOfSight(
-          { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
-          Math.PI / 2,
-          void 0,
-          this.map
-        );
-      } else {
-        this.albinCone = null;
-      }
-      if (this.henrikCombat.mode !== "dead") {
-        this.henrikCombat.mode = "passive";
-        this.henrikCombat.unseenTimer = 0;
-        this.henrikAngle = Math.PI / 2;
-        this.henrikTimer = 0;
-        this.henrikCombat.aimYaw = this.henrikAngle;
-        this.henrikCone = new ConeOfSight(
-          { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
-          this.henrikAngle,
-          void 0,
-          this.map
-        );
-      } else {
-        this.henrikCone = null;
-      }
-      if (this.tanjaCombat.mode !== "dead") {
-        this.tanjaCombat.mode = "passive";
-        this.tanjaCombat.unseenTimer = 0;
-        this.tanjaCombat.aimYaw = -Math.PI / 2;
-        this.tanjaCone = new ConeOfSight(
-          { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
-          -Math.PI / 2,
-          void 0,
-          this.map
-        );
-      } else {
-        this.tanjaCone = null;
-      }
-      if (this.dianaCombat.mode !== "dead" && !player.states.get(DIANA_DISTRACTED_KEY)) {
-        this.dianaCombat.mode = "passive";
-        this.dianaCombat.unseenTimer = 0;
-        const dianaTreeAngle = Math.atan2(
-          15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
-          3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
-        );
-        this.dianaCombat.aimYaw = dianaTreeAngle;
-        this.dianaCone = new ConeOfSight(
-          { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
-          dianaTreeAngle,
-          DEFAULT_CONE_OF_SIGHT_DISTANCE,
-          this.map,
-          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-        );
-      } else {
-        this.dianaCone = null;
-      }
-      if (this.simonCombat.mode !== "dead" && !player.states.get(SIMON_DISTRACTED_KEY)) {
-        this.simonCombat.mode = "passive";
-        this.simonCombat.unseenTimer = 0;
-        const simonTreeAngle = Math.atan2(
-          15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
-          3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
-        );
-        this.simonCombat.aimYaw = simonTreeAngle;
-        this.simonCone = new ConeOfSight(
-          { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
-          simonTreeAngle,
-          DEFAULT_CONE_OF_SIGHT_DISTANCE,
-          this.map,
-          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-        );
-      } else {
-        this.simonCone = null;
-      }
-      if (this.anneMarieCombat.mode !== "dead") {
-        this.anneMarieCombat.mode = "passive";
-        this.anneMarieCombat.unseenTimer = 0;
-        this.anneMarieAngle = -Math.PI / 2;
-        this.anneMarieTimer = 0;
-        this.anneMarieCombat.aimYaw = this.anneMarieAngle;
-        this.anneMarieCone = new ConeOfSight(
-          { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
-          this.anneMarieAngle,
-          void 0,
-          this.map
-        );
-      } else {
-        this.anneMarieCone = null;
-      }
-    }
-    getSolidObstacles() {
-      const obs = [
-        UPSTAIRS_STAIRS_TRIGGER_BOUNDS,
-        ...this.doors.map((d) => d.bounds)
-      ];
-      if (this.albinCombat.mode !== "dead") {
-        obs.push({ x: this.albinX, y: this.albinY, width: 12, height: 12 });
-      }
-      if (this.henrikCombat.mode !== "dead") obs.push(this.henrikNpc);
-      if (this.tanjaCombat.mode !== "dead") obs.push(this.tanjaNpc);
-      if (this.dianaCombat.mode !== "dead") obs.push(this.dianaNpc);
-      if (this.simonCombat.mode !== "dead") obs.push(this.simonNpc);
-      if (this.anneMarieCombat.mode !== "dead") obs.push(this.anneMarieNpc);
-      return obs;
-    }
-    getInteractables(player) {
-      const list = [
-        {
-          id: "upstairs-dining-cupboard",
-          bounds: { ...UPSTAIRS_CUPBOARD_BOUNDS },
-          promptText: "Inspect",
-          dialogueLines: []
-        },
-        {
-          id: "upstairs-office-pc",
-          bounds: { ...UPSTAIRS_COMPUTER_BOUNDS },
-          promptText: "Start PC",
-          dialogueLines: [
-            "Hmm... is this where Arjan pretends to work? It's just a bunch of pictures of Anne-Marie.",
-            "Hey there's actually a python script here, shall we run it?",
-            "You are now addicted to Olexa's text-based christmas adventure."
-          ]
-        }
-      ];
-      if (!player?.states.get(DIANA_PRESENT_TAKEN_KEY)) {
-        list.push({
-          id: "upstairs-diana-present",
-          bounds: { ...UPSTAIRS_DIANA_PRESENT_BOUNDS },
-          promptText: "Take Diana's Present",
-          dialogueLines: []
-        });
-      }
-      if (!player?.states.get(SIMON_PRESENT_TAKEN_KEY)) {
-        list.push({
-          id: "upstairs-simon-present",
-          bounds: { ...UPSTAIRS_SIMON_PRESENT_BOUNDS },
-          promptText: "Take Simon's Present",
-          dialogueLines: []
-        });
-      }
-      if (!player?.states.get(DIANA_DISTRACTED_KEY)) {
-        const hasDianaPresent = Boolean(player?.states.get(DIANA_PRESENT_TAKEN_KEY));
-        list.push({
-          id: "upstairs-diana-npc",
-          bounds: { ...this.dianaNpc },
-          promptText: hasDianaPresent ? "Give present" : "Inspect",
-          dialogueLines: []
-        });
-      }
-      if (!player?.states.get(SIMON_DISTRACTED_KEY)) {
-        const hasSimonPresent = Boolean(player?.states.get(SIMON_PRESENT_TAKEN_KEY));
-        list.push({
-          id: "upstairs-simon-npc",
-          bounds: { ...this.simonNpc },
-          promptText: hasSimonPresent ? "Give present" : "Inspect",
-          dialogueLines: []
-        });
-      }
-      list.push({
-        id: "upstairs-xmas-tree",
-        bounds: { ...UPSTAIRS_XMAS_TREE_BOUNDS },
-        promptText: "Save Christmas",
-        dialogueLines: []
-      });
-      for (const door of this.doors) {
-        list.push({
-          id: door.id,
-          bounds: { ...door.bounds },
-          promptText: "Open door",
-          dialogueLines: []
-        });
-      }
-      return list;
-    }
-    handleInteraction(interactableId, player, ctx) {
-      if (interactableId === "upstairs-dining-cupboard") {
-        player.states.set(ARJAN_KEY_STATE_KEY, true);
-        ctx.openDialogue([
-          "You found a hidden compartment containing a key... it's Arjan's key!"
-        ]);
-        return true;
-      }
-      if (interactableId === "upstairs-diana-present") {
-        player.states.set(DIANA_PRESENT_TAKEN_KEY, true);
-        ctx.openDialogue(["You picked up Diana's Present."]);
-        return true;
-      }
-      if (interactableId === "upstairs-simon-present") {
-        player.states.set(SIMON_PRESENT_TAKEN_KEY, true);
-        ctx.openDialogue(["You picked up Simon's present."]);
-        return true;
-      }
-      if (interactableId === "upstairs-xmas-tree") {
-        if (ctx.fadeWorldToBlack) {
-          ctx.fadeWorldToBlack();
-        }
-        const receiver = ctx.getSecretSantaReceiver ? ctx.getSecretSantaReceiver() : void 0;
-        const finalLine = receiver ?? "Ehm... this is awkward. An error occurred, gift receiver unknown.";
-        ctx.openDialogue(
-          [
-            "CONGRATULATIONS! You have successfully saved Christmas by delivering all presents undetected.",
-            "As a reward for your valiant effort...",
-            "You will learn who your secret santa gift receiver is...",
-            "And that person is...",
-            finalLine
-          ],
-          void 0,
-          void 0,
-          true
-        );
-        return true;
-      }
-      if (interactableId === "upstairs-diana-npc") {
-        const hasDianaPresent = Boolean(player.states.get(DIANA_PRESENT_TAKEN_KEY));
-        if (hasDianaPresent) {
-          player.states.set(DIANA_DISTRACTED_KEY, true);
-          this.dianaCone = null;
-          ctx.openDialogue(
-            [
-              "Hmm? A present...?",
-              "Diana is completely distracted. They won't stop me reaching the tree now."
-            ],
-            void 0,
-            "Diana"
-          );
-        } else {
-          ctx.openDialogue([
-            "Hmm... I have to find something to distract Diana with..."
-          ]);
-        }
-        return true;
-      }
-      if (interactableId === "upstairs-simon-npc") {
-        const hasSimonPresent = Boolean(player.states.get(SIMON_PRESENT_TAKEN_KEY));
-        if (hasSimonPresent) {
-          player.states.set(SIMON_DISTRACTED_KEY, true);
-          this.simonCone = null;
-          ctx.openDialogue(
-            [
-              "Hmm? A present...?",
-              "Simon is completely distracted. They won't stop me reaching the tree now."
-            ],
-            void 0,
-            "Simon"
-          );
-        } else {
-          ctx.openDialogue([
-            "Hmm... I have to find something to distract Simon with..."
-          ]);
-        }
-        return true;
-      }
-      const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
-      if (doorIdx !== -1) {
-        const door = this.doors[doorIdx];
-        if (door.id === "upstairs-office-door") {
-          const hasKey = Boolean(player.states.get(ARJAN_KEY_STATE_KEY));
-          if (!hasKey) {
-            ctx.openDialogue([
-              "The office is locked... hmm, where would Arjan hide a key?"
-            ]);
-            return true;
-          }
-        }
-        this.doors.splice(doorIdx, 1);
-        this.openedDoors.push({
-          id: door.id,
-          bounds: { ...door.bounds },
-          progress: 0,
-          swingDirection: player.y >= door.bounds.y ? -1 : 1
-        });
-        return true;
-      }
-      if (interactableId === "upstairs-stairs-down") {
-        ctx.loadLevel("level-basement");
-        return true;
-      }
-      return false;
-    }
-    /**
-     * Updates the one-time Kitchen Rosanna cutscene event.
-     * Returns true if player movement is currently locked by the active cutscene.
-     */
-    updateCutscene(dtSeconds, player, ctx) {
-      if (this.rosannaCutscene?.active) {
-        player.isMoving = false;
-        player.walkTimer = 0;
-        player.facing = "up";
-        this.rosannaCutscene.elapsed += dtSeconds;
-        this.rosannaCutscene.walkTimer += dtSeconds;
-        this.rosannaCutscene.santaX += ROSANNA_SANTA_SPEED * dtSeconds;
-        if (this.rosannaCutscene.santaX >= ROSANNA_SANTA_END_X) {
-          this.rosannaCutscene.active = false;
-          this.rosannaCutscene = null;
-          ctx.openDialogue(["... Rosanna???"]);
-        }
-        return true;
-      }
-      if (!player.states.get(KITCHEN_ROSANNA_STATE_KEY) && rectsIntersect(player, KITCHEN_TRIGGER_BOUNDS)) {
-        player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
-        player.isMoving = false;
-        player.walkTimer = 0;
-        player.facing = "up";
-        this.rosannaCutscene = {
-          active: true,
-          santaX: ROSANNA_SANTA_START_X,
-          santaY: ROSANNA_SANTA_Y,
-          walkTimer: 0,
-          elapsed: 0
-        };
-        return true;
-      }
-      return false;
-    }
-    updateHostileNpc(combat, bounds, player, dtSeconds, ctx, fov = DEFAULT_CONE_OF_SIGHT_FOV) {
-      stepHostileNpcAlongPath(
-        combat,
-        bounds,
-        player,
-        this.map,
-        this.getSolidObstacles(),
-        dtSeconds
-      );
-      const originX = bounds.x + bounds.width * 0.5;
-      const originY = bounds.y + bounds.height * 0.5;
-      const playerCx = player.x + player.width * 0.5;
-      const playerCy = player.y + player.height * 0.5;
-      const aimYaw = Math.atan2(playerCy - originY, playerCx - originX);
-      combat.aimYaw = aimYaw;
-      const cone = new ConeOfSight(
-        { x: originX, y: originY },
-        aimYaw,
-        DEFAULT_CONE_OF_SIGHT_DISTANCE,
-        this.map,
-        fov
-      );
-      if (cone.checkDetection(player)) {
-        combat.unseenTimer = 0;
-      } else {
-        combat.unseenTimer += dtSeconds;
-      }
-      if (combat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
-        combat.mode = "passive";
-        combat.unseenTimer = 0;
-        combat.isMoving = false;
-        combat.path = [];
-        combat.pathTimer = 0;
-      } else {
-        tryFireHostileNpcUzi(combat, originX, originY, aimYaw, ctx.fireNpcUzi);
-      }
-      return cone;
-    }
-    /**
-     * Updates all Upstairs NPCs' patrol, cones of sight, and hostile Uzi combat.
-     */
-    updateNpcSight(dtSeconds, player, ctx) {
-      const playerCx = player.x + player.width * 0.5;
-      const playerCy = player.y + player.height * 0.5;
-      updateNpcHealthAndTimers(this.albinCombat, dtSeconds);
-      if (this.albinCombat.mode === "dead") {
-        this.albinCone = null;
-      } else if (this.albinCombat.mode === "hostile") {
-        const albinBounds = { x: this.albinX, y: this.albinY, width: 12, height: 12 };
-        this.albinCone = this.updateHostileNpc(
-          this.albinCombat,
-          albinBounds,
-          player,
-          dtSeconds,
-          ctx
-        );
-        this.albinX = albinBounds.x;
-        this.albinY = albinBounds.y;
-      } else {
-        this.albinY += this.albinDir * UPSTAIRS_ALBIN_SPEED * dtSeconds;
-        if (this.albinDir === 1 && this.albinY >= UPSTAIRS_ALBIN_END_Y) {
-          this.albinY = UPSTAIRS_ALBIN_END_Y;
-          this.albinDir = -1;
-        } else if (this.albinDir === -1 && this.albinY <= UPSTAIRS_ALBIN_START_Y) {
-          this.albinY = UPSTAIRS_ALBIN_START_Y;
-          this.albinDir = 1;
-        }
-        const albinAngle = this.albinDir === 1 ? Math.PI / 2 : -Math.PI / 2;
-        this.albinCombat.aimYaw = albinAngle;
-        this.albinCone = new ConeOfSight(
-          { x: this.albinX + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
-          albinAngle,
-          void 0,
-          this.map
-        );
-        if (this.albinCone.checkDetection(player)) {
-          enterHostileMode(this.albinCombat);
-          const aimYaw = Math.atan2(playerCy - (this.albinY + 6), playerCx - (this.albinX + 6));
-          this.albinCombat.aimYaw = aimYaw;
-          this.albinCone = new ConeOfSight(
-            { x: this.albinX + 6, y: this.albinY + 6 },
-            aimYaw,
-            void 0,
-            this.map
-          );
-          propagateHostileAlert(this.getArmedNpcs(), this.albinCombat.key);
-        }
-      }
-      const isTableRoomDoorOpen = !this.doors.some(
-        (d) => d.id === "upstairs-table-room-door"
-      );
-      updateNpcHealthAndTimers(this.henrikCombat, dtSeconds);
-      updateNpcHealthAndTimers(this.tanjaCombat, dtSeconds);
-      if (isTableRoomDoorOpen) {
-        if (this.henrikCombat.mode === "dead") {
-          this.henrikCone = null;
-        } else if (this.henrikCombat.mode === "hostile") {
-          this.henrikCone = this.updateHostileNpc(
-            this.henrikCombat,
-            this.henrikNpc,
-            player,
-            dtSeconds,
-            ctx
-          );
-        } else {
-          this.henrikTimer += dtSeconds;
-          if (this.henrikTimer >= 1) {
-            this.henrikTimer -= 1;
-            this.henrikAngle -= Math.PI / 4;
-            this.henrikCone = new ConeOfSight(
-              { x: this.henrikNpc.x + TILE_SIZE / 2, y: this.henrikNpc.y + TILE_SIZE / 2 },
-              this.henrikAngle,
-              void 0,
-              this.map
-            );
-          }
-          this.henrikCombat.aimYaw = this.henrikCone?.direction ?? this.henrikAngle;
-          if (this.henrikCone?.checkDetection(player)) {
-            enterHostileMode(this.henrikCombat);
-            const aimYaw = Math.atan2(playerCy - (this.henrikNpc.y + 6), playerCx - (this.henrikNpc.x + 6));
-            this.henrikCombat.aimYaw = aimYaw;
-            this.henrikCone = new ConeOfSight(
-              { x: this.henrikNpc.x + 6, y: this.henrikNpc.y + 6 },
-              aimYaw,
-              void 0,
-              this.map
-            );
-            propagateHostileAlert(this.getArmedNpcs(), this.henrikCombat.key);
-          }
-        }
-        if (this.tanjaCombat.mode === "dead") {
-          this.tanjaCone = null;
-        } else if (this.tanjaCombat.mode === "hostile") {
-          this.tanjaCone = this.updateHostileNpc(
-            this.tanjaCombat,
-            this.tanjaNpc,
-            player,
-            dtSeconds,
-            ctx
-          );
-        } else {
-          if (!this.tanjaCone) {
-            this.tanjaCone = new ConeOfSight(
-              { x: this.tanjaNpc.x + TILE_SIZE / 2, y: this.tanjaNpc.y + TILE_SIZE / 2 },
-              -Math.PI / 2,
-              void 0,
-              this.map
-            );
-          }
-          this.tanjaCombat.aimYaw = this.tanjaCone.direction;
-          if (this.tanjaCone.checkDetection(player)) {
-            enterHostileMode(this.tanjaCombat);
-            const aimYaw = Math.atan2(playerCy - (this.tanjaNpc.y + 6), playerCx - (this.tanjaNpc.x + 6));
-            this.tanjaCombat.aimYaw = aimYaw;
-            this.tanjaCone = new ConeOfSight(
-              { x: this.tanjaNpc.x + 6, y: this.tanjaNpc.y + 6 },
-              aimYaw,
-              void 0,
-              this.map
-            );
-            propagateHostileAlert(this.getArmedNpcs(), this.tanjaCombat.key);
-          }
-        }
-      }
-      updateNpcHealthAndTimers(this.dianaCombat, dtSeconds);
-      if (this.dianaCombat.mode === "dead") {
-        this.dianaCone = null;
-      } else if (this.dianaCombat.mode === "hostile") {
-        this.dianaCone = this.updateHostileNpc(
-          this.dianaCombat,
-          this.dianaNpc,
-          player,
-          dtSeconds,
-          ctx,
-          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-        );
-        if (this.dianaCombat.mode === "passive") {
-          if (player.states.get(DIANA_DISTRACTED_KEY)) {
-            this.dianaCone = null;
-          } else {
-            const dianaTreeAngle = Math.atan2(
-              15.5 * TILE_SIZE - (this.dianaNpc.y + TILE_SIZE / 2),
-              3 * TILE_SIZE - (this.dianaNpc.x + TILE_SIZE / 2)
-            );
-            this.dianaCombat.aimYaw = dianaTreeAngle;
-            this.dianaCone = new ConeOfSight(
-              { x: this.dianaNpc.x + TILE_SIZE / 2, y: this.dianaNpc.y + TILE_SIZE / 2 },
-              dianaTreeAngle,
-              DEFAULT_CONE_OF_SIGHT_DISTANCE,
-              this.map,
-              DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-            );
-          }
-        }
-      } else if (this.dianaCone && this.dianaCone.checkDetection(player)) {
-        enterHostileMode(this.dianaCombat);
-        const aimYaw = Math.atan2(playerCy - (this.dianaNpc.y + 6), playerCx - (this.dianaNpc.x + 6));
-        this.dianaCombat.aimYaw = aimYaw;
-        this.dianaCone = new ConeOfSight(
-          { x: this.dianaNpc.x + 6, y: this.dianaNpc.y + 6 },
-          aimYaw,
-          DEFAULT_CONE_OF_SIGHT_DISTANCE,
-          this.map,
-          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-        );
-        propagateHostileAlert(this.getArmedNpcs(), this.dianaCombat.key);
-      }
-      updateNpcHealthAndTimers(this.simonCombat, dtSeconds);
-      if (this.simonCombat.mode === "dead") {
-        this.simonCone = null;
-      } else if (this.simonCombat.mode === "hostile") {
-        this.simonCone = this.updateHostileNpc(
-          this.simonCombat,
-          this.simonNpc,
-          player,
-          dtSeconds,
-          ctx,
-          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-        );
-        if (this.simonCombat.mode === "passive") {
-          if (player.states.get(SIMON_DISTRACTED_KEY)) {
-            this.simonCone = null;
-          } else {
-            const simonTreeAngle = Math.atan2(
-              15.5 * TILE_SIZE - (this.simonNpc.y + TILE_SIZE / 2),
-              3 * TILE_SIZE - (this.simonNpc.x + TILE_SIZE / 2)
-            );
-            this.simonCombat.aimYaw = simonTreeAngle;
-            this.simonCone = new ConeOfSight(
-              { x: this.simonNpc.x + TILE_SIZE / 2, y: this.simonNpc.y + TILE_SIZE / 2 },
-              simonTreeAngle,
-              DEFAULT_CONE_OF_SIGHT_DISTANCE,
-              this.map,
-              DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-            );
-          }
-        }
-      } else if (this.simonCone && this.simonCone.checkDetection(player)) {
-        enterHostileMode(this.simonCombat);
-        const aimYaw = Math.atan2(playerCy - (this.simonNpc.y + 6), playerCx - (this.simonNpc.x + 6));
-        this.simonCombat.aimYaw = aimYaw;
-        this.simonCone = new ConeOfSight(
-          { x: this.simonNpc.x + 6, y: this.simonNpc.y + 6 },
-          aimYaw,
-          DEFAULT_CONE_OF_SIGHT_DISTANCE,
-          this.map,
-          DEFAULT_CONE_OF_SIGHT_FOV * 1.5
-        );
-        propagateHostileAlert(this.getArmedNpcs(), this.simonCombat.key);
-      }
-      const isBedroomDoorOpen = !this.doors.some(
-        (d) => d.id === "upstairs-bedroom-door"
-      );
-      updateNpcHealthAndTimers(this.anneMarieCombat, dtSeconds);
-      if (isBedroomDoorOpen) {
-        if (this.anneMarieCombat.mode === "dead") {
-          this.anneMarieCone = null;
-        } else if (this.anneMarieCombat.mode === "hostile") {
-          this.anneMarieCone = this.updateHostileNpc(
-            this.anneMarieCombat,
-            this.anneMarieNpc,
-            player,
-            dtSeconds,
-            ctx
-          );
-        } else {
-          this.anneMarieTimer += dtSeconds;
-          if (this.anneMarieTimer >= 1) {
-            this.anneMarieTimer -= 1;
-            this.anneMarieAngle += Math.PI / 4;
-            this.anneMarieCone = new ConeOfSight(
-              { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
-              this.anneMarieAngle,
-              void 0,
-              this.map
-            );
-          }
-          this.anneMarieCombat.aimYaw = this.anneMarieCone?.direction ?? this.anneMarieAngle;
-          if (this.anneMarieCone?.checkDetection(player)) {
-            enterHostileMode(this.anneMarieCombat);
-            const aimYaw = Math.atan2(playerCy - (this.anneMarieNpc.y + 6), playerCx - (this.anneMarieNpc.x + 6));
-            this.anneMarieCombat.aimYaw = aimYaw;
-            this.anneMarieCone = new ConeOfSight(
-              { x: this.anneMarieNpc.x + 6, y: this.anneMarieNpc.y + 6 },
-              aimYaw,
-              void 0,
-              this.map
-            );
-            propagateHostileAlert(this.getArmedNpcs(), this.anneMarieCombat.key);
-          }
-        }
-      }
-    }
-  };
 
   // src/world/levels/levelBasement.ts
   var V2 = 20 /* VoidBlack */;
@@ -3402,12 +3961,6 @@
     [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2]
     // 27
   ];
-  var BASEMENT_MAP = {
-    cols: MAP_COLS,
-    rows: MAP_ROWS,
-    tileSize: TILE_SIZE,
-    tiles: BASEMENT_TILES
-  };
   var BASEMENT_FIREPLACE_SPAWN = {
     x: 9.5 * TILE_SIZE,
     y: 11 * TILE_SIZE + 2,
@@ -3494,6 +4047,10 @@
     width: 16,
     height: 10
   };
+  var BASEMENT_SPA_MEDKIT_POS = {
+    x: 15.5 * TILE_SIZE,
+    y: 7.5 * TILE_SIZE
+  };
   var BASEMENT_STAIRS_WOOD_BOUNDS = {
     x: 18 * TILE_SIZE,
     y: 15 * TILE_SIZE,
@@ -3577,10 +4134,16 @@
   var LevelBasement = class {
     constructor() {
       __publicField(this, "id", "level-basement");
-      __publicField(this, "map", BASEMENT_MAP);
+      __publicField(this, "map", {
+        cols: MAP_COLS,
+        rows: MAP_ROWS,
+        tileSize: TILE_SIZE,
+        tiles: BASEMENT_TILES.map((row) => [...row])
+      });
       __publicField(this, "doors");
       __publicField(this, "openedDoors", []);
       __publicField(this, "spaDoorClosed", true);
+      __publicField(this, "spaFogCleared", false);
       __publicField(this, "mineState", "idle");
       __publicField(this, "mineTimer", 0);
       __publicField(this, "mineExplosionTimer", 0);
@@ -3598,6 +4161,8 @@
       __publicField(this, "hanneloesCombat");
       __publicField(this, "npcSightAngle", -Math.PI / 2);
       // North is -90 degrees in screen Y coordinates
+      __publicField(this, "arjanSweepDir", 1);
+      // Sweeps West (-PI) <-> North (-PI/2) <-> East (0)
       __publicField(this, "npcSightTimer", 0);
       __publicField(this, "intruderDetected", false);
       this.doors = [
@@ -3887,6 +4452,17 @@
       updateNpcHealthAndTimers(this.arjanCombat, dtSeconds);
       if (this.arjanCombat.mode === "dead") {
         this.coneOfSight = null;
+      } else if (this.arjanCombat.mode === "burning") {
+        this.coneOfSight = null;
+        stepBurningNpc(
+          this.arjanCombat,
+          this.windowNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
       } else if (this.arjanCombat.mode === "hostile") {
         stepHostileNpcAlongPath(
           this.arjanCombat,
@@ -3924,7 +4500,14 @@
         }
       } else {
         this.arjanCombat.isMoving = false;
-        this.npcSightAngle += Math.PI / 8 * dtSeconds;
+        this.npcSightAngle += this.arjanSweepDir * (Math.PI / 4) * dtSeconds;
+        if (this.npcSightAngle >= 0) {
+          this.npcSightAngle = 0;
+          this.arjanSweepDir = -1;
+        } else if (this.npcSightAngle <= -Math.PI) {
+          this.npcSightAngle = -Math.PI;
+          this.arjanSweepDir = 1;
+        }
         this.coneOfSight = new ConeOfSight(
           { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
           this.npcSightAngle,
@@ -3945,6 +4528,17 @@
       updateNpcHealthAndTimers(this.olexaCombat, dtSeconds);
       if (this.olexaCombat.mode === "dead") {
         this.olexaConeOfSight = null;
+      } else if (this.olexaCombat.mode === "burning") {
+        this.olexaConeOfSight = null;
+        stepBurningNpc(
+          this.olexaCombat,
+          this.olexaNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
       } else if (this.olexaCombat.mode === "hostile") {
         stepHostileNpcAlongPath(
           this.olexaCombat,
@@ -3997,6 +4591,20 @@
       updateNpcHealthAndTimers(this.hanneloesCombat, dtSeconds);
       if (this.hanneloesCombat.mode === "dead") {
         this.hanneloesCone = null;
+      } else if (isBathroomOpen && this.hanneloesCombat.mode === "burning") {
+        this.hanneloesCone = null;
+        if (this.toiletNpc.x >= 21 * TILE_SIZE) {
+          this.toiletNpc.x = 20 * TILE_SIZE + 2;
+        }
+        stepBurningNpc(
+          this.hanneloesCombat,
+          this.toiletNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
       } else if (isBathroomOpen && this.hanneloesCombat.mode === "hostile") {
         if (this.toiletNpc.x >= 21 * TILE_SIZE) {
           this.toiletNpc.x = 20 * TILE_SIZE + 2;
@@ -5427,12 +6035,16 @@
   function tileKey(col, row) {
     return `${col},${row}`;
   }
-  function addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimAdjacentWidth = 0, hasWallX = false, hasWallZ = false) {
+  function addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimAdjacentWidth = 0, hasWallX = false, hasWallZ = false, blackened = false) {
     const wainscotH = 10.6;
     const trimW = hasWallX ? Math.max(4, ts - trimAdjacentWidth) : Math.max(4, ts + 0.3 - trimAdjacentWidth);
     const trimDBase = hasWallZ ? ts : ts + 0.35;
     const trimDRail = hasWallZ ? ts : ts + 0.45;
     const crownW = hasWallX ? trimW : trimW + 0.1;
+    if (blackened) {
+      mb.addBox(cx, 0, cz, ts + 0.1, wallHeight, ts + 0.1, rgb(18, 18, 22), TexId.SOLID, 0.35);
+      return;
+    }
     mb.addBox(cx, 0, cz, trimW, 1.8, trimDBase, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
     mb.addBox(cx, 1.8, cz, ts, wainscotH - 1.8, ts, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.45);
     if (!hasWallZ) {
@@ -5451,26 +6063,30 @@
     mb.addBox(cx, midStart + lowerTierH, cz, ts, upperTierH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
     mb.addBeveledBox(cx, midTop, cz, crownW, 1.8, trimDRail, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
   }
-  function addWindowWallTile3D(mb, cx, cz, ts, wallHeight, kind) {
+  function addWindowWallTile3D(mb, cx, cz, ts, wallHeight, kind, blackened = false) {
     const sillY = 7.4;
     const headerY = 25.4;
-    mb.addBox(cx, 0, cz, ts + 0.25, 1.6, ts + 0.3, rgb(110, 72, 42), TexId.WOOD_GRAIN, 0.35);
-    mb.addBox(cx, 1.6, cz, ts, sillY - 1.6, ts, rgb(228, 220, 206), TexId.WOOD_GRAIN, 0.45);
-    mb.addBeveledBox(cx, sillY, cz, ts + 0.2, 1.2, ts + 1.4, 0.3, rgb(138, 92, 52), TexId.WOOD_GRAIN, 0.45);
-    mb.addBox(cx, headerY, cz, ts, wallHeight - headerY - 1.8, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
-    mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.25, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+    const soot = rgb(20, 20, 26);
+    mb.addBox(cx, 0, cz, ts + 0.25, 1.6, ts + 0.3, blackened ? soot : rgb(110, 72, 42), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.35);
+    mb.addBox(cx, 1.6, cz, ts, sillY - 1.6, ts, blackened ? soot : rgb(228, 220, 206), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
+    mb.addBeveledBox(cx, sillY, cz, ts + 0.2, 1.2, ts + 1.4, 0.3, blackened ? soot : rgb(138, 92, 52), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
+    mb.addBox(cx, headerY, cz, ts, wallHeight - headerY - 1.8, ts, blackened ? soot : rgb(236, 226, 208), blackened ? TexId.SOLID : TexId.INTERIOR_WALL, 0.55);
+    mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.25, 1.8, ts + 0.45, 0.35, blackened ? soot : rgb(92, 60, 38), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
     const openH = headerY - (sillY + 1.2);
-    mb.addBox(cx - ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.4);
-    mb.addBox(cx + ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.4);
-    mb.addBox(cx, sillY + 1.2 + openH * 0.55, cz, ts - 1.6, 1.1, 3.6, rgb(116, 74, 42), TexId.WOOD_GRAIN, 0.3);
+    const frameColor = blackened ? soot : rgb(116, 74, 42);
+    const frameTex = blackened ? TexId.SOLID : TexId.WOOD_GRAIN;
+    mb.addBox(cx - ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, frameColor, frameTex, 0.4);
+    mb.addBox(cx + ts * 0.45, sillY + 1.2, cz, 1.6, openH, 5.2, frameColor, frameTex, 0.4);
+    mb.addBox(cx, sillY + 1.2 + openH * 0.55, cz, ts - 1.6, 1.1, 3.6, frameColor, frameTex, 0.3);
     if (kind !== "window-north-transparent") {
-      mb.addBox(cx, sillY + 1.2, cz, ts - 2.6, openH - 0.2, 2.2, rgb(252, 232, 158), TexId.WINDOW_GLOW, 0.35);
+      mb.addBox(cx, sillY + 1.2, cz, ts - 2.6, openH - 0.2, 2.2, blackened ? rgb(28, 28, 34) : rgb(252, 232, 158), blackened ? TexId.SOLID : TexId.WINDOW_GLOW, 0.35);
     }
   }
-  function addDoorWallLintelTile3D(mb, col, row, ts, wallHeight, side) {
+  function addDoorWallLintelTile3D(mb, col, row, ts, wallHeight, side, blackened = false) {
     const cx = col * ts + ts * 0.5;
     const cz = row * ts + ts * 0.5;
     const doorHeight = 24.4;
+    const soot = rgb(20, 20, 26);
     mb.addQuad(
       [col * ts, 0, (row + 1) * ts],
       [(col + 1) * ts, 0, (row + 1) * ts],
@@ -5482,12 +6098,12 @@
       0
     );
     const jambX = side === "door-left" ? col * ts + 1.1 : (col + 1) * ts - 1.1;
-    mb.addBox(jambX, 0, cz, 2.2, doorHeight, ts * 0.85, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
-    mb.addBeveledBox(cx, doorHeight, cz, ts, 1.4, ts + 0.5, 0.25, rgb(104, 66, 36), TexId.WOOD_GRAIN, 0.45);
+    mb.addBox(jambX, 0, cz, 2.2, doorHeight, ts * 0.85, blackened ? soot : rgb(104, 66, 36), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
+    mb.addBeveledBox(cx, doorHeight, cz, ts, 1.4, ts + 0.5, 0.25, blackened ? soot : rgb(104, 66, 36), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
     const lintelY = doorHeight + 1.4;
     const lintelH = Math.max(1.5, wallHeight - 1.8 - lintelY);
-    mb.addBox(cx, lintelY, cz, ts, lintelH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
-    mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.2, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
+    mb.addBox(cx, lintelY, cz, ts, lintelH, ts, blackened ? soot : rgb(236, 226, 208), blackened ? TexId.SOLID : TexId.INTERIOR_WALL, 0.55);
+    mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.2, 1.8, ts + 0.45, 0.35, blackened ? soot : rgb(92, 60, 38), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.45);
   }
   function addDoorwayFrameAndHeader3D(mb, col, row, ts, wallHeight = INDOOR_WALL_HEIGHT) {
     const cx = col * ts + ts * 0.5;
@@ -5501,18 +6117,19 @@
     mb.addBox(cx, lintelY, cz, ts, lintelH, ts, rgb(236, 226, 208), TexId.INTERIOR_WALL, 0.55);
     mb.addBeveledBox(cx, wallHeight - 1.8, cz, ts + 0.2, 1.8, ts + 0.45, 0.35, rgb(92, 60, 38), TexId.WOOD_GRAIN, 0.45);
   }
-  function addLockedDoubleDoor3D(mb, cx, cz, ts) {
+  function addLockedDoubleDoor3D(mb, cx, cz, ts, blackened = false) {
     const leafW = ts - 2.6;
     const leafH = 24;
+    const soot = rgb(20, 20, 26);
     for (const offsetX of [-ts * 0.5 + 0.9, ts * 0.5 - 0.9]) {
       const lx = cx + offsetX;
-      mb.addBeveledBox(lx, 0, cz, leafW, leafH, 3.8, 0.4, rgb(124, 68, 34), TexId.WOOD_GRAIN, 0.65);
-      mb.addBox(lx, 2.4, cz, leafW * 0.68, 7.2, 4.4, rgb(146, 86, 46), TexId.WOOD_GRAIN, 0.3);
-      mb.addBox(lx, 12.2, cz, leafW * 0.68, 9.2, 4.4, rgb(146, 86, 46), TexId.WOOD_GRAIN, 0.3);
+      mb.addBeveledBox(lx, 0, cz, leafW, leafH, 3.8, 0.4, blackened ? soot : rgb(124, 68, 34), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.65);
+      mb.addBox(lx, 2.4, cz, leafW * 0.68, 7.2, 4.4, blackened ? rgb(28, 28, 34) : rgb(146, 86, 46), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.3);
+      mb.addBox(lx, 12.2, cz, leafW * 0.68, 9.2, 4.4, blackened ? rgb(28, 28, 34) : rgb(146, 86, 46), blackened ? TexId.SOLID : TexId.WOOD_GRAIN, 0.3);
     }
     for (const dz of [-2.4, 2.4]) {
-      mb.addSphere(cx - 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
-      mb.addSphere(cx + 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, rgb(250, 214, 72), TexId.SOLID, 0.35);
+      mb.addSphere(cx - 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, blackened ? rgb(48, 48, 54) : rgb(250, 214, 72), TexId.SOLID, 0.35);
+      mb.addSphere(cx + 2.4, 11.2, cz + dz, 0.9, 0.9, 0.9, 6, 8, blackened ? rgb(48, 48, 54) : rgb(250, 214, 72), TexId.SOLID, 0.35);
     }
   }
   function addCeilingChandelier3D(mb, cx, cz, ceilingY = INDOOR_WALL_HEIGHT) {
@@ -5585,34 +6202,38 @@
         if (tile === 20 /* VoidBlack */) continue;
         const cx = c * ts + ts * 0.5;
         const cz = r * ts + ts * 0.5;
-        if (tile === 21 /* InteriorWall */) {
+        const destroyingFloor = options?.destroyingWalls?.get(tileKey(c, r));
+        if (tile === 21 /* InteriorWall */ && destroyingFloor === void 0) {
           const override = overrides?.get(tileKey(c, r));
+          const blackKey = options?.levelId ? `${options.levelId}:${c},${r}` : `${c},${r}`;
+          const blackened = options?.blackenedKeys?.has(blackKey) === true;
           if (override === "door-left" || override === "door-right") {
-            addDoorWallLintelTile3D(mb, c, r, ts, wallHeight, override);
+            addDoorWallLintelTile3D(mb, c, r, ts, wallHeight, override, blackened);
           } else if (override === "window-south" || override === "window-north" || override === "window-north-transparent") {
-            addWindowWallTile3D(mb, cx, cz, ts, wallHeight, override);
+            addWindowWallTile3D(mb, cx, cz, ts, wallHeight, override, blackened);
           } else {
             const leftDoor = openableSet.has(tileKey(c - 1, r)) || overrides?.has(tileKey(c - 1, r));
             const rightDoor = openableSet.has(tileKey(c + 1, r)) || overrides?.has(tileKey(c + 1, r));
             const trimPullback = leftDoor || rightDoor ? 0.5 : 0;
             const hasWallX = map.tiles[r]?.[c - 1] === 21 /* InteriorWall */ || map.tiles[r]?.[c + 1] === 21 /* InteriorWall */;
             const hasWallZ = map.tiles[r - 1]?.[c] === 21 /* InteriorWall */ || map.tiles[r + 1]?.[c] === 21 /* InteriorWall */;
-            addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback, hasWallX, hasWallZ);
+            addStandardWallTile3D(mb, cx, cz, ts, wallHeight, trimPullback, hasWallX, hasWallZ, blackened);
           }
         } else {
+          const floorTileType = destroyingFloor ?? tile;
           const skipFloor = options?.skipFloorRect;
           if (skipFloor && c >= skipFloor.minCol && c <= skipFloor.maxCol && r >= skipFloor.minRow && r <= skipFloor.maxRow) {
             continue;
           }
           let floorColor = rgb(198, 146, 92);
           let floorTex = TexId.WOOD_FLOOR;
-          if (tile === 17 /* StoneTileFloor */) {
+          if (floorTileType === 17 /* StoneTileFloor */) {
             floorColor = rgb(182, 170, 160);
             floorTex = TexId.STONE_FLOOR;
-          } else if (tile === 18 /* BathroomTileFloor */) {
+          } else if (floorTileType === 18 /* BathroomTileFloor */) {
             floorColor = rgb(216, 238, 244);
             floorTex = TexId.BATHROOM_TILE;
-          } else if (tile === 19 /* StairsFloor */) {
+          } else if (floorTileType === 19 /* StairsFloor */) {
             floorColor = rgb(168, 116, 68);
             floorTex = TexId.WOOD_GRAIN;
           }
@@ -5648,7 +6269,17 @@
       mb.addSphere(cx + w * 0.26, 6.2, cz + 0.5, 3.2, 2.2, 1.8, 8, 10, pillowColor, TexId.FABRIC, 0.45);
     }
   }
-  function buildBasementStaticMesh(map) {
+  function buildDestroyingWallLookup(levelId, state) {
+    if (!state || state.destroyingWalls.length === 0) return void 0;
+    const out = /* @__PURE__ */ new Map();
+    for (const w of state.destroyingWalls) {
+      if (w.levelId === levelId) {
+        out.set(tileKey(w.col, w.row), w.replacementTile);
+      }
+    }
+    return out;
+  }
+  function buildBasementStaticMesh(map, state) {
     const mb = new MeshBuilder();
     const ts = map.tileSize;
     const wallOverrides = /* @__PURE__ */ new Map([
@@ -5669,8 +6300,11 @@
     addIndoorTilesAndWalls(mb, map, {
       wallHeight: INDOOR_WALL_HEIGHT,
       wallOverrides,
-      openableDoorCoords: [[20, 12]]
+      openableDoorCoords: [[20, 12]],
       // Bathroom door
+      blackenedKeys: state?.blackenedWalls,
+      destroyingWalls: buildDestroyingWallLookup("level-basement", state),
+      levelId: "level-basement"
     });
     addDoorWallLintelTile3D(mb, 15, 12, ts, INDOOR_WALL_HEIGHT, "door-left");
     addDoorWallLintelTile3D(mb, 16, 12, ts, INDOOR_WALL_HEIGHT, "door-right");
@@ -5807,7 +6441,8 @@
       mb.addCylinder(tx, 19.65, tz, 1.95, 1.7, 2.1, 12, rgb(44, 46, 56), TexId.FABRIC, 0.45);
       mb.addCylinder(tx, 19.75, tz, 2.02, 2.02, 0.5, 12, rgb(168, 42, 44), TexId.SOLID, 0.25);
     }
-    addLockedDoubleDoor3D(mb, 16 * ts, 20.5 * ts, ts);
+    const frontDoorBlackened = state?.blackenedWalls.has("level-basement:15,20") || state?.blackenedWalls.has("level-basement:16,20") || false;
+    addLockedDoubleDoor3D(mb, 16 * ts, 20.5 * ts, ts, frontDoorBlackened);
     for (let s = 0; s < 12; s++) {
       const sx = 18 * ts + s * 5.2 + 2.6;
       const sh = (s + 1) * 1.95;
@@ -5826,7 +6461,7 @@
     mb.addTorus(21.3 * ts, 5.3, 9.5 * ts, 3.8, 1, 12, 8, "y", rgb(252, 254, 255), TexId.SOLID, 0.45);
     return mb;
   }
-  function buildUpstairsStaticMesh(map) {
+  function buildUpstairsStaticMesh(map, state) {
     const mb = new MeshBuilder();
     const ts = map.tileSize;
     const wallOverrides = /* @__PURE__ */ new Map([
@@ -5864,7 +6499,10 @@
         // Table Room door
       ],
       // Leave stairwell steps (cols 15..18, rows 14..17) open below y=0 so descending stairs are clearly visible
-      skipFloorRect: { minCol: 15, maxCol: 18, minRow: 14, maxRow: 17 }
+      skipFloorRect: { minCol: 15, maxCol: 18, minRow: 14, maxRow: 17 },
+      blackenedKeys: state?.blackenedWalls,
+      destroyingWalls: buildDestroyingWallLookup("level-upstairs", state),
+      levelId: "level-upstairs"
     });
     addIndoorCeiling3D(mb, map, {
       skipRect: { minCol: 15, maxCol: 18, minRow: 14, maxRow: 18 },
@@ -6082,24 +6720,83 @@
     return mb;
   }
   var staticMeshCache = /* @__PURE__ */ new Map();
-  function getStaticLevelMesh(levelId, map) {
+  function getStaticLevelMesh(levelId, map, state) {
+    const version = state?.mapVersion ?? 0;
     const cached = staticMeshCache.get(levelId);
-    if (cached) {
-      return cached;
+    if (cached && cached.version === version && cached.map === map) {
+      return cached.mesh;
     }
     let builder;
     if (levelId === "level-outside") {
       builder = buildOutsideStaticMesh(map);
     } else if (levelId === "level-basement") {
-      builder = buildBasementStaticMesh(map);
+      builder = buildBasementStaticMesh(map, state);
     } else if (levelId === "level-upstairs") {
-      builder = buildUpstairsStaticMesh(map);
+      builder = buildUpstairsStaticMesh(map, state);
     } else {
       builder = buildPeopleStaticMesh(map);
     }
     const mesh = builder.build();
-    staticMeshCache.set(levelId, mesh);
+    staticMeshCache.set(levelId, { version, map, mesh });
     return mesh;
+  }
+  function addKatanaGeometry3D(mb, hx, hy, hz, dirX, dirY, dirZ, upGX, upGY, upGZ, yaw, pitch, scale = 1) {
+    const wrapDark = rgb(24, 24, 32);
+    const goldGuard = rgb(232, 186, 62);
+    const steelBlade = rgb(224, 234, 246);
+    const steelEdge = rgb(248, 252, 255);
+    mb.addOrientedBox(
+      hx - dirX * 1.4 * scale,
+      hy - dirY * 1.4 * scale,
+      hz - dirZ * 1.4 * scale,
+      3.6 * scale,
+      0.75 * scale,
+      0.75 * scale,
+      yaw,
+      pitch,
+      wrapDark,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 0.65 * scale,
+      hy + dirY * 0.65 * scale,
+      hz + dirZ * 0.65 * scale,
+      0.45 * scale,
+      2.1 * scale,
+      2.1 * scale,
+      yaw,
+      pitch,
+      goldGuard,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 6.8 * scale + upGX * 0.15 * scale,
+      hy + dirY * 6.8 * scale + upGY * 0.15 * scale,
+      hz + dirZ * 6.8 * scale + upGZ * 0.15 * scale,
+      11.8 * scale,
+      0.95 * scale,
+      0.32 * scale,
+      yaw,
+      pitch,
+      steelBlade,
+      TexId.SOLID,
+      0.4 * scale
+    );
+    mb.addOrientedBox(
+      hx + dirX * 13.4 * scale + upGX * 0.25 * scale,
+      hy + dirY * 13.4 * scale + upGY * 0.25 * scale,
+      hz + dirZ * 13.4 * scale + upGZ * 0.25 * scale,
+      2.2 * scale,
+      0.65 * scale,
+      0.26 * scale,
+      yaw,
+      pitch - 0.12,
+      steelEdge,
+      TexId.SOLID,
+      0.3 * scale
+    );
   }
   function addUziGeometry3D(mb, hx, hy, hz, dirX, dirY, dirZ, upGX, upGY, upGZ, yaw, gunPitch, scale = 1, alpha = 1) {
     const gunDark = rgb(32, 36, 46, alpha);
@@ -6255,6 +6952,93 @@
       0
     );
   }
+  function addBazookaGeometry3D(mb, cx, shoulderY, cz, fx, fz, rx, rz, yaw, scale = 1) {
+    const tubeOlive = rgb(72, 92, 54);
+    const muzzleDark = rgb(36, 42, 48);
+    const sightGold = rgb(228, 178, 62);
+    const rocketWarhead = rgb(212, 46, 38);
+    const tx = cx + fx * 1.2 * scale + rx * 3.8 * scale;
+    const ty = shoulderY + 1.4 * scale;
+    const tz = cz + fz * 1.2 * scale + rz * 3.8 * scale;
+    mb.addOrientedBox(
+      tx,
+      ty,
+      tz,
+      14.5 * scale,
+      2.4 * scale,
+      2.4 * scale,
+      yaw,
+      0,
+      tubeOlive,
+      TexId.SOLID,
+      0.45 * scale
+    );
+    mb.addOrientedBox(
+      tx + fx * 7.2 * scale,
+      ty,
+      tz + fz * 7.2 * scale,
+      1.6 * scale,
+      3 * scale,
+      3 * scale,
+      yaw,
+      0,
+      muzzleDark,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addOrientedBox(
+      tx - fx * 7 * scale,
+      ty,
+      tz - fz * 7 * scale,
+      1.6 * scale,
+      2.85 * scale,
+      2.85 * scale,
+      yaw,
+      0,
+      muzzleDark,
+      TexId.SOLID,
+      0.35 * scale
+    );
+    mb.addSphere(
+      tx + fx * 8.1 * scale,
+      ty,
+      tz + fz * 8.1 * scale,
+      1 * scale,
+      0.9 * scale,
+      0.9 * scale,
+      6,
+      6,
+      rocketWarhead,
+      TexId.SOLID,
+      0.25 * scale
+    );
+    mb.addOrientedBox(
+      tx + fx * 1.8 * scale,
+      ty - 1.9 * scale,
+      tz + fz * 1.8 * scale,
+      1.2 * scale,
+      2.2 * scale,
+      0.9 * scale,
+      yaw,
+      0,
+      muzzleDark,
+      TexId.SOLID,
+      0.3 * scale
+    );
+    mb.addOrientedBox(
+      tx + fx * 2.2 * scale - rx * 1.4 * scale,
+      ty + 1.35 * scale,
+      tz + fz * 2.2 * scale - rz * 1.4 * scale,
+      2.4 * scale,
+      1 * scale,
+      0.9 * scale,
+      yaw,
+      0,
+      sightGold,
+      TexId.SOLID,
+      0.3 * scale
+    );
+  }
   function addBurningFireEffect3D(translucentMb, pointLights, cx, baseY, cz, t, scale = 1, addLight = true) {
     for (let i = 0; i < 6; i++) {
       const ang = t * 5.2 + i * (Math.PI * 2 / 6);
@@ -6292,6 +7076,16 @@
   function addHumanoid3D(mb, cx, baseY, cz, yaw, walkPhase, isMoving, style, isSanta = false, carryingLadder = false, translucentMb, shadowGroundY = baseY) {
     if (translucentMb) {
       translucentMb.addShadowDisc(cx, shadowGroundY, cz, 5.6, 5.6, 0.36);
+    }
+    if (style.isCharred) {
+      style = {
+        ...style,
+        coat: rgb(22, 22, 26),
+        trim: rgb(32, 32, 36),
+        pants: rgb(18, 18, 22),
+        skin: rgb(30, 26, 26),
+        hair: rgb(14, 14, 16)
+      };
     }
     const cyaw = Math.cos(yaw);
     const syaw = Math.sin(yaw);
@@ -6426,6 +7220,7 @@
     const activePunchSide = style.punchHand === "left" ? -1 : 1;
     const isHoldingUzi = equippedItem === "uzi";
     const isHoldingFlamethrower = equippedItem === "flamethrower";
+    const isHoldingKatana = equippedItem === "katana";
     const isReloadingUzi = isHoldingUzi && (style.uziReloadTimer ?? 0) > 0;
     const reloadProgress = isReloadingUzi ? 1 - Math.max(0, Math.min(1, (style.uziReloadTimer ?? 0) / NPC_UZI_RELOAD_SECONDS)) : 0;
     const isDroppingUzi = (style.uziDropTimer ?? 0) > 0 && !isHoldingUzi && !isHoldingFlamethrower;
@@ -6532,6 +7327,101 @@
             0.35
           );
         }
+        continue;
+      }
+      if (isHoldingKatana && side === 1) {
+        let swingYawOffset = -0.35;
+        let theta = Math.PI * 0.42;
+        if (style.wildKatanaSwing) {
+          const wt = style.elapsedTime ?? walkPhase;
+          swingYawOffset = Math.sin(wt * 18) * 1.15;
+          theta = Math.PI * 0.52 + Math.cos(wt * 14) * 0.42;
+        } else if ((style.katanaSwingTimer ?? 0) > 0) {
+          const p = 1 - Math.max(
+            0,
+            Math.min(1, (style.katanaSwingTimer ?? 0) / KATANA_SWING_DURATION_SECONDS)
+          );
+          swingYawOffset = -1.1 + p * 2.2;
+          theta = Math.PI * 0.55 + Math.sin(p * Math.PI) * 0.25;
+        }
+        const syawK = yaw + swingYawOffset;
+        const kfx = Math.cos(syawK);
+        const kfz = Math.sin(syawK);
+        const st = Math.sin(theta);
+        const ct = Math.cos(theta);
+        const dirX = st * kfx;
+        const dirY = -ct;
+        const dirZ = st * kfz;
+        const ax0 = cx + rx * (armSpread * side);
+        const az0 = cz + rz * (armSpread * side);
+        mb.addOrientedBox(
+          ax0 + dirX * 2.2,
+          shoulderY + dirY * 2.2,
+          az0 + dirZ * 2.2,
+          2,
+          4.4,
+          2,
+          syawK,
+          theta,
+          style.coat,
+          TexId.FABRIC,
+          0.65
+        );
+        const hx = ax0 + dirX * 4.4;
+        const hy = shoulderY + dirY * 4.4;
+        const hz = az0 + dirZ * 4.4;
+        mb.addSphere(hx, hy, hz, 1.15, 1.15, 1.15, 6, 8, mittenColor, TexId.SOLID, 0.5);
+        const bladePitch = theta - Math.PI * 0.5;
+        addKatanaGeometry3D(
+          mb,
+          hx,
+          hy,
+          hz,
+          dirX,
+          dirY,
+          dirZ,
+          ct * kfx,
+          st,
+          ct * kfz,
+          syawK,
+          bladePitch,
+          1
+        );
+        continue;
+      }
+      if (style.holdingBazooka && side === 1) {
+        const theta = Math.PI * 0.56;
+        const st = Math.sin(theta);
+        const ct = Math.cos(theta);
+        const ax0 = cx + rx * (armSpread * side);
+        const az0 = cz + rz * (armSpread * side);
+        mb.addOrientedBox(
+          ax0 + fx * st * 2.2,
+          shoulderY - ct * 2.2,
+          az0 + fz * st * 2.2,
+          2,
+          4.4,
+          2,
+          yaw,
+          theta,
+          style.coat,
+          TexId.FABRIC,
+          0.65
+        );
+        mb.addSphere(
+          ax0 + fx * st * 4.4,
+          shoulderY - ct * 4.4,
+          az0 + fz * st * 4.4,
+          1.15,
+          1.15,
+          1.15,
+          6,
+          8,
+          mittenColor,
+          TexId.SOLID,
+          0.5
+        );
+        addBazookaGeometry3D(mb, cx, shoulderY, cz, fx, fz, rx, rz, yaw, 1);
         continue;
       }
       if ((isHoldingUzi || isHoldingFlamethrower) && side === 1) {
@@ -6804,21 +7694,101 @@
       translucentMb.addCone(cx, heartY - 2.4, cz, 2.25, 2.6, 10, rgb(248, 48, 82, 0.94), TexId.SOLID, 0.45);
     }
   }
+  function addC4Explosive3D(opaque, translucent, cx, cz, elapsedTime, fastBlink) {
+    translucent.addShadowDisc(cx, 0.02, cz, 4.6, 3.8, 0.34);
+    const c4Olive = rgb(94, 108, 74);
+    const strapDark = rgb(32, 34, 42);
+    const keypadDark = rgb(44, 52, 62);
+    opaque.addBox(cx - 2.3, 0, cz - 1.5, 4.6, 2.2, 3, c4Olive, TexId.SOLID, 0.55);
+    opaque.addBox(cx - 2.4, 2.2, cz - 0.6, 4.8, 0.4, 1.2, strapDark, TexId.SOLID, 0.35);
+    opaque.addBox(cx - 1.5, 2.2, cz - 1.2, 3, 0.7, 2.4, keypadDark, TexId.SOLID, 0.4);
+    const blinkRate = fastBlink ? 14 : 3.5;
+    const ledLit = Math.floor(elapsedTime * blinkRate) % 2 === 0;
+    opaque.addSphere(
+      cx + 0.75,
+      3.05,
+      cz,
+      0.48,
+      0.48,
+      0.48,
+      6,
+      6,
+      ledLit ? rgb(255, 48, 42) : rgb(110, 22, 22),
+      TexId.SOLID,
+      0.15
+    );
+  }
   function addCat3D(mb, translucentMb, cat, elapsedTime = 0) {
     const cx = cat.x + cat.width * 0.5;
     const cz = cat.y + cat.height * 0.5;
-    translucentMb.addShadowDisc(cx, 0, cz, 4.4, 4.4, 0.32);
+    const baseY = cat.jumpZ ?? 0;
+    const shadowScale = Math.max(0.55, 1 - baseY * 0.025);
+    translucentMb.addShadowDisc(cx, 0, cz, 4.4 * shadowScale, 4.4 * shadowScale, 0.32 * shadowScale);
     const speed = Math.hypot(cat.vx, cat.vy);
-    const isRunning = cat.mode === "flee" || speed > 1.5;
+    const isHostile = cat.mode === "hostile" || cat.mode === "latched";
+    const isDead = cat.mode === "dead";
+    const isRunning = cat.mode === "flee" || isHostile || speed > 1.5;
     const yaw = typeof cat.yaw === "number" ? cat.yaw : speed > 0.5 ? Math.atan2(cat.vy, cat.vx) : Math.PI / 2;
     const fx = Math.cos(yaw);
     const fz = Math.sin(yaw);
     const rx = -fz;
     const rz = fx;
     const catBlack = rgb(28, 30, 40);
+    const blinkClock = cat.blinkRedTimer > 0 ? cat.blinkRedTimer : elapsedTime;
+    const isRedBlink = isHostile && Math.floor(blinkClock * 10) % 2 === 0;
+    const bodyColor = isRedBlink ? rgb(236, 36, 36) : catBlack;
+    const spineSpikeColor = isRedBlink ? rgb(255, 72, 64) : rgb(42, 44, 58);
+    if (isDead) {
+      translucentMb.addShadowDisc(cx, 0.03, cz, 5.6, 5.2, 0.72);
+      mb.addOrientedBox(cx, 0.9, cz, 5.6, 1.4, 3.4, yaw, 0, catBlack, TexId.SOLID, 0.55);
+      mb.addSphere(cx + fx * 3.1, 1.3, cz + fz * 3.1, 2.2, 1.5, 2.2, 8, 10, catBlack, TexId.SOLID, 0.55);
+      return;
+    }
     const runStride = isRunning ? Math.sin(elapsedTime * 18) * 1.4 : 0;
-    if (isRunning) {
-      mb.addOrientedBox(cx, 3, cz, 5.4, 2.8, 3.2, yaw, 0, catBlack, TexId.SOLID, 0.65);
+    if (isHostile) {
+      mb.addOrientedBox(
+        cx + fx * 1.45,
+        baseY + 4.35,
+        cz + fz * 1.45,
+        3.4,
+        2.3,
+        3,
+        yaw,
+        -0.46,
+        bodyColor,
+        TexId.SOLID,
+        0.65
+      );
+      mb.addSphere(cx, baseY + 5.7, cz, 2.3, 2.2, 1.85, 8, 10, bodyColor, TexId.SOLID, 0.65);
+      mb.addCone(cx, baseY + 7.2, cz, 0.85, 2, 6, spineSpikeColor, TexId.SOLID, 0.4);
+      mb.addCone(cx - fx * 1.2, baseY + 6.7, cz - fz * 1.2, 0.7, 1.7, 6, spineSpikeColor, TexId.SOLID, 0.4);
+      mb.addOrientedBox(
+        cx - fx * 1.5,
+        baseY + 4.25,
+        cz - fz * 1.5,
+        3.4,
+        2.3,
+        3,
+        yaw,
+        0.52,
+        bodyColor,
+        TexId.SOLID,
+        0.65
+      );
+      for (const [fSign, rSign] of [
+        [1, 1],
+        [1, -1],
+        [-1, 1],
+        [-1, -1]
+      ]) {
+        const pounceSpread = cat.mode === "latched" ? 1.55 : 1.15;
+        const lx = cx + fx * (fSign * 2.5 + fSign * runStride * 0.5) + rx * rSign * (1.25 * pounceSpread);
+        const lz = cz + fz * (fSign * 2.5 + fSign * runStride * 0.5) + rz * rSign * (1.25 * pounceSpread);
+        mb.addCylinder(lx, baseY + 0.1, lz, 0.55, 0.55, 3, 8, bodyColor, TexId.SOLID, 0.4);
+        mb.addSphere(lx + fx * 0.35, baseY + 0.35, lz + fz * 0.35, 0.65, 0.45, 0.75, 6, 6, rgb(248, 246, 250), TexId.SOLID, 0.25);
+      }
+    } else if (isRunning) {
+      mb.addOrientedBox(cx, baseY + 3, cz, 5.4, 2.8, 3.2, yaw, 0, bodyColor, TexId.SOLID, 0.65);
       for (const [fSign, rSign] of [
         [1, 1],
         [1, -1],
@@ -6827,25 +7797,31 @@
       ]) {
         const lx = cx + fx * (fSign * 2.1 + fSign * runStride * 0.65) + rx * rSign * 1.1;
         const lz = cz + fz * (fSign * 2.1 + fSign * runStride * 0.65) + rz * rSign * 1.1;
-        mb.addCylinder(lx, 0, lz, 0.55, 0.55, 2.6, 8, catBlack, TexId.SOLID, 0.4);
-        mb.addSphere(lx + fx * 0.25, 0.35, lz + fz * 0.25, 0.65, 0.45, 0.75, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.25);
+        mb.addCylinder(lx, baseY, lz, 0.55, 0.55, 2.6, 8, bodyColor, TexId.SOLID, 0.4);
+        mb.addSphere(lx + fx * 0.25, baseY + 0.35, lz + fz * 0.25, 0.65, 0.45, 0.75, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.25);
       }
     } else {
-      mb.addCylinder(cx, 0, cz, 2.8, 2.1, 5, 12, catBlack, TexId.SOLID, 0.65);
-      mb.addSphere(cx + fx * 2.3 + rx * 1.05, 0.55, cz + fz * 2.3 + rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
-      mb.addSphere(cx + fx * 2.3 - rx * 1.05, 0.55, cz + fz * 2.3 - rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+      mb.addCylinder(cx, baseY, cz, 2.8, 2.1, 5, 12, bodyColor, TexId.SOLID, 0.65);
+      mb.addSphere(cx + fx * 2.3 + rx * 1.05, baseY + 0.55, cz + fz * 2.3 + rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
+      mb.addSphere(cx + fx * 2.3 - rx * 1.05, baseY + 0.55, cz + fz * 2.3 - rz * 1.05, 0.75, 0.55, 0.95, 6, 6, rgb(244, 246, 252), TexId.SOLID, 0.3);
     }
-    const headDist = isRunning ? 3.2 : 1;
-    const headY = isRunning ? 5.2 : 6.6;
+    const headDist = isHostile ? 3.55 : isRunning ? 3.2 : 1;
+    const headY = baseY + (isHostile ? 4.4 : isRunning ? 5.2 : 6.6);
     const hx = cx + fx * headDist;
     const hz = cz + fz * headDist;
-    mb.addSphere(hx, headY, hz, 2.5, 2.3, 2.5, 10, 12, catBlack, TexId.SOLID, 0.65);
-    mb.addCone(hx + rx * 1.45, headY + 1.6, hz + rz * 1.45, 0.9, 2.2, 8, catBlack, TexId.SOLID, 0.5);
-    mb.addCone(hx - rx * 1.45, headY + 1.6, hz - rz * 1.45, 0.9, 2.2, 8, catBlack, TexId.SOLID, 0.5);
-    mb.addSphere(hx + fx * 2.15 + rx * 0.95, headY + 0.25, hz + fz * 2.15 + rz * 0.95, 0.5, 0.55, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
-    mb.addSphere(hx + fx * 2.15 - rx * 0.95, headY + 0.25, hz + fz * 2.15 - rz * 0.95, 0.5, 0.55, 0.45, 6, 6, rgb(92, 248, 118), TexId.SOLID, 0.15);
-    const swish = Math.sin(elapsedTime * 5) * 0.9;
-    mb.addSphere(cx - fx * 3.3 + rx * swish, isRunning ? 3.8 : 2.2, cz - fz * 3.3 + rz * swish, 0.7, 2.2, 0.7, 6, 8, catBlack, TexId.SOLID, 0.45);
+    const eyeColor = isHostile ? rgb(255, 58, 42) : rgb(92, 248, 118);
+    mb.addSphere(hx, headY, hz, 2.5, 2.3, 2.5, 10, 12, bodyColor, TexId.SOLID, 0.65);
+    mb.addCone(hx + rx * 1.45, headY + 1.6, hz + rz * 1.45, 0.9, 2.2, 8, bodyColor, TexId.SOLID, 0.5);
+    mb.addCone(hx - rx * 1.45, headY + 1.6, hz - rz * 1.45, 0.9, 2.2, 8, bodyColor, TexId.SOLID, 0.5);
+    mb.addSphere(hx + fx * 2.15 + rx * 0.95, headY + 0.25, hz + fz * 2.15 + rz * 0.95, 0.5, 0.55, 0.45, 6, 6, eyeColor, TexId.SOLID, 0.15);
+    mb.addSphere(hx + fx * 2.15 - rx * 0.95, headY + 0.25, hz + fz * 2.15 - rz * 0.95, 0.5, 0.55, 0.45, 6, 6, eyeColor, TexId.SOLID, 0.15);
+    if (isHostile) {
+      const twitch = Math.sin(elapsedTime * 16) * 0.45;
+      mb.addSphere(cx - fx * 3.2 + rx * twitch, baseY + 6.4, cz - fz * 3.2 + rz * twitch, 1.05, 3.2, 1.05, 8, 10, bodyColor, TexId.SOLID, 0.5);
+    } else {
+      const swish = Math.sin(elapsedTime * 5) * 0.9;
+      mb.addSphere(cx - fx * 3.3 + rx * swish, baseY + (isRunning ? 3.8 : 2.2), cz - fz * 3.3 + rz * swish, 0.7, 2.2, 0.7, 6, 8, bodyColor, TexId.SOLID, 0.45);
+    }
   }
   function addMotorcycle3D(mb, translucentMb, motorcycle, elapsedTime) {
     const cx = motorcycle.x + motorcycle.width * 0.5;
@@ -7028,10 +8004,12 @@
       const electrocutedFlash = state.electrocutionTimer > 0 && Math.floor(t * 20) % 2 === 0;
       const sharedWeaponFields = {
         equippedItem: state.player.equippedItem,
+        holdingBazooka: state.player.equippedItem === "bazooka",
         punchTimer: state.player.punchTimer,
         punchHand: state.player.punchHand,
         uziEquipTimer: state.player.uziEquipTimer,
         uziDropTimer: state.player.uziDropTimer,
+        katanaSwingTimer: state.player.katanaSwingTimer,
         weaponVibrationTimer: state.player.weaponVibrationTimer,
         elapsedTime: t
       };
@@ -7055,8 +8033,9 @@
         ...sharedWeaponFields
       };
       const rosannaCutsceneActive = levelId === "level-upstairs" && Boolean(state.levels["level-upstairs"].rosannaCutscene?.active);
+      const tableRoomAmbushActive = levelId === "level-upstairs" && Boolean(state.levels["level-upstairs"].tableRoomAmbushCutscene?.active);
       const toiletCutsceneActive = levelId === "level-basement" && Boolean(state.levels["level-basement"].toiletCutscene?.active);
-      const isPlayerTranslucent = cameraDistance !== void 0 && cameraDistance < TILE_SIZE || rosannaCutsceneActive || toiletCutsceneActive;
+      const isPlayerTranslucent = cameraDistance !== void 0 && cameraDistance < TILE_SIZE || rosannaCutsceneActive || tableRoomAmbushActive || toiletCutsceneActive;
       const playerTargetBuilder = isPlayerTranslucent ? translucent : opaque;
       const playerStartVertex = playerTargetBuilder.vertexCount;
       addHumanoid3D(
@@ -7260,6 +8239,7 @@
           hair: hexToColor4("#4e433c"),
           equippedItem: "uzi",
           uziReloadTimer: basement.arjanCombat.reloadTimer,
+          isCharred: basement.arjanCombat.mode === "burning",
           weaponVibrationTimer: basement.arjanCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: basement.arjanCombat.mode === "dead" ? Math.max(0.05, basement.arjanCombat.deadFallProgress) : 0
@@ -7290,6 +8270,7 @@
           hair: hexToColor4("#342618"),
           equippedItem: "uzi",
           uziReloadTimer: basement.olexaCombat.reloadTimer,
+          isCharred: basement.olexaCombat.mode === "burning",
           weaponVibrationTimer: basement.olexaCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: basement.olexaCombat.mode === "dead" ? Math.max(0.05, basement.olexaCombat.deadFallProgress) : 0
@@ -7325,6 +8306,7 @@
             sitting: isSittingOnToilet,
             equippedItem: isSittingOnToilet ? "empty" : "uzi",
             uziReloadTimer: basement.hanneloesCombat.reloadTimer,
+            isCharred: basement.hanneloesCombat.mode === "burning",
             weaponVibrationTimer: basement.hanneloesCombat.weaponVibrationTimer,
             elapsedTime: t,
             deadFallProgress: basement.hanneloesCombat.mode === "dead" ? Math.max(0.05, basement.hanneloesCombat.deadFallProgress) : 0
@@ -7344,24 +8326,36 @@
         addConeOfSight3D(translucent, basement.hanneloesCone);
       }
       for (const door of basement.doors) {
+        if (state.destroyingDoors.some(
+          (d) => d.levelId === "level-basement" && d.doorId === door.id
+        )) {
+          continue;
+        }
         addDoorAndFog3D(opaque, door);
       }
       for (const door of basement.openedDoors) {
         addOpenedDoor3D(opaque, door);
       }
       if (basement.spaDoorClosed) {
-        addLockedDoubleDoor3D(opaque, 16 * TILE_SIZE, 12.5 * TILE_SIZE, TILE_SIZE);
-        opaque.addBox(
-          BASEMENT_SPA_HIDDEN_MASK.x + BASEMENT_SPA_HIDDEN_MASK.width * 0.5,
-          0.2,
-          BASEMENT_SPA_HIDDEN_MASK.y + BASEMENT_SPA_HIDDEN_MASK.height * 0.5,
-          BASEMENT_SPA_HIDDEN_MASK.width,
-          INDOOR_WALL_HEIGHT + 0.4,
-          BASEMENT_SPA_HIDDEN_MASK.height,
-          rgb(12, 14, 22),
-          TexId.SOLID,
-          0
+        const spaDestroying = state.destroyingDoors.some(
+          (d) => d.levelId === "level-basement" && d.doorId === "basement-hall-north-door"
         );
+        if (!spaDestroying) {
+          addLockedDoubleDoor3D(opaque, 16 * TILE_SIZE, 12.5 * TILE_SIZE, TILE_SIZE);
+        }
+        if (!basement.spaFogCleared) {
+          opaque.addBox(
+            BASEMENT_SPA_HIDDEN_MASK.x + BASEMENT_SPA_HIDDEN_MASK.width * 0.5,
+            0.2,
+            BASEMENT_SPA_HIDDEN_MASK.y + BASEMENT_SPA_HIDDEN_MASK.height * 0.5,
+            BASEMENT_SPA_HIDDEN_MASK.width,
+            INDOOR_WALL_HEIGHT + 0.4,
+            BASEMENT_SPA_HIDDEN_MASK.height,
+            rgb(12, 14, 22),
+            TexId.SOLID,
+            0
+          );
+        }
       }
       const mineX = BASEMENT_MINE_BOUNDS.x + BASEMENT_MINE_BOUNDS.width * 0.5;
       const mineZ = BASEMENT_MINE_BOUNDS.y + BASEMENT_MINE_BOUNDS.height * 0.5;
@@ -7563,11 +8557,11 @@
         addHumanoid3D(
           opaque,
           cs.santaX + 8,
-          0,
+          cs.santaZ,
           cs.santaY + 8,
-          0,
+          cs.facingAngle,
           cs.walkTimer,
-          true,
+          cs.phase === "jumping",
           {
             coat: rgb(216, 34, 42),
             trim: rgb(248, 250, 255),
@@ -7575,24 +8569,25 @@
             skin: rgb(250, 208, 176),
             hair: rgb(250, 252, 255),
             hat: rgb(220, 36, 42),
-            hasBeard: true
+            hasBeard: true,
+            holdingBazooka: true
           },
           true,
           false,
           translucent
         );
-        if (Math.floor(cs.elapsed * 10) % 2 === 0) {
+        if (cs.phase === "rising" && Math.floor(cs.elapsed * 10) % 2 === 0) {
           addExclamationBadge3D(opaque, px, py, pz);
         }
       }
       const isTableRoomDoorOpen = !upstairs.doors.some(
-        (d) => d.id === "upstairs-table-room-door"
+        (d) => d.id === "upstairs-table-room-door" && d.hiddenRegions.length > 0
       );
       const isBedroomDoorOpen = !upstairs.doors.some(
-        (d) => d.id === "upstairs-bedroom-door"
+        (d) => d.id === "upstairs-bedroom-door" && d.hiddenRegions.length > 0
       );
       const isOfficeDoorOpen = !upstairs.doors.some(
-        (d) => d.id === "upstairs-office-door"
+        (d) => d.id === "upstairs-office-door" && d.hiddenRegions.length > 0
       );
       if (isBedroomDoorOpen && !state.player.states.get(DIANA_PRESENT_TAKEN_KEY)) {
         const pr = UPSTAIRS_DIANA_PRESENT_BOUNDS;
@@ -7612,6 +8607,14 @@
         opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, "x", rgb(255, 238, 84), TexId.SOLID, 0.4);
         opaque.addTorus(gx, 7.4, gz, 1.8, 0.55, 10, 6, "z", rgb(255, 238, 84), TexId.SOLID, 0.4);
       }
+      if (isOfficeDoorOpen && !state.player.states.get(C4_TAKEN_STATE_KEY)) {
+        const c4Cx = UPSTAIRS_C4_BOUNDS.x + UPSTAIRS_C4_BOUNDS.width * 0.5;
+        const c4Cz = UPSTAIRS_C4_BOUNDS.y + UPSTAIRS_C4_BOUNDS.height * 0.5;
+        addC4Explosive3D(opaque, translucent, c4Cx, c4Cz, t, false);
+      }
+      if (state.player.states.get(C4_PLACED_STATE_KEY)) {
+        addC4Explosive3D(opaque, translucent, 3.1 * TILE_SIZE, 15.6 * TILE_SIZE, t, true);
+      }
       addHumanoid3D(
         opaque,
         upstairs.albinX + 6,
@@ -7628,6 +8631,7 @@
           hair: hexToColor4("#7a421c"),
           equippedItem: "uzi",
           uziReloadTimer: upstairs.albinCombat.reloadTimer,
+          isCharred: upstairs.albinCombat.mode === "burning",
           weaponVibrationTimer: upstairs.albinCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: upstairs.albinCombat.mode === "dead" ? Math.max(0.05, upstairs.albinCombat.deadFallProgress) : 0
@@ -7661,6 +8665,7 @@
           hasPresentInLap: isDianaDistracted,
           equippedItem: "uzi",
           uziReloadTimer: upstairs.dianaCombat.reloadTimer,
+          isCharred: upstairs.dianaCombat.mode === "burning",
           weaponVibrationTimer: upstairs.dianaCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: upstairs.dianaCombat.mode === "dead" ? Math.max(0.05, upstairs.dianaCombat.deadFallProgress) : 0
@@ -7694,6 +8699,7 @@
           hasPresentInLap: isSimonDistracted,
           equippedItem: "uzi",
           uziReloadTimer: upstairs.simonCombat.reloadTimer,
+          isCharred: upstairs.simonCombat.mode === "burning",
           weaponVibrationTimer: upstairs.simonCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: upstairs.simonCombat.mode === "dead" ? Math.max(0.05, upstairs.simonCombat.deadFallProgress) : 0
@@ -7723,8 +8729,8 @@
             pants: rgb(42, 48, 62),
             skin: rgb(248, 206, 174),
             hair: hexToColor4("#6e4624"),
-            equippedItem: "uzi",
-            uziReloadTimer: upstairs.henrikCombat.reloadTimer,
+            equippedItem: "flamethrower",
+            isCharred: upstairs.henrikCombat.mode === "burning",
             weaponVibrationTimer: upstairs.henrikCombat.weaponVibrationTimer,
             elapsedTime: t,
             deadFallProgress: upstairs.henrikCombat.mode === "dead" ? Math.max(0.05, upstairs.henrikCombat.deadFallProgress) : 0
@@ -7753,8 +8759,8 @@
             pants: rgb(44, 50, 64),
             skin: rgb(250, 208, 176),
             hair: hexToColor4("#743c20"),
-            equippedItem: "uzi",
-            uziReloadTimer: upstairs.tanjaCombat.reloadTimer,
+            equippedItem: "flamethrower",
+            isCharred: upstairs.tanjaCombat.mode === "burning",
             weaponVibrationTimer: upstairs.tanjaCombat.weaponVibrationTimer,
             elapsedTime: t,
             deadFallProgress: upstairs.tanjaCombat.mode === "dead" ? Math.max(0.05, upstairs.tanjaCombat.deadFallProgress) : 0
@@ -7785,9 +8791,9 @@
             pants: rgb(46, 52, 66),
             skin: rgb(250, 212, 182),
             hair: hexToColor4("#c88642"),
-            equippedItem: "uzi",
-            uziReloadTimer: upstairs.anneMarieCombat.reloadTimer,
-            weaponVibrationTimer: upstairs.anneMarieCombat.weaponVibrationTimer,
+            equippedItem: "katana",
+            wildKatanaSwing: upstairs.anneMarieCombat.mode === "hostile" && upstairs.anneMarieCombat.hostileAlertTimer <= 0 || upstairs.anneMarieCombat.mode === "burning",
+            isCharred: upstairs.anneMarieCombat.mode === "burning",
             elapsedTime: t,
             deadFallProgress: upstairs.anneMarieCombat.mode === "dead" ? Math.max(0.05, upstairs.anneMarieCombat.deadFallProgress) : 0
           },
@@ -7800,6 +8806,40 @@
           addExclamationBadge3D(opaque, amX, 0, amZ);
         }
       }
+      if (upstairs.rosannaSpawned) {
+        const rx = upstairs.rosannaNpc.x + upstairs.rosannaNpc.width * 0.5;
+        const rz = upstairs.rosannaNpc.y + upstairs.rosannaNpc.height * 0.5;
+        addHumanoid3D(
+          opaque,
+          rx,
+          0,
+          rz,
+          upstairs.rosannaCombat.aimYaw,
+          t,
+          upstairs.rosannaCombat.isMoving,
+          {
+            coat: rgb(216, 34, 42),
+            trim: rgb(248, 250, 255),
+            pants: rgb(186, 28, 36),
+            skin: rgb(250, 208, 176),
+            hair: rgb(250, 252, 255),
+            hat: rgb(220, 36, 42),
+            hasBeard: true,
+            holdingBazooka: true,
+            isCharred: upstairs.rosannaCombat.mode === "burning",
+            weaponVibrationTimer: upstairs.rosannaCombat.weaponVibrationTimer,
+            elapsedTime: t,
+            deadFallProgress: upstairs.rosannaCombat.mode === "dead" ? Math.max(0.05, upstairs.rosannaCombat.deadFallProgress) : 0
+          },
+          true,
+          false,
+          translucent
+        );
+        maybeBurnNpc("upstairs:Rosanna", rx, 0, rz);
+        if (upstairs.rosannaCombat.mode === "hostile" && upstairs.rosannaCombat.hostileAlertTimer > 0 && Math.floor(upstairs.rosannaCombat.hostileAlertTimer * 10) % 2 === 0) {
+          addExclamationBadge3D(opaque, rx, 0, rz);
+        }
+      }
       addConeOfSight3D(translucent, upstairs.albinCone);
       addConeOfSight3D(translucent, upstairs.dianaCone);
       addConeOfSight3D(translucent, upstairs.simonCone);
@@ -7810,7 +8850,15 @@
       if (isBedroomDoorOpen) {
         addConeOfSight3D(translucent, upstairs.anneMarieCone);
       }
+      if (upstairs.rosannaSpawned) {
+        addConeOfSight3D(translucent, upstairs.rosannaCone);
+      }
       for (const door of upstairs.doors) {
+        if (state.destroyingDoors.some(
+          (d) => d.levelId === "level-upstairs" && d.doorId === door.id
+        )) {
+          continue;
+        }
         addDoorAndFog3D(opaque, door);
       }
       for (const door of upstairs.openedDoors) {
@@ -7869,6 +8917,222 @@
         fade
       );
     }
+    for (const drop of state.droppedFlamethrowers) {
+      if (drop.levelId !== levelId) continue;
+      const bobY = drop.z + 2.8 + Math.sin(t * 3.4) * 0.65;
+      const spinYaw = drop.yaw + t * 1.4;
+      const cSpin = Math.cos(spinYaw);
+      const sSpin = Math.sin(spinYaw);
+      translucent.addShadowDisc(drop.x, drop.z, drop.y, 5.2, 5.2, 0.28);
+      translucent.addTorus(
+        drop.x,
+        drop.z + 0.35,
+        drop.y,
+        4.8,
+        0.45,
+        14,
+        6,
+        "y",
+        rgb(255, 168, 48, 0.78),
+        TexId.SOLID,
+        0
+      );
+      addFlamethrowerGeometry3D(
+        opaque,
+        drop.x - cSpin * 2.8,
+        bobY,
+        drop.y - sSpin * 2.8,
+        cSpin,
+        0,
+        sSpin,
+        0,
+        1,
+        0,
+        -sSpin,
+        cSpin,
+        spinYaw,
+        0,
+        0.95
+      );
+    }
+    for (const drop of state.droppedKatanas) {
+      if (drop.levelId !== levelId) continue;
+      const cDrop = Math.cos(drop.yaw);
+      const sDrop = Math.sin(drop.yaw);
+      translucent.addShadowDisc(drop.x, drop.z, drop.y, 4.5, 4.5, 0.28);
+      translucent.addTorus(
+        drop.x,
+        drop.z + 0.3,
+        drop.y,
+        5.2,
+        0.45,
+        14,
+        6,
+        "y",
+        rgb(245, 206, 72, 0.78),
+        TexId.SOLID,
+        0
+      );
+      addKatanaGeometry3D(
+        opaque,
+        drop.x - cDrop * 4.5,
+        drop.z + 1.8,
+        drop.y - sDrop * 4.5,
+        cDrop,
+        0,
+        sDrop,
+        0,
+        1,
+        0,
+        drop.yaw,
+        0,
+        0.9
+      );
+    }
+    for (const drop of state.droppedBazookas) {
+      if (drop.levelId !== levelId) continue;
+      const bobY = drop.z + 3 + Math.sin(t * 3.4) * 0.65;
+      const spinYaw = drop.yaw + t * 1.4;
+      const cSpin = Math.cos(spinYaw);
+      const sSpin = Math.sin(spinYaw);
+      translucent.addShadowDisc(drop.x, drop.z, drop.y, 5.4, 5.4, 0.28);
+      translucent.addTorus(
+        drop.x,
+        drop.z + 0.35,
+        drop.y,
+        5.2,
+        0.45,
+        14,
+        6,
+        "y",
+        rgb(245, 206, 72, 0.82),
+        TexId.SOLID,
+        0
+      );
+      addBazookaGeometry3D(
+        opaque,
+        drop.x,
+        bobY,
+        drop.y,
+        cSpin,
+        sSpin,
+        0,
+        0,
+        spinYaw,
+        0.92
+      );
+    }
+    for (const wall of state.destroyingWalls) {
+      if (wall.levelId !== levelId) continue;
+      const p = Math.max(0, Math.min(1, wall.elapsed / Math.max(0.01, wall.duration)));
+      const alpha = Math.max(0.01, 1 - p);
+      const h = Math.max(0.4, INDOOR_WALL_HEIGHT * (1 - p));
+      translucent.addBox(
+        wall.col * TILE_SIZE + TILE_SIZE * 0.5,
+        0,
+        wall.row * TILE_SIZE + TILE_SIZE * 0.5,
+        TILE_SIZE,
+        h,
+        TILE_SIZE,
+        rgb(18, 18, 24, alpha),
+        TexId.SOLID,
+        0
+      );
+    }
+    for (const d of state.destroyingDoors) {
+      if (d.levelId !== levelId) continue;
+      const p = Math.max(0, Math.min(1, d.elapsed / Math.max(0.01, d.duration)));
+      const alpha = Math.max(0.01, 1 - p);
+      const h = Math.max(0.4, 24 * (1 - p));
+      translucent.addBox(
+        d.bounds.x + d.bounds.width * 0.5,
+        0,
+        d.bounds.y + d.bounds.height * 0.5,
+        d.bounds.width - 1.2,
+        h,
+        4.2,
+        rgb(18, 18, 24, alpha),
+        TexId.SOLID,
+        0
+      );
+    }
+    for (const medkit of state.medkits) {
+      if (medkit.levelId !== levelId) continue;
+      if (medkit.id === "basement-spa-medkit" && state.levels["level-basement"].spaDoorClosed && !state.levels["level-basement"].spaFogCleared) {
+        continue;
+      }
+      const bobY = medkit.z + 1.4 + Math.sin(t * 3.2) * 0.45;
+      translucent.addShadowDisc(medkit.x, medkit.z, medkit.y, 4.8, 4.8, 0.25);
+      translucent.addTorus(
+        medkit.x,
+        medkit.z + 0.3,
+        medkit.y,
+        5.8,
+        0.55,
+        16,
+        6,
+        "y",
+        rgb(44, 224, 96, 0.82),
+        TexId.SOLID,
+        0
+      );
+      opaque.addBeveledBox(
+        medkit.x,
+        bobY,
+        medkit.y,
+        7,
+        4.4,
+        5.2,
+        0.45,
+        rgb(248, 250, 255),
+        TexId.SOLID,
+        0.55
+      );
+      opaque.addBox(
+        medkit.x,
+        bobY + 4.35,
+        medkit.y,
+        3.8,
+        0.35,
+        1.2,
+        rgb(228, 32, 42),
+        TexId.SOLID,
+        0.2
+      );
+      opaque.addBox(
+        medkit.x,
+        bobY + 4.35,
+        medkit.y,
+        1.2,
+        0.35,
+        3.4,
+        rgb(228, 32, 42),
+        TexId.SOLID,
+        0.2
+      );
+      opaque.addBox(
+        medkit.x,
+        bobY + 1.65,
+        medkit.y,
+        3.2,
+        1.1,
+        5.45,
+        rgb(228, 32, 42),
+        TexId.SOLID,
+        0.2
+      );
+      opaque.addBox(
+        medkit.x,
+        bobY + 0.8,
+        medkit.y,
+        1.1,
+        2.8,
+        5.45,
+        rgb(228, 32, 42),
+        TexId.SOLID,
+        0.2
+      );
+    }
     for (const hole of state.bulletHoles) {
       if (hole.levelId !== levelId) continue;
       opaque.addBox(
@@ -7915,8 +9179,107 @@
         0.15
       );
     }
+    for (const exp of state.explosions) {
+      if (exp.levelId !== levelId || exp.timer <= 0) continue;
+      const expAlpha = Math.max(0, Math.min(1, exp.timer / Math.max(0.01, exp.maxTimer)));
+      const radius = 5 + (1 - expAlpha) * 18;
+      translucent.addSphere(
+        exp.x,
+        exp.z + radius * 0.45,
+        exp.y,
+        radius,
+        radius * 0.85,
+        radius,
+        10,
+        12,
+        rgb(255, 138, 32, expAlpha * 0.85),
+        TexId.SOLID,
+        0
+      );
+      translucent.addSphere(
+        exp.x,
+        exp.z + 10,
+        exp.y,
+        radius * 0.72,
+        radius * 0.72,
+        radius * 0.72,
+        8,
+        10,
+        rgb(255, 224, 92, expAlpha * 0.9),
+        TexId.SOLID,
+        0
+      );
+    }
     for (const proj of state.projectiles) {
-      if (proj.kind === "fireball") {
+      if (proj.kind === "rocket") {
+        const fx = Math.cos(proj.yaw);
+        const fy = Math.sin(proj.yaw);
+        opaque.addOrientedBox(
+          proj.x,
+          proj.z,
+          proj.y,
+          5.8,
+          1.7,
+          1.7,
+          proj.yaw,
+          0,
+          rgb(88, 108, 72),
+          TexId.SOLID,
+          0.4
+        );
+        opaque.addSphere(
+          proj.x + fx * 3.1,
+          proj.z,
+          proj.y + fy * 3.1,
+          1.15,
+          1.05,
+          1.05,
+          6,
+          8,
+          rgb(224, 48, 38),
+          TexId.SOLID,
+          0.25
+        );
+        opaque.addOrientedBox(
+          proj.x - fx * 2.5,
+          proj.z,
+          proj.y - fy * 2.5,
+          1.4,
+          2.7,
+          2.7,
+          proj.yaw,
+          0,
+          rgb(36, 40, 48),
+          TexId.SOLID,
+          0.25
+        );
+        const flamePulse = 1 + Math.sin(t * 32) * 0.2;
+        translucent.addSphere(
+          proj.x - fx * 4,
+          proj.z,
+          proj.y - fy * 4,
+          2.2 * flamePulse,
+          1.8 * flamePulse,
+          1.8 * flamePulse,
+          6,
+          8,
+          rgb(255, 144, 36, 0.9),
+          TexId.SOLID,
+          0
+        );
+        if (pointLights.length < 2) {
+          pointLights.push({
+            x: proj.x,
+            y: proj.z + 2,
+            z: proj.y,
+            r: 1,
+            g: 0.48,
+            b: 0.14,
+            radius: 58,
+            intensity: 0.85
+          });
+        }
+      } else if (proj.kind === "fireball") {
         const pulse = 1 + Math.sin(t * 28 + proj.x * 0.2) * 0.16;
         translucent.addSphere(
           proj.x,
@@ -8266,6 +9629,24 @@
           portraitSize,
           portraitSize
         );
+      } else if (npc.name.toLowerCase() === "rosanna") {
+        ctx.fillStyle = "#d62828";
+        ctx.fillRect(px, py, portraitSize, portraitSize);
+        ctx.fillStyle = "#ffcfab";
+        ctx.fillRect(
+          px + Math.round(portraitSize * 0.25),
+          py + Math.round(portraitSize * 0.35),
+          Math.round(portraitSize * 0.5),
+          Math.round(portraitSize * 0.4)
+        );
+        ctx.fillStyle = "#f8fafc";
+        ctx.fillRect(
+          px + Math.round(portraitSize * 0.2),
+          py + Math.round(portraitSize * 0.65),
+          Math.round(portraitSize * 0.6),
+          Math.round(portraitSize * 0.3)
+        );
+        ctx.fillRect(px + 1, py + Math.round(portraitSize * 0.25), portraitSize - 2, Math.max(2, Math.round(portraitSize * 0.14)));
       }
       const bx = px + portraitSize + gap;
       const by = cardY + Math.round((cardH - barOuterH) * 0.5);
@@ -8304,6 +9685,43 @@
       }
       ctx.restore();
     }
+  }
+  function drawKatanaIcon(ctx, cx, cy, scale = 1) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.strokeStyle = "#e2eef8";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-4, 4);
+    ctx.lineTo(8, -7);
+    ctx.stroke();
+    ctx.fillStyle = "#eab308";
+    ctx.fillRect(-6, 2, 4, 4);
+    ctx.strokeStyle = "#1e293b";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-5, 5);
+    ctx.lineTo(-9, 8);
+    ctx.stroke();
+    ctx.restore();
+  }
+  function drawBazookaIcon(ctx, cx, cy, scale = 1) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    ctx.fillStyle = "#485c36";
+    ctx.fillRect(-9, -3, 17, 5);
+    ctx.fillStyle = "#242a30";
+    ctx.fillRect(-10, -4, 3, 7);
+    ctx.fillRect(6, -4, 3, 7);
+    ctx.fillStyle = "#d42e26";
+    ctx.fillRect(9, -2, 2, 3);
+    ctx.fillStyle = "#181420";
+    ctx.fillRect(-1, 2, 3, 4);
+    ctx.fillStyle = "#eab308";
+    ctx.fillRect(1, -5, 3, 2);
+    ctx.restore();
   }
   function drawHealthBar(ctx, player) {
     const x = 8;
@@ -8461,6 +9879,48 @@
         "#fb923c",
         "#0c101a"
       );
+      if (Number.isFinite(player.flamethrowerAmmo)) {
+        const flameAmmo = Math.max(0, player.flamethrowerAmmo);
+        const ammoText = String(flameAmmo);
+        const ammoW = Math.max(22, measurePixelText(ammoText) + 10);
+        const ammoH = 18;
+        const ammoX = boxX - ammoW - 4;
+        const ammoY = boxY + Math.round((boxH - ammoH) / 2);
+        drawSnesFrame(ctx, ammoX, ammoY, ammoW, ammoH);
+        const aw = measurePixelText(ammoText);
+        drawPixelText(
+          ctx,
+          ammoText,
+          ammoX + Math.round((ammoW - aw) / 2),
+          ammoY + 5,
+          flameAmmo <= 3 ? "#f87171" : "#fb923c",
+          "#0c101a"
+        );
+      }
+    } else if (player.equippedItem === "katana") {
+      drawKatanaIcon(ctx, iconCenterX, iconCenterY, 1);
+      const label = "KATANA";
+      const tw = measurePixelText(label);
+      drawPixelText(
+        ctx,
+        label,
+        boxX + Math.round((boxW - tw) / 2),
+        boxY + 23,
+        "#e2e8f0",
+        "#0c101a"
+      );
+    } else if (player.equippedItem === "bazooka") {
+      drawBazookaIcon(ctx, iconCenterX, iconCenterY, 1);
+      const label = "BAZOOKA";
+      const tw = measurePixelText(label);
+      drawPixelText(
+        ctx,
+        label,
+        boxX + Math.round((boxW - tw) / 2),
+        boxY + 23,
+        "#84cc16",
+        "#0c101a"
+      );
     } else if (player.equippedItem === "unarmed") {
       drawUnarmedArmsIcon(ctx, iconCenterX, iconCenterY + 1, player.punchTimer > 0, 1);
       const label = "UNARMED";
@@ -8495,6 +9955,12 @@
     if (player.unlockedFlamethrower) {
       slots.push({ key: "4", id: "flamethrower" });
     }
+    if (player.unlockedKatana) {
+      slots.push({ key: "5", id: "katana" });
+    }
+    if (player.unlockedBazooka) {
+      slots.push({ key: "6", id: "bazooka" });
+    }
     const slotSize = 20;
     const gap = 3;
     const slotsTotalW = slotSize * slots.length + gap * (slots.length - 1);
@@ -8516,6 +9982,10 @@
         drawUziIcon(ctx, icx, icy, 0.7);
       } else if (slot.id === "flamethrower") {
         drawFlamethrowerIcon(ctx, icx, icy, 0.65);
+      } else if (slot.id === "katana") {
+        drawKatanaIcon(ctx, icx, icy, 0.65);
+      } else if (slot.id === "bazooka") {
+        drawBazookaIcon(ctx, icx, icy, 0.65);
       }
       drawPixelText(ctx, slot.key, sx + 3, slotsY + 2, "#ffd166", "#0c101a");
     });
@@ -8735,14 +10205,33 @@
     }
   }
   function drawCat(ctx, cat, catSprite) {
+    const isHostile = cat.mode === "hostile" || cat.mode === "latched";
     const drawX = Math.round(cat.x - (TILE_SIZE - cat.width) / 2);
-    const drawY = Math.round(cat.y - (TILE_SIZE - cat.height));
+    const jumpOffsetPx = Math.round((cat.jumpZ ?? 0) * 0.6);
+    const drawY = Math.round(cat.y - (TILE_SIZE - cat.height)) - jumpOffsetPx;
     const speed = Math.hypot(cat.vx, cat.vy);
     let frameCol = 0;
-    if (cat.mode === "flee" || speed > 4) {
+    if (cat.mode === "flee" || isHostile || speed > 4) {
       frameCol = Math.floor(cat.animTimer * 12) % 2 === 0 ? 1 : 2;
     }
     const dirRow = cat.facing === "left" ? 1 : 0;
+    if (cat.mode === "dead") {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.drawImage(
+        catSprite,
+        0,
+        dirRow * TILE_SIZE,
+        TILE_SIZE,
+        TILE_SIZE,
+        drawX,
+        drawY + 2,
+        TILE_SIZE,
+        TILE_SIZE
+      );
+      ctx.restore();
+      return;
+    }
     ctx.drawImage(
       catSprite,
       frameCol * TILE_SIZE,
@@ -8754,6 +10243,29 @@
       TILE_SIZE,
       TILE_SIZE
     );
+    if (isHostile && Math.floor((cat.blinkRedTimer || 0) * 10) % 2 === 0) {
+      ctx.save();
+      ctx.fillStyle = "rgba(235, 36, 36, 0.55)";
+      ctx.beginPath();
+      ctx.arc(drawX + TILE_SIZE * 0.5, drawY + TILE_SIZE * 0.55, 5, Math.PI, 0);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  function drawC4Explosive(ctx, x, y, elapsedTime, fastBlink) {
+    const px = Math.round(x);
+    const py = Math.round(y);
+    ctx.save();
+    ctx.fillStyle = "#20242c";
+    ctx.fillRect(px - 1, py - 1, 12, 9);
+    ctx.fillStyle = "#5e6c4a";
+    ctx.fillRect(px, py, 10, 7);
+    ctx.fillStyle = "#2c343e";
+    ctx.fillRect(px + 2, py + 1, 6, 5);
+    const blinkRate = fastBlink ? 14 : 3.5;
+    ctx.fillStyle = Math.floor(elapsedTime * blinkRate) % 2 === 0 ? "#ff302a" : "#6e1616";
+    ctx.fillRect(px + 6, py + 2, 2, 2);
+    ctx.restore();
   }
   function drawGroundLadder(ctx) {
     const x = Math.round(GROUND_LADDER_BOUNDS.x);
@@ -9413,7 +10925,7 @@
         drawClosedDoorAndHiddenMask(ctx, {
           id: "basement-hall-north-door",
           bounds: BASEMENT_HALL_NORTH_DOOR_BOUNDS,
-          hiddenRegions: [BASEMENT_SPA_HIDDEN_MASK]
+          hiddenRegions: basement.spaFogCleared ? [] : [BASEMENT_SPA_HIDDEN_MASK]
         });
       } else if (!basement.flamethrowerPickedUp) {
         ctx.fillStyle = "#fb923c";
@@ -9457,16 +10969,29 @@
       if (upstairs.rosannaCutscene?.active) {
         const cs = upstairs.rosannaCutscene;
         const stepPhase = Math.floor(cs.walkTimer * 10) % 4;
-        const frameCol = stepPhase === 1 ? 1 : stepPhase === 3 ? 2 : 0;
-        const rightDirRow = DIRECTION_TO_ROW.right;
+        const frameCol = cs.phase === "jumping" ? stepPhase === 1 ? 1 : stepPhase === 3 ? 2 : 0 : 0;
+        const downDirRow = DIRECTION_TO_ROW.down;
         ctx.drawImage(
           assets.santaSprite,
           frameCol * TILE_SIZE,
-          rightDirRow * TILE_SIZE,
+          downDirRow * TILE_SIZE,
           TILE_SIZE,
           TILE_SIZE,
           Math.round(cs.santaX),
-          Math.round(cs.santaY),
+          Math.round(cs.santaY - cs.santaZ * 0.5),
+          TILE_SIZE,
+          TILE_SIZE
+        );
+      } else if (upstairs.rosannaSpawned && upstairs.rosannaCombat.mode !== "dead") {
+        const downDirRow = DIRECTION_TO_ROW.down;
+        ctx.drawImage(
+          assets.santaSprite,
+          0,
+          downDirRow * TILE_SIZE,
+          TILE_SIZE,
+          TILE_SIZE,
+          Math.round(upstairs.rosannaNpc.x - 2),
+          Math.round(upstairs.rosannaNpc.y - 4),
           TILE_SIZE,
           TILE_SIZE
         );
@@ -9519,6 +11044,24 @@
           // bright gold ribbon
         );
       }
+      if (!state.player.states.get(C4_TAKEN_STATE_KEY)) {
+        drawC4Explosive(
+          ctx,
+          UPSTAIRS_C4_BOUNDS.x + 1,
+          UPSTAIRS_C4_BOUNDS.y + 1,
+          state.elapsedTime,
+          false
+        );
+      }
+      if (state.player.states.get(C4_PLACED_STATE_KEY)) {
+        drawC4Explosive(
+          ctx,
+          3.1 * TILE_SIZE - 5,
+          15.6 * TILE_SIZE - 4,
+          state.elapsedTime,
+          true
+        );
+      }
       const isDianaDistracted = Boolean(
         state.player.states.get(DIANA_DISTRACTED_KEY)
       );
@@ -9565,10 +11108,10 @@
       ctx.fillStyle = "#f0ece0";
       ctx.fillRect(Math.round(upstairs.anneMarieNpc.x + 4), Math.round(upstairs.anneMarieNpc.y + 8), 3, 2);
       const isTableRoomDoorOpen = !upstairs.doors.some(
-        (d) => d.id === "upstairs-table-room-door"
+        (d) => d.id === "upstairs-table-room-door" && d.hiddenRegions.length > 0
       );
       const isBedroomDoorOpen = !upstairs.doors.some(
-        (d) => d.id === "upstairs-bedroom-door"
+        (d) => d.id === "upstairs-bedroom-door" && d.hiddenRegions.length > 0
       );
       const upstairsCones = [
         upstairs.albinCone,
@@ -9681,10 +11224,81 @@
       ctx.fillRect(Math.round(drop.x - 3), Math.round(drop.y - 2), 6, 4);
       ctx.restore();
     }
+    for (const drop of state.droppedKatanas) {
+      if (drop.levelId !== state.currentLevelId) continue;
+      ctx.fillStyle = "#e2e8f0";
+      ctx.fillRect(Math.round(drop.x - 5), Math.round(drop.y - 1), 10, 2);
+    }
+    for (const drop of state.droppedFlamethrowers) {
+      if (drop.levelId !== state.currentLevelId) continue;
+      ctx.fillStyle = "#dc2626";
+      ctx.fillRect(Math.round(drop.x - 4), Math.round(drop.y - 2), 8, 4);
+      ctx.fillStyle = "#fb923c";
+      ctx.fillRect(Math.round(drop.x + 3), Math.round(drop.y - 1), 3, 2);
+    }
+    for (const drop of state.droppedBazookas) {
+      if (drop.levelId !== state.currentLevelId) continue;
+      ctx.fillStyle = "#485c36";
+      ctx.fillRect(Math.round(drop.x - 6), Math.round(drop.y - 2), 12, 4);
+      ctx.fillStyle = "#d42e26";
+      ctx.fillRect(Math.round(drop.x + 5), Math.round(drop.y - 1), 2, 2);
+    }
+    for (const wall of state.destroyingWalls) {
+      if (wall.levelId !== state.currentLevelId) continue;
+      const p = Math.max(0, Math.min(1, wall.elapsed / Math.max(0.01, wall.duration)));
+      ctx.save();
+      ctx.globalAlpha = 1 - p;
+      ctx.fillStyle = "#121218";
+      ctx.fillRect(wall.col * TILE_SIZE, wall.row * TILE_SIZE, TILE_SIZE, Math.max(1, Math.round(TILE_SIZE * (1 - p))));
+      ctx.restore();
+    }
+    for (const d of state.destroyingDoors) {
+      if (d.levelId !== state.currentLevelId) continue;
+      const p = Math.max(0, Math.min(1, d.elapsed / Math.max(0.01, d.duration)));
+      ctx.save();
+      ctx.globalAlpha = 1 - p;
+      ctx.fillStyle = "#121218";
+      ctx.fillRect(d.bounds.x, d.bounds.y, d.bounds.width, Math.max(1, Math.round(d.bounds.height * (1 - p))));
+      ctx.restore();
+    }
+    for (const key of state.blackenedWalls) {
+      const prefix = `${state.currentLevelId}:`;
+      if (!key.startsWith(prefix)) continue;
+      const [cStr, rStr] = key.slice(prefix.length).split(",");
+      ctx.fillStyle = "rgba(16, 16, 20, 0.82)";
+      ctx.fillRect(Number(cStr) * TILE_SIZE, Number(rStr) * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    }
+    for (const exp of state.explosions) {
+      if (exp.levelId !== state.currentLevelId || exp.timer <= 0) continue;
+      const expAlpha = Math.max(0, Math.min(1, exp.timer / Math.max(0.01, exp.maxTimer)));
+      const r = 6 + (1 - expAlpha) * 18;
+      ctx.save();
+      ctx.globalAlpha = expAlpha * 0.75;
+      ctx.fillStyle = "#fb923c";
+      ctx.beginPath();
+      ctx.arc(Math.round(exp.x), Math.round(exp.y), r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    for (const medkit of state.medkits) {
+      if (medkit.levelId !== state.currentLevelId) continue;
+      if (medkit.id === "basement-spa-medkit" && state.levels["level-basement"].spaDoorClosed && !state.levels["level-basement"].spaFogCleared) {
+        continue;
+      }
+      ctx.strokeStyle = "#22c55e";
+      ctx.beginPath();
+      ctx.arc(Math.round(medkit.x), Math.round(medkit.y), 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillRect(Math.round(medkit.x - 4), Math.round(medkit.y - 3), 8, 6);
+      ctx.fillStyle = "#ef4444";
+      ctx.fillRect(Math.round(medkit.x - 1), Math.round(medkit.y - 2), 2, 4);
+      ctx.fillRect(Math.round(medkit.x - 2), Math.round(medkit.y - 1), 4, 2);
+    }
     if (state.projectiles.length > 0) {
       for (const p of state.projectiles) {
-        ctx.fillStyle = p.kind === "fireball" ? "#fb923c" : "#fde047";
-        const sz = p.kind === "fireball" ? 5 : 3;
+        ctx.fillStyle = p.kind === "fireball" ? "#fb923c" : p.kind === "rocket" ? "#ef4444" : "#fde047";
+        const sz = p.kind === "fireball" || p.kind === "rocket" ? 5 : 3;
         ctx.fillRect(Math.round(p.x - sz / 2), Math.round(p.y - sz / 2), sz, sz);
       }
     }
@@ -10109,21 +11723,22 @@ void main() {
     }
     getOrCreateStaticLevelBuffers(state) {
       const existing = this.staticLevelBuffers.get(state.currentLevelId);
-      if (existing) return existing;
+      if (existing && existing.mapVersion === state.mapVersion) return existing;
       const gl = this.gl;
-      const mesh = getStaticLevelMesh(state.currentLevelId, state.map);
+      const mesh = getStaticLevelMesh(state.currentLevelId, state.map, state);
       const outlineMesh = extractOutlineMesh(mesh);
-      const opaqueBuffer = gl.createBuffer();
+      const opaqueBuffer = existing?.opaqueBuffer ?? gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, opaqueBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);
-      const outlineBuffer = gl.createBuffer();
+      const outlineBuffer = existing?.outlineBuffer ?? gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, outlineBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, outlineMesh.vertices, gl.STATIC_DRAW);
       const entry = {
         opaqueBuffer,
         opaqueVertexCount: mesh.vertexCount,
         outlineBuffer,
-        outlineVertexCount: outlineMesh.vertexCount
+        outlineVertexCount: outlineMesh.vertexCount,
+        mapVersion: state.mapVersion
       };
       this.staticLevelBuffers.set(state.currentLevelId, entry);
       return entry;
@@ -11646,6 +13261,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
   var BULLET_HOLE_DURATION_SECONDS = 10;
   var BLOOD_POOL_DURATION_SECONDS = 20;
   var PLAYER_DROPPED_UZI_DURATION_SECONDS = 3;
+  var MEDKIT_HEAL_AMOUNT = 25;
+  var WALL_DESTRUCTION_DURATION_SECONDS = 1;
+  var ROCKET_WALL_BLAST_RADIUS = 1 * TILE_SIZE;
   function syncOutsideToLevel(state) {
     const outside = state.levels["level-outside"];
     outside.dog = state.dog;
@@ -11682,6 +13300,28 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
     const isBusyOutside = state.currentLevelId === "level-outside" && (state.climbing !== null || state.motorcycle.status === "driving" || state.electrocutionTimer > 0);
     const isBusyUpstairs = state.currentLevelId === "level-upstairs" && state.levels["level-upstairs"].rosannaCutscene?.active === true;
     state.nearbyInteractable = isBusyOutside || isBusyUpstairs ? null : findNearbyInteractable(state.player, state.interactables);
+    if (!state.nearbyInteractable && !isBusyOutside && !isBusyUpstairs && state.player.equippedItem === "uzi" && state.player.unlockedUzi && !state.player.uziDepleted) {
+      for (const floorUzi of state.droppedUzis) {
+        if (!floorUzi.pickupable || floorUzi.levelId !== state.currentLevelId) {
+          continue;
+        }
+        const uziRect = {
+          x: floorUzi.x - 7,
+          y: floorUzi.y - 7,
+          width: 14,
+          height: 14
+        };
+        if (rectsIntersect(state.player, uziRect)) {
+          state.nearbyInteractable = {
+            id: "swap-floor-uzi",
+            bounds: uziRect,
+            promptText: "Swap Uzi",
+            dialogueLines: []
+          };
+          break;
+        }
+      }
+    }
   }
   function loadLevel(state, levelId) {
     if (state.currentLevelId === "level-outside") {
@@ -11826,6 +13466,23 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       bloodParticles: [],
       bloodPools: [],
       droppedUzis: [],
+      droppedFlamethrowers: [],
+      droppedKatanas: [],
+      droppedBazookas: [],
+      medkits: [
+        {
+          id: "basement-spa-medkit",
+          levelId: "level-basement",
+          x: BASEMENT_SPA_MEDKIT_POS.x,
+          y: BASEMENT_SPA_MEDKIT_POS.y,
+          z: 0
+        }
+      ],
+      explosions: [],
+      destroyingWalls: [],
+      destroyingDoors: [],
+      blackenedWalls: /* @__PURE__ */ new Set(),
+      mapVersion: 0,
       burningNpcs: /* @__PURE__ */ new Set(),
       hasLadder: levelOutside.hasLadder,
       ladderPlaced: levelOutside.ladderPlaced,
@@ -11841,6 +13498,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       debugMode,
       cheatMode,
       worldFadedToBlack,
+      houseExploding: false,
+      houseExplosionTimer: 0,
+      houseExplosionSpawnAccum: 0,
       screenFade: null,
       secretSantaDB
     };
@@ -12112,6 +13772,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       if (upstairs.anneMarieCombat.mode !== "dead") {
         addTarget("upstairs:Anne-Marie", upstairs.anneMarieNpc);
       }
+      if (upstairs.rosannaSpawned && upstairs.rosannaCombat.mode !== "dead") {
+        addTarget("upstairs:Rosanna", upstairs.rosannaNpc);
+      }
     } else if (state.currentLevelId === "level-people") {
       for (const npc of state.levels["level-people"].npcs) {
         addTarget(`people:${npc.name}`, npc.bounds);
@@ -12171,14 +13834,51 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         maxAge: 999999
       });
       const rightAngle = npc.aimYaw + Math.PI / 2;
-      state.droppedUzis.push({
-        levelId: state.currentLevelId,
-        x: hitX + Math.cos(rightAngle) * 5.2,
-        y: hitY + Math.sin(rightAngle) * 5.2,
-        z: groundZ,
-        yaw: npc.aimYaw + 0.4,
-        pickupable: true
-      });
+      if (npc.weapon === "katana") {
+        state.droppedKatanas.push({
+          levelId: state.currentLevelId,
+          x: hitX + Math.cos(rightAngle) * 5.2,
+          y: hitY + Math.sin(rightAngle) * 5.2,
+          z: groundZ,
+          yaw: npc.aimYaw + 0.4
+        });
+      } else if (npc.weapon === "flamethrower") {
+        state.droppedFlamethrowers.push({
+          levelId: state.currentLevelId,
+          x: hitX + Math.cos(rightAngle) * 5.2,
+          y: hitY + Math.sin(rightAngle) * 5.2,
+          z: groundZ,
+          yaw: npc.aimYaw + 0.4,
+          ammo: DROPPED_FLAMETHROWER_AMMO
+        });
+      } else if (npc.weapon === "bazooka") {
+        state.droppedBazookas.push({
+          levelId: state.currentLevelId,
+          x: hitX + Math.cos(rightAngle) * 5.2,
+          y: hitY + Math.sin(rightAngle) * 5.2,
+          z: groundZ,
+          yaw: npc.aimYaw + 0.4
+        });
+      } else if (npc.weapon === "uzi") {
+        state.droppedUzis.push({
+          levelId: state.currentLevelId,
+          x: hitX + Math.cos(rightAngle) * 5.2,
+          y: hitY + Math.sin(rightAngle) * 5.2,
+          z: groundZ,
+          yaw: npc.aimYaw + 0.4,
+          pickupable: true,
+          ammo: MAX_UZI_AMMO
+        });
+      }
+      if (key === "basement:Olexa") {
+        state.medkits.push({
+          id: "olexa-drop-medkit",
+          levelId: state.currentLevelId,
+          x: hitX - Math.cos(rightAngle) * 5.5,
+          y: hitY - Math.sin(rightAngle) * 5.5,
+          z: groundZ
+        });
+      }
     }
   }
   function fireNpcUziProjectile(state, npc, originX, originY, aimYaw) {
@@ -12205,6 +13905,379 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       fromRoof: false
     });
   }
+  function fireNpcFlamethrowerProjectile(state, npc, originX, originY, aimYaw) {
+    const rightAngle = aimYaw + Math.PI / 2;
+    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+    const spawnX = originX + Math.cos(aimYaw) * 8.5 + Math.cos(rightAngle) * 3.5;
+    const spawnY = originY + Math.sin(aimYaw) * 8.5 + Math.sin(rightAngle) * 3.5;
+    const spawnZ = groundZ + 9.5;
+    state.projectiles.push({
+      kind: "fireball",
+      owner: "npc",
+      sourceNpcKey: npc.key,
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+      vy: Math.sin(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+      vz: 0,
+      yaw: aimYaw,
+      distanceTraveled: 0,
+      maxDistance: FLAMETHROWER_MAX_DISTANCE,
+      fromRoof: false
+    });
+  }
+  function fireNpcBazookaProjectile(state, originX, originY, aimYaw, sourceNpcKey, cutsceneShot = false) {
+    const rightAngle = aimYaw + Math.PI / 2;
+    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+    const spawnX = originX + Math.cos(aimYaw) * 9 + Math.cos(rightAngle) * 3;
+    const spawnY = originY + Math.sin(aimYaw) * 9 + Math.sin(rightAngle) * 3;
+    const spawnZ = groundZ + 11.5;
+    state.projectiles.push({
+      kind: "rocket",
+      owner: "npc",
+      sourceNpcKey,
+      cutsceneShot,
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+      vy: Math.sin(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+      vz: 0,
+      yaw: aimYaw,
+      distanceTraveled: 0,
+      maxDistance: 320,
+      fromRoof: false
+    });
+  }
+  function isOuterBorderWallTile(levelId, map, col, row) {
+    if (levelId === "level-basement" && row === 7 && col >= 6 && col <= 12) {
+      return true;
+    }
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = row + dr;
+        const nc = col + dc;
+        if (nr < 0 || nc < 0 || nr >= map.rows || nc >= map.cols) {
+          return true;
+        }
+        if (map.tiles[nr][nc] === 20 /* VoidBlack */) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  function getDestroyedWallReplacementTile(map, col, row) {
+    const floorCandidates = [
+      18 /* BathroomTileFloor */,
+      17 /* StoneTileFloor */,
+      16 /* WoodFloor */,
+      19 /* StairsFloor */
+    ];
+    for (const [dc, dr] of [
+      [0, 1],
+      [0, -1],
+      [-1, 0],
+      [1, 0]
+    ]) {
+      const t = map.tiles[row + dr]?.[col + dc];
+      if (t !== void 0 && floorCandidates.includes(t)) {
+        return t;
+      }
+    }
+    return 16 /* WoodFloor */;
+  }
+  function distancePointToRect(x, y, r) {
+    const dx = Math.max(r.x - x, 0, x - (r.x + r.width));
+    const dy = Math.max(r.y - y, 0, y - (r.y + r.height));
+    return Math.hypot(dx, dy);
+  }
+  function applyRocketExplosionToWallsAndDoors(state, x, y) {
+    const levelId = state.currentLevelId;
+    if (levelId !== "level-basement" && levelId !== "level-upstairs") {
+      return;
+    }
+    const map = state.map;
+    const ts = map.tileSize;
+    const minCol = Math.max(0, Math.floor((x - ROCKET_WALL_BLAST_RADIUS) / ts));
+    const maxCol = Math.min(
+      map.cols - 1,
+      Math.floor((x + ROCKET_WALL_BLAST_RADIUS) / ts)
+    );
+    const minRow = Math.max(0, Math.floor((y - ROCKET_WALL_BLAST_RADIUS) / ts));
+    const maxRow = Math.min(
+      map.rows - 1,
+      Math.floor((y + ROCKET_WALL_BLAST_RADIUS) / ts)
+    );
+    let changed = false;
+    const activeLevel = getActiveLevel(state);
+    const levelDoors = levelId === "level-basement" ? state.levels["level-basement"].doors : state.levels["level-upstairs"].doors;
+    const revealRoomsTouchingRect = (rect) => {
+      const expanded = {
+        x: rect.x - ts - 2,
+        y: rect.y - ts - 2,
+        width: rect.width + ts * 2 + 4,
+        height: rect.height + ts * 2 + 4
+      };
+      for (const d of levelDoors) {
+        if (d.hiddenRegions.some((hr) => rectsIntersect(expanded, hr))) {
+          d.hiddenRegions = [];
+          changed = true;
+        }
+      }
+      if (levelId === "level-basement" && !state.levels["level-basement"].spaFogCleared && rectsIntersect(expanded, BASEMENT_SPA_HIDDEN_MASK)) {
+        state.levels["level-basement"].spaFogCleared = true;
+        changed = true;
+      }
+    };
+    for (let row = minRow; row <= maxRow; row++) {
+      for (let col = minCol; col <= maxCol; col++) {
+        if (map.tiles[row]?.[col] !== 21 /* InteriorWall */) continue;
+        const tileRect = {
+          x: col * ts,
+          y: row * ts,
+          width: ts,
+          height: ts
+        };
+        if (distancePointToRect(x, y, tileRect) > ROCKET_WALL_BLAST_RADIUS) {
+          continue;
+        }
+        if (isOuterBorderWallTile(levelId, map, col, row)) {
+          const key = `${levelId}:${col},${row}`;
+          if (!state.blackenedWalls.has(key)) {
+            state.blackenedWalls.add(key);
+            changed = true;
+          }
+        } else {
+          const alreadyDestroying = state.destroyingWalls.some(
+            (w) => w.levelId === levelId && w.col === col && w.row === row
+          );
+          if (!alreadyDestroying) {
+            state.destroyingWalls.push({
+              levelId,
+              col,
+              row,
+              elapsed: 0,
+              duration: WALL_DESTRUCTION_DURATION_SECONDS,
+              replacementTile: getDestroyedWallReplacementTile(map, col, row)
+            });
+            changed = true;
+          }
+          revealRoomsTouchingRect(tileRect);
+        }
+      }
+    }
+    for (const door of levelDoors) {
+      if (distancePointToRect(x, y, door.bounds) <= ROCKET_WALL_BLAST_RADIUS) {
+        if (!state.destroyingDoors.some(
+          (d) => d.levelId === levelId && d.doorId === door.id
+        )) {
+          state.destroyingDoors.push({
+            levelId,
+            doorId: door.id,
+            bounds: { ...door.bounds },
+            elapsed: 0,
+            duration: WALL_DESTRUCTION_DURATION_SECONDS
+          });
+          door.hiddenRegions = [];
+          changed = true;
+        }
+      }
+    }
+    if (levelId === "level-basement") {
+      const basement = state.levels["level-basement"];
+      if (basement.spaDoorClosed && distancePointToRect(x, y, BASEMENT_HALL_NORTH_DOOR_BOUNDS) <= ROCKET_WALL_BLAST_RADIUS && !state.destroyingDoors.some(
+        (d) => d.levelId === "level-basement" && d.doorId === "basement-hall-north-door"
+      )) {
+        state.destroyingDoors.push({
+          levelId: "level-basement",
+          doorId: "basement-hall-north-door",
+          bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
+          elapsed: 0,
+          duration: WALL_DESTRUCTION_DURATION_SECONDS
+        });
+        basement.spaFogCleared = true;
+        changed = true;
+      }
+      if (distancePointToRect(x, y, BASEMENT_FRONT_DOOR_BOUNDS) <= ROCKET_WALL_BLAST_RADIUS) {
+        for (const fc of [15, 16]) {
+          const key = `level-basement:${fc},20`;
+          if (!state.blackenedWalls.has(key)) {
+            state.blackenedWalls.add(key);
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed) {
+      state.mapVersion += 1;
+    }
+  }
+  function damageUpstairsCat(state, rawDamage) {
+    if (state.currentLevelId !== "level-upstairs") return;
+    const cat = state.levels["level-upstairs"].cat;
+    if (!applyCatDamage(cat, rawDamage)) return;
+    const ccx = cat.x + cat.width * 0.5;
+    const ccy = cat.y + cat.height * 0.5;
+    const groundZ = getTerrainHeight(ccx, ccy, state.currentLevelId);
+    spawnNpcBlood(state, ccx, ccy, groundZ + cat.jumpZ);
+  }
+  var UPSTAIRS_HOUSE_EXPLOSION_SPOTS = [
+    [3, 15],
+    [6, 13],
+    [4, 7],
+    [11, 7],
+    [14, 11],
+    [18, 7],
+    [24, 7],
+    [22, 15],
+    [26, 15],
+    [11, 18]
+  ];
+  function spawnHouseExplosionWave(state, jitter) {
+    const ts = state.map.tileSize;
+    for (const [col, row] of UPSTAIRS_HOUSE_EXPLOSION_SPOTS) {
+      const jx = jitter ? (Math.random() - 0.5) * ts * 1.4 : 0;
+      const jy = jitter ? (Math.random() - 0.5) * ts * 1.4 : 0;
+      const jz = jitter ? Math.random() * 10 : 0;
+      state.explosions.push({
+        levelId: "level-upstairs",
+        x: (col + 0.5) * ts + jx,
+        y: (row + 0.5) * ts + jy,
+        z: jz,
+        timer: 0.65,
+        maxTimer: 0.65
+      });
+    }
+  }
+  function triggerUpstairsHouseExplosion(state) {
+    state.houseExploding = true;
+    state.houseExplosionTimer = 2;
+    state.houseExplosionSpawnAccum = 0;
+    spawnHouseExplosionWave(state, false);
+    const upstairs = state.levels["level-upstairs"];
+    const map = upstairs.map;
+    let changed = false;
+    for (let row = 0; row < map.rows; row++) {
+      for (let col = 0; col < map.cols; col++) {
+        if (map.tiles[row]?.[col] !== 21 /* InteriorWall */) continue;
+        if (isOuterBorderWallTile("level-upstairs", map, col, row)) {
+          const key = `level-upstairs:${col},${row}`;
+          if (!state.blackenedWalls.has(key)) {
+            state.blackenedWalls.add(key);
+            changed = true;
+          }
+        } else {
+          const alreadyDestroying = state.destroyingWalls.some(
+            (w) => w.levelId === "level-upstairs" && w.col === col && w.row === row
+          );
+          if (!alreadyDestroying) {
+            state.destroyingWalls.push({
+              levelId: "level-upstairs",
+              col,
+              row,
+              elapsed: 0,
+              duration: WALL_DESTRUCTION_DURATION_SECONDS,
+              replacementTile: getDestroyedWallReplacementTile(map, col, row)
+            });
+            changed = true;
+          }
+        }
+      }
+    }
+    for (const door of upstairs.doors) {
+      door.hiddenRegions = [];
+      if (!state.destroyingDoors.some(
+        (d) => d.levelId === "level-upstairs" && d.doorId === door.id
+      )) {
+        state.destroyingDoors.push({
+          levelId: "level-upstairs",
+          doorId: door.id,
+          bounds: { ...door.bounds },
+          elapsed: 0,
+          duration: WALL_DESTRUCTION_DURATION_SECONDS
+        });
+        changed = true;
+      }
+    }
+    if (changed) {
+      state.mapVersion += 1;
+    }
+  }
+  function detonateRocket(state, x, y, cutsceneShot = false, sourceNpcKey, owner = "npc") {
+    const groundZ = getTerrainHeight(x, y, state.currentLevelId);
+    state.explosions.push({
+      levelId: state.currentLevelId,
+      x,
+      y,
+      z: groundZ,
+      timer: 0.65,
+      maxTimer: 0.65
+    });
+    applyRocketExplosionToWallsAndDoors(state, x, y);
+    if (!cutsceneShot) {
+      if (owner === "npc") {
+        const playerCx = state.player.x + state.player.width * 0.5;
+        const playerCy = state.player.y + state.player.height * 0.5;
+        if (Math.hypot(playerCx - x, playerCy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+          damagePlayer(state, BASEMENT_MINE_EXPLOSION_DAMAGE);
+        }
+      }
+      if (owner === "player" && state.currentLevelId === "level-upstairs") {
+        const cat = state.levels["level-upstairs"].cat;
+        if (cat.mode !== "dead") {
+          const ccx = cat.x + cat.width * 0.5;
+          const ccy = cat.y + cat.height * 0.5;
+          if (Math.hypot(ccx - x, ccy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+            damageUpstairsCat(state, BASEMENT_MINE_EXPLOSION_DAMAGE);
+          }
+        }
+      }
+      for (const target of getLevelNpcTargets(state)) {
+        if (target.key === sourceNpcKey) continue;
+        const ncx = target.rect.x + target.rect.width * 0.5;
+        const ncy = target.rect.y + target.rect.height * 0.5;
+        if (Math.hypot(ncx - x, ncy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+          damageArmedNpc(
+            state,
+            target.key,
+            BASEMENT_MINE_EXPLOSION_DAMAGE,
+            ncx,
+            ncy,
+            target.groundZ
+          );
+        }
+      }
+    }
+  }
+  function checkKatanaNpcHit(state) {
+    const player = state.player;
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const cx = player.x + player.width * 0.5 + Math.cos(aimYaw) * 10;
+    const cy = player.y + player.height * 0.5 + Math.sin(aimYaw) * 10;
+    const slashRect = {
+      x: cx - 15,
+      y: cy - 15,
+      width: 30,
+      height: 30
+    };
+    for (const target of getLevelNpcTargets(state)) {
+      if (rectsIntersect(slashRect, target.rect)) {
+        const ncx = target.rect.x + target.rect.width * 0.5;
+        const ncy = target.rect.y + target.rect.height * 0.5;
+        spawnNpcBlood(state, ncx, ncy, target.groundZ);
+        damageArmedNpc(state, target.key, PLAYER_KATANA_NPC_DAMAGE, ncx, ncy, target.groundZ);
+      }
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      const cat = state.levels["level-upstairs"].cat;
+      if (cat.mode !== "dead" && rectsIntersect(slashRect, cat)) {
+        damageUpstairsCat(state, PLAYER_KATANA_NPC_DAMAGE);
+      }
+    }
+  }
   function checkPunchNpcHit(state) {
     const player = state.player;
     const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
@@ -12222,6 +14295,12 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         const ncy = target.rect.y + target.rect.height * 0.5;
         spawnNpcBlood(state, ncx, ncy, target.groundZ);
         damageArmedNpc(state, target.key, PLAYER_PUNCH_NPC_DAMAGE, ncx, ncy, target.groundZ);
+      }
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      const cat = state.levels["level-upstairs"].cat;
+      if (cat.mode !== "dead" && rectsIntersect(punchRect, cat)) {
+        damageUpstairsCat(state, PLAYER_PUNCH_NPC_DAMAGE);
       }
     }
   }
@@ -12246,6 +14325,44 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         if (drop.age >= drop.maxAge) {
           state.droppedUzis.splice(i, 1);
         }
+      }
+    }
+    for (let i = state.explosions.length - 1; i >= 0; i--) {
+      state.explosions[i].timer -= dtSeconds;
+      if (state.explosions[i].timer <= 0) {
+        state.explosions.splice(i, 1);
+      }
+    }
+    for (let i = state.destroyingWalls.length - 1; i >= 0; i--) {
+      const wall = state.destroyingWalls[i];
+      wall.elapsed += dtSeconds;
+      if (wall.elapsed >= wall.duration) {
+        const lvl = state.levels[wall.levelId];
+        lvl.map.tiles[wall.row][wall.col] = wall.replacementTile;
+        if (state.currentLevelId === wall.levelId) {
+          state.map.tiles[wall.row][wall.col] = wall.replacementTile;
+        }
+        state.destroyingWalls.splice(i, 1);
+        state.mapVersion += 1;
+      }
+    }
+    for (let i = state.destroyingDoors.length - 1; i >= 0; i--) {
+      const d = state.destroyingDoors[i];
+      d.elapsed += dtSeconds;
+      if (d.elapsed >= d.duration) {
+        if (d.levelId === "level-basement") {
+          const basement = state.levels["level-basement"];
+          if (d.doorId === "basement-hall-north-door") {
+            basement.spaDoorClosed = false;
+          } else {
+            basement.doors = basement.doors.filter((dr) => dr.id !== d.doorId);
+          }
+        } else if (d.levelId === "level-upstairs") {
+          const upstairs = state.levels["level-upstairs"];
+          upstairs.doors = upstairs.doors.filter((dr) => dr.id !== d.doorId);
+        }
+        state.destroyingDoors.splice(i, 1);
+        state.mapVersion += 1;
       }
     }
     if (state.burningNpcs.size > 0) {
@@ -12308,15 +14425,36 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         p.z += (p.vz ?? 0) * subDt;
         p.distanceTraveled = (p.distanceTraveled ?? 0) + stepSpeed * subDt;
         if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
+          if (p.kind === "rocket") {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              p.cutsceneShot,
+              p.sourceNpcKey,
+              p.owner ?? "npc"
+            );
+          }
           removed = true;
           break;
         }
         if (typeof p.maxDistance === "number" && p.distanceTraveled >= p.maxDistance) {
+          if (p.kind === "rocket") {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              p.cutsceneShot,
+              p.sourceNpcKey,
+              p.owner ?? "npc"
+            );
+          }
           removed = true;
           break;
         }
         const isFireball = p.kind === "fireball";
-        const projRect = isFireball ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 } : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
+        const isRocket = p.kind === "rocket";
+        const projRect = isFireball || isRocket ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 } : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
         if (isFireball && state.currentLevelId === "level-basement") {
           const basement = state.levels["level-basement"];
           if (basement.igniteStairsWoodAt(projRect)) {
@@ -12324,9 +14462,13 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
             break;
           }
         }
-        if (p.owner === "npc") {
+        if (p.owner === "npc" && !p.cutsceneShot) {
           if (rectsIntersect(projRect, state.player)) {
-            damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
+            if (isRocket) {
+              detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, "npc");
+            } else {
+              damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
+            }
             removed = true;
             break;
           }
@@ -12334,9 +14476,22 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         const hitNpc = npcTargets.find(
           (t) => t.key !== p.sourceNpcKey && rectsIntersect(projRect, t.rect)
         );
-        if (hitNpc) {
-          if (isFireball) {
+        if (hitNpc && !p.cutsceneShot) {
+          if (isRocket) {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              false,
+              p.sourceNpcKey,
+              p.owner ?? "npc"
+            );
+          } else if (isFireball) {
             state.burningNpcs.add(hitNpc.key);
+            const armed = getArmedNpcByKey(state, hitNpc.key);
+            if (armed) {
+              igniteNpc(armed);
+            }
             damageArmedNpc(
               state,
               hitNpc.key,
@@ -12361,6 +14516,27 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           removed = true;
           break;
         }
+        if (p.owner !== "npc" && !p.cutsceneShot && state.currentLevelId === "level-upstairs") {
+          const cat = state.levels["level-upstairs"].cat;
+          if (cat.mode !== "dead" && rectsIntersect(projRect, cat)) {
+            if (isRocket) {
+              detonateRocket(
+                state,
+                p.x,
+                p.y,
+                false,
+                p.sourceNpcKey,
+                p.owner ?? "player"
+              );
+            } else if (isFireball) {
+              damageUpstairsCat(state, PLAYER_FIREBALL_NPC_DAMAGE);
+            } else {
+              damageUpstairsCat(state, PLAYER_UZI_NPC_DAMAGE);
+            }
+            removed = true;
+            break;
+          }
+        }
         if (p.fromRoof) {
           const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
           const hitTallTreeOrEdge = isRectCollidingWithMap(
@@ -12373,7 +14549,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
             (c, r) => c >= 0 && r >= 0 && c < state.map.cols && r < state.map.rows && state.map.tiles[r][c] !== 1 /* Tree */
           );
           if (hitChimney || hitTallTreeOrEdge) {
-            if (!isFireball) {
+            if (!isFireball && !isRocket) {
               state.bulletHoles.push({
                 levelId: state.currentLevelId,
                 x: p.x,
@@ -12382,6 +14558,15 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
                 age: 0,
                 maxAge: BULLET_HOLE_DURATION_SECONDS
               });
+            } else if (isRocket) {
+              detonateRocket(
+                state,
+                p.x,
+                p.y,
+                p.cutsceneShot,
+                p.sourceNpcKey,
+                p.owner ?? "npc"
+              );
             }
             removed = true;
             break;
@@ -12394,10 +14579,16 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           projRect.y,
           projRect.width,
           projRect.height,
-          true
+          true,
+          p.cutsceneShot ? (c, r) => {
+            const tile = state.map.tiles[r]?.[c];
+            if (r < 5) return true;
+            if (tile === 22 /* FurnitureSolid */) return true;
+            return false;
+          } : void 0
         );
         const sourceNpcTarget = p.sourceNpcKey ? npcTargets.find((t) => t.key === p.sourceNpcKey) : void 0;
-        const hitObstacle = obstacles.some((obs) => {
+        const hitObstacle = p.cutsceneShot ? false : obstacles.some((obs) => {
           if (sourceNpcTarget && obs.x === sourceNpcTarget.rect.x && obs.y === sourceNpcTarget.rect.y && obs.width === sourceNpcTarget.rect.width && obs.height === sourceNpcTarget.rect.height) {
             return false;
           }
@@ -12405,7 +14596,16 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         });
         const hitOutsideDynamic = state.currentLevelId === "level-outside" && (rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle));
         if (hitMap || hitObstacle || hitOutsideDynamic) {
-          if (!isFireball && (hitMap || hitObstacle)) {
+          if (isRocket) {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              p.cutsceneShot,
+              p.sourceNpcKey,
+              p.owner ?? "npc"
+            );
+          } else if (!isFireball && (hitMap || hitObstacle)) {
             state.bulletHoles.push({
               levelId: state.currentLevelId,
               x: p.x,
@@ -12476,6 +14676,12 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
   }
   function fireFlamethrowerProjectile(state) {
     const player = state.player;
+    if (player.flamethrowerAmmo <= 0) {
+      return;
+    }
+    if (Number.isFinite(player.flamethrowerAmmo)) {
+      player.flamethrowerAmmo = Math.max(0, player.flamethrowerAmmo - 1);
+    }
     const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
     const rightAngle = aimYaw + Math.PI / 2;
     const cx = player.x + player.width * 0.5;
@@ -12502,6 +14708,33 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       player.weaponVibrationTimer,
       FLAMETHROWER_FIRE_INTERVAL_SECONDS + 0.05
     );
+  }
+  function firePlayerBazookaProjectile(state) {
+    const player = state.player;
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const rightAngle = aimYaw + Math.PI / 2;
+    const cx = player.x + player.width * 0.5;
+    const cy = player.y + player.height * 0.5;
+    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
+    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
+    const spawnX = cx + Math.cos(aimYaw) * 9 + Math.cos(rightAngle) * 3;
+    const spawnY = cy + Math.sin(aimYaw) * 9 + Math.sin(rightAngle) * 3;
+    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 11.5;
+    state.projectiles.push({
+      kind: "rocket",
+      owner: "player",
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+      vy: Math.sin(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+      vz: 0,
+      yaw: aimYaw,
+      distanceTraveled: 0,
+      maxDistance: 320,
+      fromRoof: onRoof
+    });
+    player.weaponVibrationTimer = Math.max(player.weaponVibrationTimer, 0.25);
   }
   function updateGameState(state, input, dtSeconds) {
     const safeDt = Math.max(0, dtSeconds);
@@ -12558,6 +14791,20 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         }
       }
     }
+    if (state.houseExploding) {
+      updateEffectTimers(state, dtSeconds);
+      if (state.houseExplosionTimer > 0) {
+        state.houseExplosionTimer = Math.max(0, state.houseExplosionTimer - dtSeconds);
+        state.houseExplosionSpawnAccum += dtSeconds;
+        while (state.houseExplosionSpawnAccum >= 0.12) {
+          state.houseExplosionSpawnAccum -= 0.12;
+          spawnHouseExplosionWave(state, true);
+        }
+        if (state.houseExplosionTimer <= 0) {
+          state.worldFadedToBlack = true;
+        }
+      }
+    }
     if (state.activeDialogue) {
       state.player.isMoving = false;
       if (actionPressed) {
@@ -12565,6 +14812,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           return;
         }
         state.activeDialogue.currentIndex += 1;
+        if (state.houseExploding && state.activeDialogue.currentIndex >= 1) {
+          state.worldFadedToBlack = true;
+        }
         if (state.activeDialogue.currentIndex >= state.activeDialogue.lines.length) {
           const onClose = state.activeDialogue.onClose;
           const prevLevel = state.currentLevelId;
@@ -12595,17 +14845,96 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           height: 12
         };
         if (rectsIntersect(state.player, uziRect)) {
+          const pickedAmmo = uzi.ammo ?? MAX_UZI_AMMO;
           state.droppedUzis.splice(i, 1);
           state.player.unlockedUzi = true;
-          state.player.uziDepleted = false;
-          state.player.uziAmmo = MAX_UZI_AMMO;
+          state.player.uziDepleted = pickedAmmo <= 0;
+          state.player.uziAmmo = pickedAmmo;
           state.player.uziDropTimer = 0;
           state.player.uziCheatRefillTimer = 0;
-          state.player.equippedItem = "uzi";
+          state.player.equippedItem = pickedAmmo > 0 ? "uzi" : "empty";
           state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
-          debugLog("Picked up Uzi from fallen NPC (30 rounds)");
+          debugLog(`Picked up Uzi from fallen NPC (${pickedAmmo} rounds)`);
           break;
         }
+      }
+    }
+    for (let i = state.droppedFlamethrowers.length - 1; i >= 0; i--) {
+      const flameDrop = state.droppedFlamethrowers[i];
+      if (flameDrop.levelId !== state.currentLevelId) continue;
+      const flameRect = {
+        x: flameDrop.x - 7,
+        y: flameDrop.y - 7,
+        width: 14,
+        height: 14
+      };
+      if (rectsIntersect(state.player, flameRect)) {
+        state.droppedFlamethrowers.splice(i, 1);
+        state.player.unlockedFlamethrower = true;
+        if (Number.isFinite(state.player.flamethrowerAmmo)) {
+          state.player.flamethrowerAmmo += flameDrop.ammo;
+        } else {
+          state.player.flamethrowerAmmo = flameDrop.ammo;
+        }
+        if (state.player.equippedItem === "empty") {
+          selectPlayerEquipmentSlot(state.player, 4);
+        }
+        debugLog(`Picked up Flamethrower (+${flameDrop.ammo} flames)`);
+        break;
+      }
+    }
+    for (let i = state.droppedKatanas.length - 1; i >= 0; i--) {
+      const katana = state.droppedKatanas[i];
+      if (katana.levelId !== state.currentLevelId) continue;
+      const katanaRect = {
+        x: katana.x - 7,
+        y: katana.y - 7,
+        width: 14,
+        height: 14
+      };
+      if (rectsIntersect(state.player, katanaRect)) {
+        state.droppedKatanas.splice(i, 1);
+        state.player.unlockedKatana = true;
+        selectPlayerEquipmentSlot(state.player, 5);
+        debugLog("Picked up Katana!");
+        break;
+      }
+    }
+    for (let i = state.droppedBazookas.length - 1; i >= 0; i--) {
+      const bazooka = state.droppedBazookas[i];
+      if (bazooka.levelId !== state.currentLevelId) continue;
+      const bazookaRect = {
+        x: bazooka.x - 7,
+        y: bazooka.y - 7,
+        width: 14,
+        height: 14
+      };
+      if (rectsIntersect(state.player, bazookaRect)) {
+        state.droppedBazookas.splice(i, 1);
+        state.player.unlockedBazooka = true;
+        selectPlayerEquipmentSlot(state.player, 6);
+        debugLog("Picked up Bazooka!");
+        break;
+      }
+    }
+    for (let i = state.medkits.length - 1; i >= 0; i--) {
+      const medkit = state.medkits[i];
+      if (medkit.levelId !== state.currentLevelId) continue;
+      if (medkit.id === "basement-spa-medkit" && state.levels["level-basement"].spaDoorClosed) {
+        continue;
+      }
+      if (state.player.health >= MAX_PLAYER_HEALTH) continue;
+      const medkitRect = {
+        x: medkit.x - 7,
+        y: medkit.y - 7,
+        width: 14,
+        height: 14
+      };
+      if (rectsIntersect(state.player, medkitRect)) {
+        state.medkits.splice(i, 1);
+        setPlayerHealth(state.player, state.player.health + MEDKIT_HEAL_AMOUNT);
+        debugLog(`Picked up Medkit (+${MEDKIT_HEAL_AMOUNT} HP)`);
+        break;
       }
     }
     updateEffectTimers(state, dtSeconds);
@@ -12634,6 +14963,16 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       },
       damagePlayer: (amount) => damagePlayer(state, amount),
       fireNpcUzi: (npc, originX, originY, aimYaw) => fireNpcUziProjectile(state, npc, originX, originY, aimYaw),
+      fireNpcFlamethrower: (npc, originX, originY, aimYaw) => fireNpcFlamethrowerProjectile(state, npc, originX, originY, aimYaw),
+      fireNpcBazooka: (npc, originX, originY, aimYaw) => fireNpcBazookaProjectile(state, originX, originY, aimYaw, npc.key, false),
+      fireRosannaCutsceneRocket: (originX, originY, aimYaw) => fireNpcBazookaProjectile(
+        state,
+        originX,
+        originY,
+        aimYaw,
+        "upstairs:Rosanna",
+        true
+      ),
       getSecretSantaReceiver: () => {
         if (!state.secretSantaDB) return void 0;
         const playerName = state.secretSantaDB.playerName;
@@ -12642,6 +14981,9 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       },
       fadeWorldToBlack: () => {
         state.worldFadedToBlack = true;
+      },
+      detonateHouseC4: () => {
+        triggerUpstairsHouseExplosion(state);
       }
     };
     if (state.currentLevelId === "level-outside") {
@@ -12725,12 +15067,14 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
         state.player,
         dtSeconds,
         upstairs.map,
-        upstairs.getSolidObstacles()
+        upstairs.getSolidObstacles(),
+        (damage) => damagePlayer(state, damage)
       );
       if (upstairs.updateCutscene(0, state.player, transitionCtx)) {
         refreshInteractables(state);
         return;
       }
+      upstairs.updateTableRoomAmbush(dtSeconds, state.player);
       upstairs.updateNpcSight(dtSeconds, state.player, transitionCtx);
       if (state.activeDialogue) {
         refreshInteractables(state);
@@ -12760,6 +15104,32 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       );
     }
     refreshInteractables(state);
+    if (actionPressed && state.player.equippedItem === "uzi" && state.player.unlockedUzi && !state.player.uziDepleted) {
+      for (const floorUzi of state.droppedUzis) {
+        if (!floorUzi.pickupable || floorUzi.levelId !== state.currentLevelId) continue;
+        const uziRect = {
+          x: floorUzi.x - 7,
+          y: floorUzi.y - 7,
+          width: 14,
+          height: 14
+        };
+        if (rectsIntersect(state.player, uziRect)) {
+          const prevPlayerAmmo = state.player.uziAmmo;
+          const floorAmmo = floorUzi.ammo ?? MAX_UZI_AMMO;
+          state.player.uziAmmo = floorAmmo;
+          floorUzi.ammo = prevPlayerAmmo;
+          state.player.uziDepleted = floorAmmo <= 0;
+          state.player.equippedItem = state.player.uziDepleted ? "empty" : "uzi";
+          state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+          state.player.uziFireCooldown = 0;
+          state.player.punchTimer = 0;
+          debugLog(
+            `Swapped Uzi on floor (${prevPlayerAmmo} <-> ${floorAmmo} rounds)`
+          );
+          return;
+        }
+      }
+    }
     if (actionPressed && state.nearbyInteractable) {
       const target = state.nearbyInteractable;
       if (state.currentLevelId === "level-outside") {
@@ -12796,6 +15166,12 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
           checkPunchNpcHit(state);
         }
       }
+    } else if (state.player.equippedItem === "katana") {
+      if (attackPressed || !state.nearbyInteractable && actionPressed) {
+        if (triggerPlayerKatanaSwing(state.player)) {
+          checkKatanaNpcHit(state);
+        }
+      }
     } else if (state.player.equippedItem === "uzi") {
       const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
       if (wantsToFire && state.player.uziFireCooldown <= 1e-6) {
@@ -12807,12 +15183,18 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       }
     } else if (state.player.equippedItem === "flamethrower") {
       const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
-      if (wantsToFire && state.player.flamethrowerFireCooldown <= 1e-6) {
+      if (wantsToFire && state.player.flamethrowerFireCooldown <= 1e-6 && state.player.flamethrowerAmmo > 0) {
         state.player.flamethrowerFireCooldown = Math.max(
           0.01,
           FLAMETHROWER_FIRE_INTERVAL_SECONDS - flameCooldownRemainder
         );
         fireFlamethrowerProjectile(state);
+      }
+    } else if (state.player.equippedItem === "bazooka") {
+      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
+      if (wantsToFire && state.player.bazookaFireCooldown <= 1e-6) {
+        state.player.bazookaFireCooldown = BAZOOKA_FIRE_INTERVAL_SECONDS;
+        firePlayerBazookaProjectile(state);
       }
     }
   }

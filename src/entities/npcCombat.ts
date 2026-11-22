@@ -10,8 +10,11 @@ import {
 export const MAX_NPC_HEALTH = 100;
 export const NPC_HOSTILE_LOSE_SIGHT_SECONDS = 5.0;
 export const NPC_HOSTILE_ALERT_SECONDS = 1.0;
+export const NPC_HOSTILE_PROPAGATION_DELAY_SECONDS = 2.0;
 export const NPC_HOSTILE_PATH_RECALC_SECONDS = 1.0;
 export const NPC_HOSTILE_WALK_SPEED = 24; // pixels per second (slow menacing advance)
+export const NPC_BURNING_RUN_SPEED = NPC_HOSTILE_WALK_SPEED * 2; // 2x walk speed while on fire
+export const NPC_BURNING_DIR_INTERVAL_SECONDS = 1.0;
 export const NPC_HOSTILE_STOP_DISTANCE = 18;
 export const NPC_HOSTILE_ALERT_RADIUS = 5 * TILE_SIZE;
 export const NPC_UZI_BULLET_DAMAGE = 5;
@@ -19,22 +22,33 @@ export const NPC_UZI_MAGAZINE_SIZE = 30;
 export const NPC_UZI_RELOAD_SECONDS = 2.5;
 export const PLAYER_UZI_NPC_DAMAGE = 30;
 export const PLAYER_PUNCH_NPC_DAMAGE = 15;
+export const PLAYER_KATANA_NPC_DAMAGE = 50;
 export const PLAYER_FIREBALL_NPC_DAMAGE = 15;
-export const NPC_BURN_DAMAGE_PER_SECOND = 12;
+export const NPC_BURN_DAMAGE_PER_SECOND = 20;
+export const NPC_KATANA_MELEE_DAMAGE = 15;
+export const NPC_KATANA_MELEE_COOLDOWN = 0.45;
+export const NPC_KATANA_MELEE_RANGE = 24;
+export const NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS = 0.12;
+export const NPC_BAZOOKA_SHOT_INTERVAL_SECONDS = 2.4;
+export const NPC_BAZOOKA_ROCKET_SPEED = 75;
 export const NPC_DEATH_FALL_DURATION = 0.45;
 
-export type NpcCombatMode = 'passive' | 'hostile' | 'dead';
+export type NpcWeapon = 'uzi' | 'katana' | 'flamethrower' | 'bazooka';
+export type NpcCombatMode = 'passive' | 'hostile' | 'burning' | 'dead';
 
 export interface ArmedNpcState {
   key: string;
   name: string;
+  weapon: NpcWeapon;
   mode: NpcCombatMode;
   health: number;
   delayedHealth: number;
   delayedHealthRate: number;
   unseenTimer: number;
   hostileAlertTimer: number;
+  pendingHostileAlertTimer: number;
   fireCooldown: number;
+  meleeCooldown: number;
   shotsFiredInMag: number;
   reloadTimer: number;
   weaponVibrationTimer: number;
@@ -43,23 +57,29 @@ export interface ArmedNpcState {
   path: TileCoord[];
   pathTimer: number;
   isMoving: boolean;
+  burnDirYaw: number;
+  burnDirTimer: number;
 }
 
 export function createArmedNpcState(
   key: string,
   name: string,
-  initialAimYaw: number
+  initialAimYaw: number,
+  weapon: NpcWeapon = 'uzi'
 ): ArmedNpcState {
   return {
     key,
     name,
+    weapon,
     mode: 'passive',
     health: MAX_NPC_HEALTH,
     delayedHealth: MAX_NPC_HEALTH,
     delayedHealthRate: 0,
     unseenTimer: 0,
     hostileAlertTimer: 0,
+    pendingHostileAlertTimer: 0,
     fireCooldown: 0,
+    meleeCooldown: 0,
     shotsFiredInMag: 0,
     reloadTimer: 0,
     weaponVibrationTimer: 0,
@@ -68,6 +88,8 @@ export function createArmedNpcState(
     path: [],
     pathTimer: 0,
     isMoving: false,
+    burnDirYaw: initialAimYaw,
+    burnDirTimer: 0,
   };
 }
 
@@ -88,6 +110,7 @@ export function applyNpcDamage(npc: ArmedNpcState, damage: number): boolean {
   if (npc.health <= 0) {
     npc.mode = 'dead';
     npc.hostileAlertTimer = 0;
+    npc.pendingHostileAlertTimer = 0;
     npc.fireCooldown = 0;
     npc.reloadTimer = 0;
     npc.weaponVibrationTimer = 0;
@@ -99,7 +122,9 @@ export function applyNpcDamage(npc: ArmedNpcState, damage: number): boolean {
     return true;
   }
 
-  enterHostileMode(npc);
+  if (npc.mode !== 'burning') {
+    enterHostileMode(npc);
+  }
   return false;
 }
 
@@ -107,13 +132,31 @@ export function applyNpcDamage(npc: ArmedNpcState, damage: number): boolean {
  * Transitions a passive NPC into hostile mode with a 1-second blinking exclamation alert before shooting.
  */
 export function enterHostileMode(npc: ArmedNpcState): void {
-  if (npc.mode === 'dead') return;
+  if (npc.mode === 'dead' || npc.mode === 'burning') return;
   if (npc.mode === 'passive') {
     npc.mode = 'hostile';
     npc.hostileAlertTimer = NPC_HOSTILE_ALERT_SECONDS;
+    npc.pendingHostileAlertTimer = 0;
     npc.pathTimer = 0;
   }
   npc.unseenTimer = 0;
+}
+
+/**
+ * Ignites an NPC when hit by flamethrower fire, switching them out of hostile into frantic burning mode.
+ */
+export function igniteNpc(npc: ArmedNpcState): void {
+  if (npc.mode === 'dead') return;
+  npc.mode = 'burning';
+  npc.hostileAlertTimer = 0;
+  npc.pendingHostileAlertTimer = 0;
+  npc.unseenTimer = 0;
+  npc.path = [];
+  if (npc.burnDirTimer <= 0) {
+    npc.burnDirYaw = Math.random() * Math.PI * 2;
+    npc.burnDirTimer = NPC_BURNING_DIR_INTERVAL_SECONDS;
+  }
+  npc.isMoving = true;
 }
 
 export function updateNpcHealthAndTimers(
@@ -136,6 +179,18 @@ export function updateNpcHealthAndTimers(
 
   if (npc.hostileAlertTimer > 0) {
     npc.hostileAlertTimer = Math.max(0, npc.hostileAlertTimer - dtSeconds);
+  }
+  if (npc.mode === 'passive' && npc.pendingHostileAlertTimer > 0) {
+    npc.pendingHostileAlertTimer = Math.max(
+      0,
+      npc.pendingHostileAlertTimer - dtSeconds
+    );
+    if (npc.pendingHostileAlertTimer === 0) {
+      enterHostileMode(npc);
+    }
+  }
+  if (npc.meleeCooldown > 0) {
+    npc.meleeCooldown = Math.max(0, npc.meleeCooldown - dtSeconds);
   }
   if (npc.weaponVibrationTimer > 0) {
     npc.weaponVibrationTimer = Math.max(0, npc.weaponVibrationTimer - dtSeconds);
@@ -192,17 +247,70 @@ export function tryFireHostileNpcUzi(
   return true;
 }
 
+export function tryFireHostileNpcFlamethrower(
+  npc: ArmedNpcState,
+  originX: number,
+  originY: number,
+  aimYaw: number,
+  fireNpcFlamethrower?: (
+    npc: ArmedNpcState,
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void
+): boolean {
+  if (
+    npc.mode !== 'hostile' ||
+    npc.hostileAlertTimer > 0 ||
+    npc.fireCooldown > 0
+  ) {
+    return false;
+  }
+  fireNpcFlamethrower?.(npc, originX, originY, aimYaw);
+  npc.fireCooldown = NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS;
+  npc.weaponVibrationTimer = Math.max(
+    npc.weaponVibrationTimer,
+    NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS + 0.05
+  );
+  return true;
+}
+
+export function tryFireHostileNpcBazooka(
+  npc: ArmedNpcState,
+  originX: number,
+  originY: number,
+  aimYaw: number,
+  fireNpcBazooka?: (
+    npc: ArmedNpcState,
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void
+): boolean {
+  if (
+    npc.mode !== 'hostile' ||
+    npc.hostileAlertTimer > 0 ||
+    npc.fireCooldown > 0
+  ) {
+    return false;
+  }
+  fireNpcBazooka?.(npc, originX, originY, aimYaw);
+  npc.fireCooldown = NPC_BAZOOKA_SHOT_INTERVAL_SECONDS;
+  npc.weaponVibrationTimer = Math.max(npc.weaponVibrationTimer, 0.25);
+  return true;
+}
+
 export function isNpcBillboardVisible(npc: ArmedNpcState): boolean {
   return (
     npc.mode !== 'dead' &&
     npc.hostileAlertTimer <= 0 &&
-    (npc.mode === 'hostile' || npc.health < MAX_NPC_HEALTH)
+    (npc.mode === 'hostile' || npc.mode === 'burning' || npc.health < MAX_NPC_HEALTH)
   );
 }
 
 /**
- * When one armed NPC turns hostile, alerts every other visible passive NPC within 5 tiles
- * so they also turn hostile.
+ * When one armed NPC turns hostile, schedules a 2-second delayed alert for every other
+ * visible passive NPC within 5 tiles so they also turn hostile.
  */
 export function propagateHostileAlert(
   entries: ReadonlyArray<{ state: ArmedNpcState; bounds: Rect; visible: boolean }>,
@@ -219,7 +327,125 @@ export function propagateHostileAlert(
     const ox = other.bounds.x + other.bounds.width * 0.5;
     const oy = other.bounds.y + other.bounds.height * 0.5;
     if (Math.hypot(ox - sx, oy - sy) <= NPC_HOSTILE_ALERT_RADIUS) {
-      enterHostileMode(other.state);
+      if (other.state.pendingHostileAlertTimer <= 0) {
+        other.state.pendingHostileAlertTimer = NPC_HOSTILE_PROPAGATION_DELAY_SECONDS;
+      }
+    }
+  }
+}
+
+/**
+ * Updates a burning NPC: every 1s picks a random direction, runs at 2x walk speed,
+ * and fires projectiles in random directions until dead.
+ */
+export function stepBurningNpc(
+  npc: ArmedNpcState,
+  bounds: Rect,
+  player: Player,
+  map: TileMap,
+  solidObstacles: readonly Rect[],
+  dtSeconds: number,
+  fireNpcUzi?: (
+    npc: ArmedNpcState,
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void,
+  fireNpcFlamethrower?: (
+    npc: ArmedNpcState,
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void,
+  fireNpcBazooka?: (
+    npc: ArmedNpcState,
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void
+): void {
+  if (npc.mode !== 'burning' || dtSeconds <= 0) return;
+
+  npc.burnDirTimer -= dtSeconds;
+  if (npc.burnDirTimer <= 0) {
+    npc.burnDirTimer = NPC_BURNING_DIR_INTERVAL_SECONDS;
+    npc.burnDirYaw = Math.random() * Math.PI * 2;
+  }
+  npc.aimYaw = npc.burnDirYaw;
+
+  const otherObstacles = solidObstacles.filter(
+    (obs) =>
+      !(
+        obs.x === bounds.x &&
+        obs.y === bounds.y &&
+        obs.width === bounds.width &&
+        obs.height === bounds.height
+      )
+  );
+
+  const step = NPC_BURNING_RUN_SPEED * dtSeconds;
+  const vx = Math.cos(npc.burnDirYaw) * step;
+  const vy = Math.sin(npc.burnDirYaw) * step;
+
+  const canMoveTo = (nx: number, ny: number): boolean => {
+    const candidate: Rect = {
+      x: nx,
+      y: ny,
+      width: bounds.width,
+      height: bounds.height,
+    };
+    if (isRectCollidingWithMap(map, nx, ny, bounds.width, bounds.height, true)) {
+      return false;
+    }
+    if (rectsIntersect(candidate, player)) {
+      return false;
+    }
+    for (const obs of otherObstacles) {
+      if (rectsIntersect(candidate, obs)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  let moved = false;
+  if (Math.abs(vx) > 0.0001 && canMoveTo(bounds.x + vx, bounds.y)) {
+    bounds.x += vx;
+    moved = true;
+  }
+  if (Math.abs(vy) > 0.0001 && canMoveTo(bounds.x, bounds.y + vy)) {
+    bounds.y += vy;
+    moved = true;
+  }
+  if (!moved) {
+    // Bounce to a new random direction if pinned against a wall
+    npc.burnDirYaw = Math.random() * Math.PI * 2;
+  }
+  npc.isMoving = true;
+
+  // Fire projectiles in random directions while burning (for ranged NPCs)
+  if (npc.fireCooldown <= 0) {
+    const ox = bounds.x + bounds.width * 0.5;
+    const oy = bounds.y + bounds.height * 0.5;
+    const randomYaw = Math.random() * Math.PI * 2;
+    if (npc.weapon === 'uzi') {
+      fireNpcUzi?.(npc, ox, oy, randomYaw);
+      npc.fireCooldown = UZI_FIRE_INTERVAL_SECONDS;
+      npc.weaponVibrationTimer = Math.max(
+        npc.weaponVibrationTimer,
+        UZI_FIRE_INTERVAL_SECONDS + 0.05
+      );
+    } else if (npc.weapon === 'flamethrower') {
+      fireNpcFlamethrower?.(npc, ox, oy, randomYaw);
+      npc.fireCooldown = NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS;
+      npc.weaponVibrationTimer = Math.max(
+        npc.weaponVibrationTimer,
+        NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS + 0.05
+      );
+    } else if (npc.weapon === 'bazooka') {
+      fireNpcBazooka?.(npc, ox, oy, randomYaw);
+      npc.fireCooldown = NPC_BAZOOKA_SHOT_INTERVAL_SECONDS;
+      npc.weaponVibrationTimer = Math.max(npc.weaponVibrationTimer, 0.25);
     }
   }
 }

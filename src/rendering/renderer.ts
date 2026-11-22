@@ -16,11 +16,14 @@ import {
   BASEMENT_SPA_HIDDEN_MASK,
 } from '../world/levels/levelBasement';
 import {
+  C4_PLACED_STATE_KEY,
+  C4_TAKEN_STATE_KEY,
   DIANA_DISTRACTED_KEY,
   DIANA_PRESENT_TAKEN_KEY,
   SIMON_DISTRACTED_KEY,
   SIMON_PRESENT_TAKEN_KEY,
   UPSTAIRS_ALBIN_X,
+  UPSTAIRS_C4_BOUNDS,
   UPSTAIRS_DIANA_PRESENT_BOUNDS,
   UPSTAIRS_SIMON_PRESENT_BOUNDS,
 } from '../world/levels/levelUpstairs';
@@ -472,6 +475,25 @@ function drawNpcBillboards3D(
         portraitSize,
         portraitSize
       );
+    } else if (npc.name.toLowerCase() === 'rosanna') {
+      // Santa portrait fallback for Rosanna billboard
+      ctx.fillStyle = '#d62828';
+      ctx.fillRect(px, py, portraitSize, portraitSize);
+      ctx.fillStyle = '#ffcfab';
+      ctx.fillRect(
+        px + Math.round(portraitSize * 0.25),
+        py + Math.round(portraitSize * 0.35),
+        Math.round(portraitSize * 0.5),
+        Math.round(portraitSize * 0.4)
+      );
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(
+        px + Math.round(portraitSize * 0.2),
+        py + Math.round(portraitSize * 0.65),
+        Math.round(portraitSize * 0.6),
+        Math.round(portraitSize * 0.3)
+      );
+      ctx.fillRect(px + 1, py + Math.round(portraitSize * 0.25), portraitSize - 2, Math.max(2, Math.round(portraitSize * 0.14)));
     }
 
     // Health bar on right (same red + dark-red delayedHealth style as player HUD)
@@ -519,6 +541,62 @@ function drawNpcBillboards3D(
 
     ctx.restore();
   }
+}
+
+function drawKatanaIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  scale = 1
+): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  // Diagonal silver katana blade
+  ctx.strokeStyle = '#e2eef8';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-4, 4);
+  ctx.lineTo(8, -7);
+  ctx.stroke();
+  // Gold tsuba guard
+  ctx.fillStyle = '#eab308';
+  ctx.fillRect(-6, 2, 4, 4);
+  // Dark wrapped handle
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-5, 5);
+  ctx.lineTo(-9, 8);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawBazookaIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  scale = 1
+): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  // Olive-green shoulder launcher tube
+  ctx.fillStyle = '#485c36';
+  ctx.fillRect(-9, -3, 17, 5);
+  // Flared front & rear collars
+  ctx.fillStyle = '#242a30';
+  ctx.fillRect(-10, -4, 3, 7);
+  ctx.fillRect(6, -4, 3, 7);
+  // Red rocket warhead tip
+  ctx.fillStyle = '#d42e26';
+  ctx.fillRect(9, -2, 2, 3);
+  // Grip & sight
+  ctx.fillStyle = '#181420';
+  ctx.fillRect(-1, 2, 3, 4);
+  ctx.fillStyle = '#eab308';
+  ctx.fillRect(1, -5, 3, 2);
+  ctx.restore();
 }
 
 function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
@@ -731,6 +809,49 @@ export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Playe
       '#fb923c',
       '#0c101a'
     );
+
+    if (Number.isFinite(player.flamethrowerAmmo)) {
+      const flameAmmo = Math.max(0, player.flamethrowerAmmo);
+      const ammoText = String(flameAmmo);
+      const ammoW = Math.max(22, measurePixelText(ammoText) + 10);
+      const ammoH = 18;
+      const ammoX = boxX - ammoW - 4;
+      const ammoY = boxY + Math.round((boxH - ammoH) / 2);
+      drawSnesFrame(ctx, ammoX, ammoY, ammoW, ammoH);
+      const aw = measurePixelText(ammoText);
+      drawPixelText(
+        ctx,
+        ammoText,
+        ammoX + Math.round((ammoW - aw) / 2),
+        ammoY + 5,
+        flameAmmo <= 3 ? '#f87171' : '#fb923c',
+        '#0c101a'
+      );
+    }
+  } else if (player.equippedItem === 'katana') {
+    drawKatanaIcon(ctx, iconCenterX, iconCenterY, 1);
+    const label = 'KATANA';
+    const tw = measurePixelText(label);
+    drawPixelText(
+      ctx,
+      label,
+      boxX + Math.round((boxW - tw) / 2),
+      boxY + 23,
+      '#e2e8f0',
+      '#0c101a'
+    );
+  } else if (player.equippedItem === 'bazooka') {
+    drawBazookaIcon(ctx, iconCenterX, iconCenterY, 1);
+    const label = 'BAZOOKA';
+    const tw = measurePixelText(label);
+    drawPixelText(
+      ctx,
+      label,
+      boxX + Math.round((boxW - tw) / 2),
+      boxY + 23,
+      '#84cc16',
+      '#0c101a'
+    );
   } else if (player.equippedItem === 'unarmed') {
     drawUnarmedArmsIcon(ctx, iconCenterX, iconCenterY + 1, player.punchTimer > 0, 1);
     const label = 'UNARMED';
@@ -768,6 +889,12 @@ export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Playe
   if (player.unlockedFlamethrower) {
     slots.push({ key: '4', id: 'flamethrower' });
   }
+  if (player.unlockedKatana) {
+    slots.push({ key: '5', id: 'katana' });
+  }
+  if (player.unlockedBazooka) {
+    slots.push({ key: '6', id: 'bazooka' });
+  }
 
   const slotSize = 20;
   const gap = 3;
@@ -791,6 +918,10 @@ export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Playe
       drawUziIcon(ctx, icx, icy, 0.7);
     } else if (slot.id === 'flamethrower') {
       drawFlamethrowerIcon(ctx, icx, icy, 0.65);
+    } else if (slot.id === 'katana') {
+      drawKatanaIcon(ctx, icx, icy, 0.65);
+    } else if (slot.id === 'bazooka') {
+      drawBazookaIcon(ctx, icx, icy, 0.65);
     }
     drawPixelText(ctx, slot.key, sx + 3, slotsY + 2, '#ffd166', '#0c101a');
   });
@@ -1091,15 +1222,35 @@ function drawCat(
   cat: Cat,
   catSprite: HTMLImageElement
 ): void {
+  const isHostile = cat.mode === 'hostile' || cat.mode === 'latched';
   const drawX = Math.round(cat.x - (TILE_SIZE - cat.width) / 2);
-  const drawY = Math.round(cat.y - (TILE_SIZE - cat.height));
+  const jumpOffsetPx = Math.round((cat.jumpZ ?? 0) * 0.6);
+  const drawY = Math.round(cat.y - (TILE_SIZE - cat.height)) - jumpOffsetPx;
 
   const speed = Math.hypot(cat.vx, cat.vy);
   let frameCol = 0;
-  if (cat.mode === 'flee' || speed > 4) {
+  if (cat.mode === 'flee' || isHostile || speed > 4) {
     frameCol = Math.floor(cat.animTimer * 12) % 2 === 0 ? 1 : 2;
   }
   const dirRow = cat.facing === 'left' ? 1 : 0;
+
+  if (cat.mode === 'dead') {
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(
+      catSprite,
+      0,
+      dirRow * TILE_SIZE,
+      TILE_SIZE,
+      TILE_SIZE,
+      drawX,
+      drawY + 2,
+      TILE_SIZE,
+      TILE_SIZE
+    );
+    ctx.restore();
+    return;
+  }
 
   ctx.drawImage(
     catSprite,
@@ -1112,6 +1263,41 @@ function drawCat(
     TILE_SIZE,
     TILE_SIZE
   );
+
+  if (isHostile && Math.floor((cat.blinkRedTimer || 0) * 10) % 2 === 0) {
+    ctx.save();
+    // Blinking red arched-back angry cat highlight
+    ctx.fillStyle = 'rgba(235, 36, 36, 0.55)';
+    ctx.beginPath();
+    ctx.arc(drawX + TILE_SIZE * 0.5, drawY + TILE_SIZE * 0.55, 5, Math.PI, 0);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/**
+ * Renders the C4 explosive pack in 2D (in Arjan's office or planted under the Christmas tree).
+ */
+function drawC4Explosive(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  elapsedTime: number,
+  fastBlink: boolean
+): void {
+  const px = Math.round(x);
+  const py = Math.round(y);
+  ctx.save();
+  ctx.fillStyle = '#20242c';
+  ctx.fillRect(px - 1, py - 1, 12, 9);
+  ctx.fillStyle = '#5e6c4a';
+  ctx.fillRect(px, py, 10, 7);
+  ctx.fillStyle = '#2c343e';
+  ctx.fillRect(px + 2, py + 1, 6, 5);
+  const blinkRate = fastBlink ? 14 : 3.5;
+  ctx.fillStyle = Math.floor(elapsedTime * blinkRate) % 2 === 0 ? '#ff302a' : '#6e1616';
+  ctx.fillRect(px + 6, py + 2, 2, 2);
+  ctx.restore();
 }
 
 /**
@@ -2043,7 +2229,7 @@ export function renderGame(
       drawClosedDoorAndHiddenMask(ctx, {
         id: 'basement-hall-north-door',
         bounds: BASEMENT_HALL_NORTH_DOOR_BOUNDS,
-        hiddenRegions: [BASEMENT_SPA_HIDDEN_MASK],
+        hiddenRegions: basement.spaFogCleared ? [] : [BASEMENT_SPA_HIDDEN_MASK],
       });
     } else if (!basement.flamethrowerPickedUp) {
       ctx.fillStyle = '#fb923c';
@@ -2087,20 +2273,33 @@ export function renderGame(
       camera.height
     );
 
-    // If the one-time Kitchen Rosanna cutscene is active, draw the other Santa running west-to-east outside the north windows
+    // If the one-time Kitchen Rosanna cutscene is active, draw Rosanna behind the window / jumping inside
     if (upstairs.rosannaCutscene?.active) {
       const cs = upstairs.rosannaCutscene;
       const stepPhase = Math.floor(cs.walkTimer * 10) % 4;
-      const frameCol = stepPhase === 1 ? 1 : stepPhase === 3 ? 2 : 0;
-      const rightDirRow = DIRECTION_TO_ROW.right;
+      const frameCol = cs.phase === 'jumping' ? (stepPhase === 1 ? 1 : stepPhase === 3 ? 2 : 0) : 0;
+      const downDirRow = DIRECTION_TO_ROW.down;
       ctx.drawImage(
         assets.santaSprite,
         frameCol * TILE_SIZE,
-        rightDirRow * TILE_SIZE,
+        downDirRow * TILE_SIZE,
         TILE_SIZE,
         TILE_SIZE,
         Math.round(cs.santaX),
-        Math.round(cs.santaY),
+        Math.round(cs.santaY - cs.santaZ * 0.5),
+        TILE_SIZE,
+        TILE_SIZE
+      );
+    } else if (upstairs.rosannaSpawned && upstairs.rosannaCombat.mode !== 'dead') {
+      const downDirRow = DIRECTION_TO_ROW.down;
+      ctx.drawImage(
+        assets.santaSprite,
+        0,
+        downDirRow * TILE_SIZE,
+        TILE_SIZE,
+        TILE_SIZE,
+        Math.round(upstairs.rosannaNpc.x - 2),
+        Math.round(upstairs.rosannaNpc.y - 4),
         TILE_SIZE,
         TILE_SIZE
       );
@@ -2161,6 +2360,26 @@ export function renderGame(
       );
     }
 
+    // C4 Explosive in Arjan's office (if not taken) or planted under the Christmas tree
+    if (!state.player.states.get(C4_TAKEN_STATE_KEY)) {
+      drawC4Explosive(
+        ctx,
+        UPSTAIRS_C4_BOUNDS.x + 1,
+        UPSTAIRS_C4_BOUNDS.y + 1,
+        state.elapsedTime,
+        false
+      );
+    }
+    if (state.player.states.get(C4_PLACED_STATE_KEY)) {
+      drawC4Explosive(
+        ctx,
+        3.1 * TILE_SIZE - 5,
+        15.6 * TILE_SIZE - 4,
+        state.elapsedTime,
+        true
+      );
+    }
+
     // Diana & Simon in living room (sitting down with present in lap if distracted!)
     const isDianaDistracted = Boolean(
       state.player.states.get(DIANA_DISTRACTED_KEY)
@@ -2214,10 +2433,10 @@ export function renderGame(
 
     // Sight polygons of upstairs NPCs
     const isTableRoomDoorOpen = !upstairs.doors.some(
-      (d) => d.id === 'upstairs-table-room-door'
+      (d) => d.id === 'upstairs-table-room-door' && d.hiddenRegions.length > 0
     );
     const isBedroomDoorOpen = !upstairs.doors.some(
-      (d) => d.id === 'upstairs-bedroom-door'
+      (d) => d.id === 'upstairs-bedroom-door' && d.hiddenRegions.length > 0
     );
 
     const upstairsCones = [
@@ -2358,10 +2577,90 @@ export function renderGame(
     ctx.fillRect(Math.round(drop.x - 3), Math.round(drop.y - 2), 6, 4);
     ctx.restore();
   }
+  for (const drop of state.droppedKatanas) {
+    if (drop.levelId !== state.currentLevelId) continue;
+    ctx.fillStyle = '#e2e8f0';
+    ctx.fillRect(Math.round(drop.x - 5), Math.round(drop.y - 1), 10, 2);
+  }
+  for (const drop of state.droppedFlamethrowers) {
+    if (drop.levelId !== state.currentLevelId) continue;
+    ctx.fillStyle = '#dc2626';
+    ctx.fillRect(Math.round(drop.x - 4), Math.round(drop.y - 2), 8, 4);
+    ctx.fillStyle = '#fb923c';
+    ctx.fillRect(Math.round(drop.x + 3), Math.round(drop.y - 1), 3, 2);
+  }
+  for (const drop of state.droppedBazookas) {
+    if (drop.levelId !== state.currentLevelId) continue;
+    ctx.fillStyle = '#485c36';
+    ctx.fillRect(Math.round(drop.x - 6), Math.round(drop.y - 2), 12, 4);
+    ctx.fillStyle = '#d42e26';
+    ctx.fillRect(Math.round(drop.x + 5), Math.round(drop.y - 1), 2, 2);
+  }
+  for (const wall of state.destroyingWalls) {
+    if (wall.levelId !== state.currentLevelId) continue;
+    const p = Math.max(0, Math.min(1, wall.elapsed / Math.max(0.01, wall.duration)));
+    ctx.save();
+    ctx.globalAlpha = 1 - p;
+    ctx.fillStyle = '#121218';
+    ctx.fillRect(wall.col * TILE_SIZE, wall.row * TILE_SIZE, TILE_SIZE, Math.max(1, Math.round(TILE_SIZE * (1 - p))));
+    ctx.restore();
+  }
+  for (const d of state.destroyingDoors) {
+    if (d.levelId !== state.currentLevelId) continue;
+    const p = Math.max(0, Math.min(1, d.elapsed / Math.max(0.01, d.duration)));
+    ctx.save();
+    ctx.globalAlpha = 1 - p;
+    ctx.fillStyle = '#121218';
+    ctx.fillRect(d.bounds.x, d.bounds.y, d.bounds.width, Math.max(1, Math.round(d.bounds.height * (1 - p))));
+    ctx.restore();
+  }
+  for (const key of state.blackenedWalls) {
+    const prefix = `${state.currentLevelId}:`;
+    if (!key.startsWith(prefix)) continue;
+    const [cStr, rStr] = key.slice(prefix.length).split(',');
+    ctx.fillStyle = 'rgba(16, 16, 20, 0.82)';
+    ctx.fillRect(Number(cStr) * TILE_SIZE, Number(rStr) * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+  }
+  for (const exp of state.explosions) {
+    if (exp.levelId !== state.currentLevelId || exp.timer <= 0) continue;
+    const expAlpha = Math.max(0, Math.min(1, exp.timer / Math.max(0.01, exp.maxTimer)));
+    const r = 6 + (1 - expAlpha) * 18;
+    ctx.save();
+    ctx.globalAlpha = expAlpha * 0.75;
+    ctx.fillStyle = '#fb923c';
+    ctx.beginPath();
+    ctx.arc(Math.round(exp.x), Math.round(exp.y), r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  for (const medkit of state.medkits) {
+    if (medkit.levelId !== state.currentLevelId) continue;
+    if (
+      medkit.id === 'basement-spa-medkit' &&
+      state.levels['level-basement'].spaDoorClosed &&
+      !state.levels['level-basement'].spaFogCleared
+    ) {
+      continue;
+    }
+    ctx.strokeStyle = '#22c55e';
+    ctx.beginPath();
+    ctx.arc(Math.round(medkit.x), Math.round(medkit.y), 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(Math.round(medkit.x - 4), Math.round(medkit.y - 3), 8, 6);
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(Math.round(medkit.x - 1), Math.round(medkit.y - 2), 2, 4);
+    ctx.fillRect(Math.round(medkit.x - 2), Math.round(medkit.y - 1), 4, 2);
+  }
   if (state.projectiles.length > 0) {
     for (const p of state.projectiles) {
-      ctx.fillStyle = p.kind === 'fireball' ? '#fb923c' : '#fde047';
-      const sz = p.kind === 'fireball' ? 5 : 3;
+      ctx.fillStyle =
+        p.kind === 'fireball'
+          ? '#fb923c'
+          : p.kind === 'rocket'
+            ? '#ef4444'
+            : '#fde047';
+      const sz = p.kind === 'fireball' || p.kind === 'rocket' ? 5 : 3;
       ctx.fillRect(Math.round(p.x - sz / 2), Math.round(p.y - sz / 2), sz, sz);
     }
   }

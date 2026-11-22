@@ -4,8 +4,14 @@ import {
   createArmedNpcState,
   enterHostileMode,
   NPC_HOSTILE_LOSE_SIGHT_SECONDS,
+  NPC_KATANA_MELEE_COOLDOWN,
+  NPC_KATANA_MELEE_DAMAGE,
+  NPC_KATANA_MELEE_RANGE,
   propagateHostileAlert,
+  stepBurningNpc,
   stepHostileNpcAlongPath,
+  tryFireHostileNpcBazooka,
+  tryFireHostileNpcFlamethrower,
   tryFireHostileNpcUzi,
   updateNpcHealthAndTimers,
 } from '../../entities/npcCombat';
@@ -14,6 +20,7 @@ import {
   Player,
   Rect,
   rectsIntersect,
+  UPSTAIRS_INITIAL_FLAMETHROWER_AMMO,
 } from '../../entities/player';
 import {
   ConeOfSight,
@@ -255,7 +262,16 @@ export const UPSTAIRS_COMPUTER_BOUNDS: Rect = {
   height: TILE_SIZE,
 };
 
-export const ARJAN_KEY_STATE_KEY = 'upstairsArjanKey';
+export const C4_TAKEN_STATE_KEY = 'upstairsC4Taken';
+export const C4_PLACED_STATE_KEY = 'upstairsC4Placed';
+
+/** Military C4 explosive charge inside Arjan's office (col 23, row 15). */
+export const UPSTAIRS_C4_BOUNDS: Rect = {
+  x: 23 * TILE_SIZE + 2,
+  y: 15 * TILE_SIZE + 3,
+  width: 12,
+  height: 10,
+};
 
 /** Closed collidable door to the room with the second kitchen table. */
 export const UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS: Rect = {
@@ -310,25 +326,60 @@ export const KITCHEN_TRIGGER_BOUNDS: Rect = {
 };
 
 export const KITCHEN_ROSANNA_STATE_KEY = 'kitchenRosannaEventTriggered';
-export const ROSANNA_SANTA_START_X = 8.0 * TILE_SIZE;
-export const ROSANNA_SANTA_END_X = 14.5 * TILE_SIZE;
+export const ROSANNA_SANTA_START_X = 11.0 * TILE_SIZE;
+export const ROSANNA_SANTA_END_X = 12.0 * TILE_SIZE;
 export const ROSANNA_SANTA_Y = 2.5 * TILE_SIZE;
-export const ROSANNA_SANTA_SPEED = 56; // px per second running west-to-east outside north windows
+export const ROSANNA_INTERIOR_X = 12.5 * TILE_SIZE - 6;
+export const ROSANNA_INTERIOR_Y = 5.5 * TILE_SIZE - 6;
+export const TABLE_ROOM_AMBUSH_STATE_KEY = 'upstairsTableRoomAmbushTriggered';
+export const TABLE_ROOM_AMBUSH_TRIGGER_BOUNDS: Rect = {
+  x: 9 * TILE_SIZE,
+  y: 11 * TILE_SIZE,
+  width: 5.5 * TILE_SIZE,
+  height: 2.8 * TILE_SIZE,
+};
 
 export interface RosannaCutsceneState {
   active: boolean;
+  phase: 'rising' | 'firing' | 'jumping';
   santaX: number;
   santaY: number;
+  santaZ: number;
+  facingAngle: number;
   walkTimer: number;
   elapsed: number;
+  firedShot: boolean;
+}
+
+export interface TableRoomAmbushCutsceneState {
+  active: boolean;
+  timer: number;
 }
 
 export class LevelUpstairs implements GameLevel {
   public readonly id: LevelId = 'level-upstairs';
-  public readonly map: TileMap = UPSTAIRS_MAP;
+  public readonly map: TileMap = {
+    cols: MAP_COLS,
+    rows: MAP_ROWS,
+    tileSize: TILE_SIZE,
+    tiles: UPSTAIRS_TILES.map((row) => [...row]),
+  };
   public doors: CollidableDoor[];
   public openedDoors: OpenedDoorAnimation[] = [];
   public rosannaCutscene: RosannaCutsceneState | null = null;
+  public tableRoomAmbushCutscene: TableRoomAmbushCutsceneState = {
+    active: false,
+    timer: 0,
+  };
+  public rosannaSpawned: boolean = false;
+  public readonly rosannaNpc: Rect = {
+    x: ROSANNA_INTERIOR_X,
+    y: ROSANNA_INTERIOR_Y,
+    width: 12,
+    height: 12,
+  };
+  public rosannaCone: ConeOfSight | null = null;
+  public rosannaCombat: ArmedNpcState;
   public cat: Cat;
 
   // Upstairs NPCs
@@ -357,7 +408,7 @@ export class LevelUpstairs implements GameLevel {
   public simonCombat: ArmedNpcState;
 
   public readonly anneMarieNpc = { ...UPSTAIRS_ANNE_MARIE_NPC };
-  public anneMarieAngle: number = -Math.PI / 2; // Facing north initially
+  public anneMarieAngle: number = Math.PI / 2; // Facing south toward the bedroom door
   public anneMarieTimer: number = 0;
   public anneMarieCone: ConeOfSight | null;
   public anneMarieCombat: ArmedNpcState;
@@ -390,8 +441,24 @@ export class LevelUpstairs implements GameLevel {
     ];
 
     this.albinCombat = createArmedNpcState('upstairs:Albin', 'Albin', Math.PI / 2);
-    this.henrikCombat = createArmedNpcState('upstairs:Henrik', 'Henrik', this.henrikAngle);
-    this.tanjaCombat = createArmedNpcState('upstairs:Tanja', 'Tanja', -Math.PI / 2);
+    this.henrikCombat = createArmedNpcState(
+      'upstairs:Henrik',
+      'Henrik',
+      this.henrikAngle,
+      'flamethrower'
+    );
+    this.tanjaCombat = createArmedNpcState(
+      'upstairs:Tanja',
+      'Tanja',
+      -Math.PI / 2,
+      'flamethrower'
+    );
+    this.rosannaCombat = createArmedNpcState(
+      'upstairs:Rosanna',
+      'Rosanna',
+      Math.PI / 2,
+      'bazooka'
+    );
 
     this.albinCone = new ConeOfSight(
       { x: UPSTAIRS_ALBIN_X + TILE_SIZE / 2, y: this.albinY + TILE_SIZE / 2 },
@@ -445,7 +512,8 @@ export class LevelUpstairs implements GameLevel {
     this.anneMarieCombat = createArmedNpcState(
       'upstairs:Anne-Marie',
       'Anne-Marie',
-      this.anneMarieAngle
+      this.anneMarieAngle,
+      'katana'
     );
     this.anneMarieCone = new ConeOfSight(
       { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
@@ -457,10 +525,10 @@ export class LevelUpstairs implements GameLevel {
 
   public getArmedNpcs(): Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> {
     const isTableRoomDoorOpen = !this.doors.some(
-      (d) => d.id === 'upstairs-table-room-door'
+      (d) => d.id === 'upstairs-table-room-door' && d.hiddenRegions.length > 0
     );
     const isBedroomDoorOpen = !this.doors.some(
-      (d) => d.id === 'upstairs-bedroom-door'
+      (d) => d.id === 'upstairs-bedroom-door' && d.hiddenRegions.length > 0
     );
     return [
       {
@@ -473,6 +541,9 @@ export class LevelUpstairs implements GameLevel {
       { state: this.dianaCombat, bounds: this.dianaNpc, visible: true },
       { state: this.simonCombat, bounds: this.simonNpc, visible: true },
       { state: this.anneMarieCombat, bounds: this.anneMarieNpc, visible: isBedroomDoorOpen },
+      ...(this.rosannaSpawned
+        ? [{ state: this.rosannaCombat, bounds: this.rosannaNpc, visible: true }]
+        : []),
     ];
   }
 
@@ -493,6 +564,11 @@ export class LevelUpstairs implements GameLevel {
     player.jumpVelocity = 0;
     player.isMoving = false;
     player.walkTimer = 0;
+
+    // Starting upstairs limits flamethrower fuel to 10 flames (until refilled by drops)
+    if (!Number.isFinite(player.flamethrowerAmmo)) {
+      player.flamethrowerAmmo = UPSTAIRS_INITIAL_FLAMETHROWER_AMMO;
+    }
 
     // Reset Upstairs passive sight & timers (preserve dead NPCs)
     this.intruderDetected = false;
@@ -583,7 +659,7 @@ export class LevelUpstairs implements GameLevel {
     if (this.anneMarieCombat.mode !== 'dead') {
       this.anneMarieCombat.mode = 'passive';
       this.anneMarieCombat.unseenTimer = 0;
-      this.anneMarieAngle = -Math.PI / 2;
+      this.anneMarieAngle = Math.PI / 2;
       this.anneMarieTimer = 0;
       this.anneMarieCombat.aimYaw = this.anneMarieAngle;
       this.anneMarieCone = new ConeOfSight(
@@ -594,6 +670,18 @@ export class LevelUpstairs implements GameLevel {
       );
     } else {
       this.anneMarieCone = null;
+    }
+
+    if (this.rosannaSpawned && this.rosannaCombat.mode !== 'dead') {
+      this.rosannaCombat.mode = 'passive';
+      this.rosannaCombat.unseenTimer = 0;
+      this.rosannaCombat.aimYaw = Math.PI / 2;
+      this.rosannaCone = new ConeOfSight(
+        { x: this.rosannaNpc.x + 6, y: this.rosannaNpc.y + 6 },
+        Math.PI / 2,
+        undefined,
+        this.map
+      );
     }
   }
 
@@ -610,17 +698,14 @@ export class LevelUpstairs implements GameLevel {
     if (this.dianaCombat.mode !== 'dead') obs.push(this.dianaNpc);
     if (this.simonCombat.mode !== 'dead') obs.push(this.simonNpc);
     if (this.anneMarieCombat.mode !== 'dead') obs.push(this.anneMarieNpc);
+    if (this.rosannaSpawned && this.rosannaCombat.mode !== 'dead') {
+      obs.push(this.rosannaNpc);
+    }
     return obs;
   }
 
   public getInteractables(player?: Player): Interactable[] {
     const list: Interactable[] = [
-      {
-        id: 'upstairs-dining-cupboard',
-        bounds: { ...UPSTAIRS_CUPBOARD_BOUNDS },
-        promptText: 'Inspect',
-        dialogueLines: [],
-      },
       {
         id: 'upstairs-office-pc',
         bounds: { ...UPSTAIRS_COMPUTER_BOUNDS },
@@ -632,6 +717,16 @@ export class LevelUpstairs implements GameLevel {
         ],
       },
     ];
+
+    // C4 explosive inside Arjan's office (if not already taken)
+    if (!player?.states.get(C4_TAKEN_STATE_KEY)) {
+      list.push({
+        id: 'upstairs-office-c4',
+        bounds: { ...UPSTAIRS_C4_BOUNDS },
+        promptText: 'Pick up C4',
+        dialogueLines: [],
+      });
+    }
 
     // Diana's Present in bedroom (if not already taken)
     if (!player?.states.get(DIANA_PRESENT_TAKEN_KEY)) {
@@ -653,35 +748,18 @@ export class LevelUpstairs implements GameLevel {
       });
     }
 
-    // Diana NPC interaction (Inspect or Give present)
-    if (!player?.states.get(DIANA_DISTRACTED_KEY)) {
-      const hasDianaPresent = Boolean(player?.states.get(DIANA_PRESENT_TAKEN_KEY));
+    // Christmas Tree interactable (Place C4 once retrieved from Arjan's office)
+    if (
+      player?.states.get(C4_TAKEN_STATE_KEY) &&
+      !player?.states.get(C4_PLACED_STATE_KEY)
+    ) {
       list.push({
-        id: 'upstairs-diana-npc',
-        bounds: { ...this.dianaNpc },
-        promptText: hasDianaPresent ? 'Give present' : 'Inspect',
+        id: 'upstairs-xmas-tree',
+        bounds: { ...UPSTAIRS_XMAS_TREE_BOUNDS },
+        promptText: 'Place C4',
         dialogueLines: [],
       });
     }
-
-    // Simon NPC interaction (Inspect or Give present)
-    if (!player?.states.get(SIMON_DISTRACTED_KEY)) {
-      const hasSimonPresent = Boolean(player?.states.get(SIMON_PRESENT_TAKEN_KEY));
-      list.push({
-        id: 'upstairs-simon-npc',
-        bounds: { ...this.simonNpc },
-        promptText: hasSimonPresent ? 'Give present' : 'Inspect',
-        dialogueLines: [],
-      });
-    }
-
-    // Christmas Tree interactable (Save Christmas)
-    list.push({
-      id: 'upstairs-xmas-tree',
-      bounds: { ...UPSTAIRS_XMAS_TREE_BOUNDS },
-      promptText: 'Save Christmas',
-      dialogueLines: [],
-    });
 
     for (const door of this.doors) {
       list.push({
@@ -700,10 +778,10 @@ export class LevelUpstairs implements GameLevel {
     player: Player,
     ctx: LevelTransitionContext
   ): boolean {
-    if (interactableId === 'upstairs-dining-cupboard') {
-      player.states.set(ARJAN_KEY_STATE_KEY, true);
+    if (interactableId === 'upstairs-office-c4') {
+      player.states.set(C4_TAKEN_STATE_KEY, true);
       ctx.openDialogue([
-        "You found a hidden compartment containing a key... it's Arjan's key!",
+        'You picked up a block of military-grade C4 explosive! Now plant it under the Christmas tree...',
       ]);
       return true;
     }
@@ -721,7 +799,13 @@ export class LevelUpstairs implements GameLevel {
     }
 
     if (interactableId === 'upstairs-xmas-tree') {
-      if (ctx.fadeWorldToBlack) {
+      if (!player.states.get(C4_TAKEN_STATE_KEY)) {
+        return false;
+      }
+      player.states.set(C4_PLACED_STATE_KEY, true);
+      if (ctx.detonateHouseC4) {
+        ctx.detonateHouseC4();
+      } else if (ctx.fadeWorldToBlack) {
         ctx.fadeWorldToBlack();
       }
       const receiver = ctx.getSecretSantaReceiver ? ctx.getSecretSantaReceiver() : undefined;
@@ -729,8 +813,9 @@ export class LevelUpstairs implements GameLevel {
         receiver ?? 'Ehm... this is awkward. An error occurred, gift receiver unknown.';
       ctx.openDialogue(
         [
-          'CONGRATULATIONS! You have successfully saved Christmas by delivering all presents undetected.',
-          'As a reward for your valiant effort...',
+          'KABOOM! The C4 detonates under the Christmas tree, blowing the entire Rensbo house sky-high!',
+          'CONGRATULATIONS! You have "saved" Christmas — not a single witness, wall, or hostile Santa left standing.',
+          'As a reward for your explosive holiday spirit...',
           'You will learn who your secret santa gift receiver is...',
           'And that person is...',
           finalLine,
@@ -742,59 +827,17 @@ export class LevelUpstairs implements GameLevel {
       return true;
     }
 
-    if (interactableId === 'upstairs-diana-npc') {
-      const hasDianaPresent = Boolean(player.states.get(DIANA_PRESENT_TAKEN_KEY));
-      if (hasDianaPresent) {
-        player.states.set(DIANA_DISTRACTED_KEY, true);
-        this.dianaCone = null;
-        ctx.openDialogue(
-          [
-            'Hmm? A present...?',
-            "Diana is completely distracted. They won't stop me reaching the tree now.",
-          ],
-          undefined,
-          'Diana'
-        );
-      } else {
-        ctx.openDialogue([
-          'Hmm... I have to find something to distract Diana with...',
-        ]);
-      }
-      return true;
-    }
-
-    if (interactableId === 'upstairs-simon-npc') {
-      const hasSimonPresent = Boolean(player.states.get(SIMON_PRESENT_TAKEN_KEY));
-      if (hasSimonPresent) {
-        player.states.set(SIMON_DISTRACTED_KEY, true);
-        this.simonCone = null;
-        ctx.openDialogue(
-          [
-            'Hmm? A present...?',
-            "Simon is completely distracted. They won't stop me reaching the tree now.",
-          ],
-          undefined,
-          'Simon'
-        );
-      } else {
-        ctx.openDialogue([
-          'Hmm... I have to find something to distract Simon with...',
-        ]);
-      }
-      return true;
-    }
-
     const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
     if (doorIdx !== -1) {
       const door = this.doors[doorIdx];
       if (door.id === 'upstairs-office-door') {
-        const hasKey = Boolean(player.states.get(ARJAN_KEY_STATE_KEY));
-        if (!hasKey) {
-          ctx.openDialogue([
-            'The office is locked... hmm, where would Arjan hide a key?',
-          ]);
-          return true;
-        }
+        ctx.openDialogue([
+          'The office door is locked tight. You will need something explosive to blast through the wall!',
+        ]);
+        return true;
+      }
+      if (door.id === 'upstairs-table-room-door') {
+        player.states.set(TABLE_ROOM_AMBUSH_STATE_KEY, true);
       }
 
       this.doors.splice(doorIdx, 1);
@@ -815,8 +858,48 @@ export class LevelUpstairs implements GameLevel {
     return false;
   }
 
+  public triggerTableRoomAmbush(player: Player): void {
+    player.states.set(TABLE_ROOM_AMBUSH_STATE_KEY, true);
+    const doorIdx = this.doors.findIndex((d) => d.id === 'upstairs-table-room-door');
+    if (doorIdx !== -1) {
+      const door = this.doors[doorIdx];
+      this.doors.splice(doorIdx, 1);
+      this.openedDoors.push({
+        id: door.id,
+        bounds: { ...door.bounds },
+        progress: 0,
+        swingDirection: 1,
+      });
+    }
+    this.tableRoomAmbushCutscene = { active: true, timer: 0 };
+    for (const combat of [this.henrikCombat, this.tanjaCombat]) {
+      if (combat.mode !== 'dead' && combat.mode !== 'burning') {
+        combat.mode = 'hostile';
+        combat.hostileAlertTimer = 0;
+        combat.pendingHostileAlertTimer = 0;
+        combat.unseenTimer = 0;
+        combat.pathTimer = 0;
+      }
+    }
+  }
+
+  public updateTableRoomAmbush(dtSeconds: number, player: Player): void {
+    if (
+      !player.states.get(TABLE_ROOM_AMBUSH_STATE_KEY) &&
+      rectsIntersect(player, TABLE_ROOM_AMBUSH_TRIGGER_BOUNDS)
+    ) {
+      this.triggerTableRoomAmbush(player);
+    }
+    if (this.tableRoomAmbushCutscene.active && dtSeconds > 0) {
+      this.tableRoomAmbushCutscene.timer += dtSeconds;
+      if (this.tableRoomAmbushCutscene.timer >= 1.6) {
+        this.tableRoomAmbushCutscene.active = false;
+      }
+    }
+  }
+
   /**
-   * Updates the one-time Kitchen Rosanna cutscene event.
+   * Updates the one-time Kitchen Rosanna bazooka reveal, window jump, and boss spawn cutscene.
    * Returns true if player movement is currently locked by the active cutscene.
    */
   public updateCutscene(
@@ -825,18 +908,55 @@ export class LevelUpstairs implements GameLevel {
     ctx: LevelTransitionContext
   ): boolean {
     if (this.rosannaCutscene?.active) {
+      const cs = this.rosannaCutscene;
       player.isMoving = false;
       player.walkTimer = 0;
       player.facing = 'up';
 
-      this.rosannaCutscene.elapsed += dtSeconds;
-      this.rosannaCutscene.walkTimer += dtSeconds;
-      this.rosannaCutscene.santaX += ROSANNA_SANTA_SPEED * dtSeconds;
+      cs.elapsed += dtSeconds;
 
-      if (this.rosannaCutscene.santaX >= ROSANNA_SANTA_END_X) {
-        this.rosannaCutscene.active = false;
+      if (cs.elapsed < 1.0) {
+        cs.phase = 'rising';
+        const p = Math.min(1, cs.elapsed / 1.0);
+        cs.santaZ = -14 + p * 16;
+      } else if (cs.elapsed < 2.35) {
+        cs.phase = 'firing';
+        cs.santaZ = 2;
+        if (!cs.firedShot) {
+          cs.firedShot = true;
+          const originX = cs.santaX + 8;
+          const originY = cs.santaY + 8;
+          const playerCx = player.x + player.width * 0.5;
+          const targetX = Math.max(
+            9.5 * TILE_SIZE,
+            Math.min(12.2 * TILE_SIZE, playerCx - 2.8 * TILE_SIZE)
+          );
+          const targetY = 9.05 * TILE_SIZE;
+          const shotYaw = Math.atan2(targetY - originY, targetX - originX);
+          ctx.fireRosannaCutsceneRocket?.(originX, originY, shotYaw);
+        }
+      } else if (cs.elapsed < 3.15) {
+        cs.phase = 'jumping';
+        cs.walkTimer += dtSeconds;
+        const jp = Math.min(1, (cs.elapsed - 2.35) / 0.8);
+        cs.santaX =
+          ROSANNA_SANTA_START_X +
+          jp * (ROSANNA_SANTA_END_X - ROSANNA_SANTA_START_X);
+        cs.santaY =
+          ROSANNA_SANTA_Y +
+          jp * (ROSANNA_INTERIOR_Y + 6 - (ROSANNA_SANTA_Y + 8));
+        cs.santaZ = Math.sin(jp * Math.PI) * 14;
+      } else {
+        cs.active = false;
         this.rosannaCutscene = null;
-        ctx.openDialogue(['... Rosanna???']);
+        this.rosannaSpawned = true;
+        this.rosannaNpc.x = ROSANNA_INTERIOR_X;
+        this.rosannaNpc.y = ROSANNA_INTERIOR_Y;
+        this.rosannaCombat.mode = 'hostile';
+        this.rosannaCombat.hostileAlertTimer = 0;
+        this.rosannaCombat.unseenTimer = 0;
+        this.rosannaCombat.pathTimer = 0;
+        this.rosannaCombat.fireCooldown = 1.2;
       }
       return true;
     }
@@ -852,10 +972,14 @@ export class LevelUpstairs implements GameLevel {
       player.facing = 'up';
       this.rosannaCutscene = {
         active: true,
+        phase: 'rising',
         santaX: ROSANNA_SANTA_START_X,
         santaY: ROSANNA_SANTA_Y,
+        santaZ: -14,
+        facingAngle: Math.PI / 2,
         walkTimer: 0,
         elapsed: 0,
+        firedShot: false,
       };
       return true;
     }
@@ -903,6 +1027,31 @@ export class LevelUpstairs implements GameLevel {
       combat.isMoving = false;
       combat.path = [];
       combat.pathTimer = 0;
+    } else if (combat.weapon === 'katana') {
+      if (
+        combat.hostileAlertTimer <= 0 &&
+        combat.meleeCooldown <= 0 &&
+        Math.hypot(playerCx - originX, playerCy - originY) <= NPC_KATANA_MELEE_RANGE
+      ) {
+        ctx.damagePlayer?.(NPC_KATANA_MELEE_DAMAGE);
+        combat.meleeCooldown = NPC_KATANA_MELEE_COOLDOWN;
+      }
+    } else if (combat.weapon === 'flamethrower') {
+      tryFireHostileNpcFlamethrower(
+        combat,
+        originX,
+        originY,
+        aimYaw,
+        ctx.fireNpcFlamethrower
+      );
+    } else if (combat.weapon === 'bazooka') {
+      tryFireHostileNpcBazooka(
+        combat,
+        originX,
+        originY,
+        aimYaw,
+        ctx.fireNpcBazooka
+      );
     } else {
       tryFireHostileNpcUzi(combat, originX, originY, aimYaw, ctx.fireNpcUzi);
     }
@@ -924,6 +1073,20 @@ export class LevelUpstairs implements GameLevel {
     updateNpcHealthAndTimers(this.albinCombat, dtSeconds);
     if (this.albinCombat.mode === 'dead') {
       this.albinCone = null;
+    } else if (this.albinCombat.mode === 'burning') {
+      this.albinCone = null;
+      const albinBounds: Rect = { x: this.albinX, y: this.albinY, width: 12, height: 12 };
+      stepBurningNpc(
+        this.albinCombat,
+        albinBounds,
+        player,
+        this.map,
+        this.getSolidObstacles(),
+        dtSeconds,
+        ctx.fireNpcUzi
+      );
+      this.albinX = albinBounds.x;
+      this.albinY = albinBounds.y;
     } else if (this.albinCombat.mode === 'hostile') {
       const albinBounds: Rect = { x: this.albinX, y: this.albinY, width: 12, height: 12 };
       this.albinCone = this.updateHostileNpc(
@@ -966,15 +1129,28 @@ export class LevelUpstairs implements GameLevel {
       }
     }
 
-    // 2. Henrik & Tanja in table room (only if table room door is opened!)
+    // 2. Henrik & Tanja in table room (only if table room door or wall is opened!)
     const isTableRoomDoorOpen = !this.doors.some(
-      (d) => d.id === 'upstairs-table-room-door'
+      (d) => d.id === 'upstairs-table-room-door' && d.hiddenRegions.length > 0
     );
     updateNpcHealthAndTimers(this.henrikCombat, dtSeconds);
     updateNpcHealthAndTimers(this.tanjaCombat, dtSeconds);
     if (isTableRoomDoorOpen) {
       if (this.henrikCombat.mode === 'dead') {
         this.henrikCone = null;
+      } else if (this.henrikCombat.mode === 'burning') {
+        this.henrikCone = null;
+        stepBurningNpc(
+          this.henrikCombat,
+          this.henrikNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(),
+          dtSeconds,
+          ctx.fireNpcUzi,
+          ctx.fireNpcFlamethrower,
+          ctx.fireNpcBazooka
+        );
       } else if (this.henrikCombat.mode === 'hostile') {
         this.henrikCone = this.updateHostileNpc(
           this.henrikCombat,
@@ -1012,6 +1188,19 @@ export class LevelUpstairs implements GameLevel {
 
       if (this.tanjaCombat.mode === 'dead') {
         this.tanjaCone = null;
+      } else if (this.tanjaCombat.mode === 'burning') {
+        this.tanjaCone = null;
+        stepBurningNpc(
+          this.tanjaCombat,
+          this.tanjaNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(),
+          dtSeconds,
+          ctx.fireNpcUzi,
+          ctx.fireNpcFlamethrower,
+          ctx.fireNpcBazooka
+        );
       } else if (this.tanjaCombat.mode === 'hostile') {
         this.tanjaCone = this.updateHostileNpc(
           this.tanjaCombat,
@@ -1049,6 +1238,17 @@ export class LevelUpstairs implements GameLevel {
     updateNpcHealthAndTimers(this.dianaCombat, dtSeconds);
     if (this.dianaCombat.mode === 'dead') {
       this.dianaCone = null;
+    } else if (this.dianaCombat.mode === 'burning') {
+      this.dianaCone = null;
+      stepBurningNpc(
+        this.dianaCombat,
+        this.dianaNpc,
+        player,
+        this.map,
+        this.getSolidObstacles(),
+        dtSeconds,
+        ctx.fireNpcUzi
+      );
     } else if (this.dianaCombat.mode === 'hostile') {
       this.dianaCone = this.updateHostileNpc(
         this.dianaCombat,
@@ -1093,6 +1293,17 @@ export class LevelUpstairs implements GameLevel {
     updateNpcHealthAndTimers(this.simonCombat, dtSeconds);
     if (this.simonCombat.mode === 'dead') {
       this.simonCone = null;
+    } else if (this.simonCombat.mode === 'burning') {
+      this.simonCone = null;
+      stepBurningNpc(
+        this.simonCombat,
+        this.simonNpc,
+        player,
+        this.map,
+        this.getSolidObstacles(),
+        dtSeconds,
+        ctx.fireNpcUzi
+      );
     } else if (this.simonCombat.mode === 'hostile') {
       this.simonCone = this.updateHostileNpc(
         this.simonCombat,
@@ -1134,14 +1345,25 @@ export class LevelUpstairs implements GameLevel {
       propagateHostileAlert(this.getArmedNpcs(), this.simonCombat.key);
     }
 
-    // 4. Anne-Marie in bedroom (only if bedroom door is open!)
+    // 4. Anne-Marie in bedroom (only if bedroom door or wall is open! Always faces south toward the door when passive)
     const isBedroomDoorOpen = !this.doors.some(
-      (d) => d.id === 'upstairs-bedroom-door'
+      (d) => d.id === 'upstairs-bedroom-door' && d.hiddenRegions.length > 0
     );
     updateNpcHealthAndTimers(this.anneMarieCombat, dtSeconds);
     if (isBedroomDoorOpen) {
       if (this.anneMarieCombat.mode === 'dead') {
         this.anneMarieCone = null;
+      } else if (this.anneMarieCombat.mode === 'burning') {
+        this.anneMarieCone = null;
+        stepBurningNpc(
+          this.anneMarieCombat,
+          this.anneMarieNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
       } else if (this.anneMarieCombat.mode === 'hostile') {
         this.anneMarieCone = this.updateHostileNpc(
           this.anneMarieCombat,
@@ -1151,19 +1373,16 @@ export class LevelUpstairs implements GameLevel {
           ctx
         );
       } else {
-        this.anneMarieTimer += dtSeconds;
-        if (this.anneMarieTimer >= 1.0) {
-          this.anneMarieTimer -= 1.0;
-          this.anneMarieAngle += Math.PI / 4;
-          this.anneMarieCone = new ConeOfSight(
-            { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
-            this.anneMarieAngle,
-            undefined,
-            this.map
-          );
-        }
-        this.anneMarieCombat.aimYaw = this.anneMarieCone?.direction ?? this.anneMarieAngle;
-        if (this.anneMarieCone?.checkDetection(player)) {
+        // Always face south toward the bedroom door (no rotation)
+        this.anneMarieAngle = Math.PI / 2;
+        this.anneMarieCombat.aimYaw = this.anneMarieAngle;
+        this.anneMarieCone = new ConeOfSight(
+          { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
+          this.anneMarieAngle,
+          undefined,
+          this.map
+        );
+        if (this.anneMarieCone.checkDetection(player)) {
           enterHostileMode(this.anneMarieCombat);
           const aimYaw = Math.atan2(playerCy - (this.anneMarieNpc.y + 6), playerCx - (this.anneMarieNpc.x + 6));
           this.anneMarieCombat.aimYaw = aimYaw;
@@ -1174,6 +1393,57 @@ export class LevelUpstairs implements GameLevel {
             this.map
           );
           propagateHostileAlert(this.getArmedNpcs(), this.anneMarieCombat.key);
+        }
+      }
+    }
+
+    // 5. Spawned Rosanna boss inside Kitchen (after window jump cutscene completes)
+    if (this.rosannaSpawned) {
+      updateNpcHealthAndTimers(this.rosannaCombat, dtSeconds);
+      if (this.rosannaCombat.mode === 'dead') {
+        this.rosannaCone = null;
+      } else if (this.rosannaCombat.mode === 'burning') {
+        this.rosannaCone = null;
+        stepBurningNpc(
+          this.rosannaCombat,
+          this.rosannaNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(),
+          dtSeconds,
+          ctx.fireNpcUzi,
+          ctx.fireNpcFlamethrower,
+          ctx.fireNpcBazooka
+        );
+      } else if (this.rosannaCombat.mode === 'hostile') {
+        this.rosannaCone = this.updateHostileNpc(
+          this.rosannaCombat,
+          this.rosannaNpc,
+          player,
+          dtSeconds,
+          ctx
+        );
+      } else {
+        this.rosannaCone = new ConeOfSight(
+          { x: this.rosannaNpc.x + 6, y: this.rosannaNpc.y + 6 },
+          this.rosannaCombat.aimYaw,
+          undefined,
+          this.map
+        );
+        if (this.rosannaCone.checkDetection(player)) {
+          enterHostileMode(this.rosannaCombat);
+          const aimYaw = Math.atan2(
+            playerCy - (this.rosannaNpc.y + 6),
+            playerCx - (this.rosannaNpc.x + 6)
+          );
+          this.rosannaCombat.aimYaw = aimYaw;
+          this.rosannaCone = new ConeOfSight(
+            { x: this.rosannaNpc.x + 6, y: this.rosannaNpc.y + 6 },
+            aimYaw,
+            undefined,
+            this.map
+          );
+          propagateHostileAlert(this.getArmedNpcs(), this.rosannaCombat.key);
         }
       }
     }

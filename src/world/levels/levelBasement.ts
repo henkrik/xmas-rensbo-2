@@ -4,6 +4,7 @@ import {
   enterHostileMode,
   NPC_HOSTILE_LOSE_SIGHT_SECONDS,
   propagateHostileAlert,
+  stepBurningNpc,
   stepHostileNpcAlongPath,
   tryFireHostileNpcUzi,
   updateNpcHealthAndTimers,
@@ -206,6 +207,12 @@ export const BASEMENT_FLAMETHROWER_BOUNDS: Rect = {
   height: 10,
 };
 
+/** Medkit (+25 HP) resting inside the Spa Room (cols 14..17, rows 5..11). */
+export const BASEMENT_SPA_MEDKIT_POS = {
+  x: 15.5 * TILE_SIZE,
+  y: 7.5 * TILE_SIZE,
+};
+
 /** Burnable stack of wood blocking the west side of the basement stairs (col 18, rows 15..18). */
 export const BASEMENT_STAIRS_WOOD_BOUNDS: Rect = {
   x: 18 * TILE_SIZE,
@@ -328,10 +335,16 @@ export interface ToiletCutsceneState {
 
 export class LevelBasement implements GameLevel {
   public readonly id: LevelId = 'level-basement';
-  public readonly map: TileMap = BASEMENT_MAP;
+  public readonly map: TileMap = {
+    cols: MAP_COLS,
+    rows: MAP_ROWS,
+    tileSize: TILE_SIZE,
+    tiles: BASEMENT_TILES.map((row) => [...row]),
+  };
   public doors: CollidableDoor[];
   public openedDoors: OpenedDoorAnimation[] = [];
   public spaDoorClosed: boolean = true;
+  public spaFogCleared: boolean = false;
   public mineState: 'idle' | 'blinking' | 'exploded' = 'idle';
   public mineTimer: number = 0;
   public mineExplosionTimer: number = 0;
@@ -348,6 +361,7 @@ export class LevelBasement implements GameLevel {
   public olexaCombat: ArmedNpcState;
   public hanneloesCombat: ArmedNpcState;
   public npcSightAngle: number = -Math.PI / 2; // North is -90 degrees in screen Y coordinates
+  public arjanSweepDir: 1 | -1 = 1; // Sweeps West (-PI) <-> North (-PI/2) <-> East (0)
   public npcSightTimer: number = 0;
   public intruderDetected: boolean = false;
 
@@ -699,6 +713,17 @@ export class LevelBasement implements GameLevel {
     updateNpcHealthAndTimers(this.arjanCombat, dtSeconds);
     if (this.arjanCombat.mode === 'dead') {
       this.coneOfSight = null;
+    } else if (this.arjanCombat.mode === 'burning') {
+      this.coneOfSight = null;
+      stepBurningNpc(
+        this.arjanCombat,
+        this.windowNpc,
+        player,
+        this.map,
+        this.getSolidObstacles(player),
+        dtSeconds,
+        ctx.fireNpcUzi
+      );
     } else if (this.arjanCombat.mode === 'hostile') {
       stepHostileNpcAlongPath(
         this.arjanCombat,
@@ -736,7 +761,15 @@ export class LevelBasement implements GameLevel {
       }
     } else {
       this.arjanCombat.isMoving = false;
-      this.npcSightAngle += (Math.PI / 8) * dtSeconds;
+      // Rotate twice as fast (PI/4 rad/s) sweeping West (-PI) <-> North (-PI/2) <-> East (0)
+      this.npcSightAngle += this.arjanSweepDir * (Math.PI / 4) * dtSeconds;
+      if (this.npcSightAngle >= 0) {
+        this.npcSightAngle = 0;
+        this.arjanSweepDir = -1;
+      } else if (this.npcSightAngle <= -Math.PI) {
+        this.npcSightAngle = -Math.PI;
+        this.arjanSweepDir = 1;
+      }
       this.coneOfSight = new ConeOfSight(
         { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
         this.npcSightAngle,
@@ -759,6 +792,17 @@ export class LevelBasement implements GameLevel {
     updateNpcHealthAndTimers(this.olexaCombat, dtSeconds);
     if (this.olexaCombat.mode === 'dead') {
       this.olexaConeOfSight = null;
+    } else if (this.olexaCombat.mode === 'burning') {
+      this.olexaConeOfSight = null;
+      stepBurningNpc(
+        this.olexaCombat,
+        this.olexaNpc,
+        player,
+        this.map,
+        this.getSolidObstacles(player),
+        dtSeconds,
+        ctx.fireNpcUzi
+      );
     } else if (this.olexaCombat.mode === 'hostile') {
       stepHostileNpcAlongPath(
         this.olexaCombat,
@@ -813,6 +857,20 @@ export class LevelBasement implements GameLevel {
     updateNpcHealthAndTimers(this.hanneloesCombat, dtSeconds);
     if (this.hanneloesCombat.mode === 'dead') {
       this.hanneloesCone = null;
+    } else if (isBathroomOpen && this.hanneloesCombat.mode === 'burning') {
+      this.hanneloesCone = null;
+      if (this.toiletNpc.x >= 21 * TILE_SIZE) {
+        this.toiletNpc.x = 20 * TILE_SIZE + 2;
+      }
+      stepBurningNpc(
+        this.hanneloesCombat,
+        this.toiletNpc,
+        player,
+        this.map,
+        this.getSolidObstacles(player),
+        dtSeconds,
+        ctx.fireNpcUzi
+      );
     } else if (isBathroomOpen && this.hanneloesCombat.mode === 'hostile') {
       // Ensure she steps off the solid toilet tile (col 21, row 9) onto walkable floor (col 20, row 9)
       if (this.toiletNpc.x >= 21 * TILE_SIZE) {

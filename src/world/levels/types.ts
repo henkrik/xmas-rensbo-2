@@ -35,8 +35,26 @@ export interface LevelTransitionContext {
     originY: number,
     aimYaw: number
   ) => void;
+  fireNpcFlamethrower?: (
+    npc: ArmedNpcState,
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void;
+  fireNpcBazooka?: (
+    npc: ArmedNpcState,
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void;
+  fireRosannaCutsceneRocket?: (
+    originX: number,
+    originY: number,
+    aimYaw: number
+  ) => void;
   getSecretSantaReceiver?: () => string | undefined;
   fadeWorldToBlack?: () => void;
+  detonateHouseC4?: () => void;
 }
 
 export interface GameLevel {

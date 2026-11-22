@@ -2,7 +2,7 @@ import { Player, Rect, rectsIntersect } from './player';
 import { isRectCollidingWithMap, TILE_SIZE, TileMap } from '../world/tilemap';
 import { debugLog } from '../core/debugConsole';
 
-export type CatMode = 'standing' | 'flee';
+export type CatMode = 'standing' | 'flee' | 'hostile' | 'latched' | 'dead';
 
 export interface Cat {
   x: number;
@@ -22,6 +22,14 @@ export interface Cat {
   hasBeenActivated: boolean;
   wallForceDirX: number;
   wallForceDirY: number;
+  health: number;
+  delayedHealth: number;
+  delayedHealthRate: number;
+  jumpZ: number;
+  jumpPhase: number;
+  latchTimer: number;
+  latchDamageAccum: number;
+  blinkRedTimer: number;
 }
 
 // Window in the extra room is at cols 26..27, row 18
@@ -46,6 +54,17 @@ export const EXTRA_ROOM_BOUNDS: Rect = {
 export const CAT_STOP_FLEE_DISTANCE = 5.0 * TILE_SIZE; // > 5 tiles -> standing still
 export const CAT_RETRIGGER_FLEE_DISTANCE = 2.0 * TILE_SIZE; // <= 2 tiles -> flee again
 
+// Combat & headcrab parameters
+export const MAX_CAT_HEALTH = 100;
+export const CAT_ARMOR_DAMAGE_MULTIPLIER = 0.1; // Takes 1/10th damage compared to NPCs
+export const CAT_HOSTILE_JUMP_SPEED = 95; // px/s
+export const CAT_JUMP_CYCLE_SECONDS = 0.55;
+export const CAT_JUMP_PEAK_Z = 13.5;
+export const CAT_LATCH_DURATION_SECONDS = 10.0;
+export const CAT_LATCH_DAMAGE_PER_SECOND = 5;
+export const CAT_LATCH_TICK_INTERVAL_SECONDS = 1.0;
+export const CAT_DELAYED_HEALTH_RATE = 40;
+
 export function createCat(
   x: number = CAT_START_X,
   y: number = CAT_START_Y
@@ -67,19 +86,81 @@ export function createCat(
     hasBeenActivated: false,
     wallForceDirX: 0,
     wallForceDirY: 0,
+    health: MAX_CAT_HEALTH,
+    delayedHealth: MAX_CAT_HEALTH,
+    delayedHealthRate: CAT_DELAYED_HEALTH_RATE,
+    jumpZ: 0,
+    jumpPhase: 0,
+    latchTimer: 0,
+    latchDamageAccum: 0,
+    blinkRedTimer: 0,
   };
 }
 
 /**
- * Updates the cat's AI, steering away from Santa, and colliding with walls/obstacles.
+ * Applies damage to the armored cat (1/10th normal damage) and turns it hostile.
+ * Returns true if damage was applied.
+ */
+export function applyCatDamage(cat: Cat, rawDamage: number): boolean {
+  if (cat.mode === 'dead' || rawDamage <= 0) {
+    return false;
+  }
+
+  const prevMode = cat.mode;
+  const armorDamage = rawDamage * CAT_ARMOR_DAMAGE_MULTIPLIER;
+  cat.health = Math.max(0, cat.health - armorDamage);
+  cat.blinkRedTimer = Math.max(cat.blinkRedTimer, 0.35);
+
+  if (cat.health <= 0) {
+    cat.mode = 'dead';
+    cat.vx = 0;
+    cat.vy = 0;
+    cat.jumpZ = 0;
+    cat.latchTimer = 0;
+    cat.latchDamageAccum = 0;
+    debugLog(`Cat state changed: ${prevMode} -> dead`);
+    return true;
+  }
+
+  if (cat.mode !== 'latched') {
+    cat.hasBeenActivated = true;
+    cat.mode = 'hostile';
+    if (prevMode !== 'hostile') {
+      cat.jumpPhase = 0;
+      debugLog(`Cat state changed: ${prevMode} -> hostile`);
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Updates the cat's AI, hostile headcrab leap & face-latch behavior, steering away from Santa when non-hostile, and wall collision.
  */
 export function updateCat(
   cat: Cat,
   player: Player,
   dtSeconds: number,
   map: TileMap,
-  solidObstacles: readonly Rect[] = []
+  solidObstacles: readonly Rect[] = [],
+  onDamagePlayer?: (amount: number) => void
 ): void {
+  if (cat.delayedHealth > cat.health) {
+    cat.delayedHealth = Math.max(
+      cat.health,
+      cat.delayedHealth - cat.delayedHealthRate * dtSeconds
+    );
+  } else if (cat.delayedHealth < cat.health) {
+    cat.delayedHealth = cat.health;
+  }
+
+  if (cat.mode === 'dead') {
+    cat.vx = 0;
+    cat.vy = 0;
+    cat.jumpZ = 0;
+    return;
+  }
+
   const catCenterX = cat.x + cat.width / 2;
   const catCenterY = cat.y + cat.height / 2;
   const playerCenterX = player.x + player.width / 2;
@@ -101,6 +182,112 @@ export function updateCat(
     };
     return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
   };
+
+  if (cat.mode === 'latched') {
+    cat.blinkRedTimer += dtSeconds;
+    cat.animTimer += dtSeconds;
+
+    const playerYaw =
+      typeof player.yaw === 'number'
+        ? player.yaw
+        : player.facing === 'up'
+          ? -Math.PI / 2
+          : player.facing === 'down'
+            ? Math.PI / 2
+            : player.facing === 'left'
+              ? Math.PI
+              : 0;
+
+    const faceOffset = 3.2;
+    cat.x =
+      playerCenterX + Math.cos(playerYaw) * faceOffset - cat.width * 0.5;
+    cat.y =
+      playerCenterY + Math.sin(playerYaw) * faceOffset - cat.height * 0.5;
+    cat.vx = 0;
+    cat.vy = 0;
+    cat.yaw = playerYaw + Math.PI;
+    cat.facing = Math.cos(cat.yaw) < 0 ? 'left' : 'right';
+    cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
+
+    const step = Math.min(dtSeconds, cat.latchTimer);
+    cat.latchTimer = Math.max(0, cat.latchTimer - dtSeconds);
+    cat.latchDamageAccum += step;
+    while (cat.latchDamageAccum >= CAT_LATCH_TICK_INTERVAL_SECONDS - 1e-6) {
+      cat.latchDamageAccum -= CAT_LATCH_TICK_INTERVAL_SECONDS;
+      onDamagePlayer?.(CAT_LATCH_DAMAGE_PER_SECOND);
+    }
+
+    if (cat.latchTimer <= 1e-6) {
+      cat.mode = 'flee';
+      cat.hasBeenActivated = true;
+      cat.jumpZ = 0;
+      cat.jumpPhase = 0;
+      cat.latchTimer = 0;
+      cat.latchDamageAccum = 0;
+      cat.blinkRedTimer = 0;
+
+      const awayYaw = playerYaw;
+      const fleeKickX = Math.cos(awayYaw) * 8;
+      const fleeKickY = Math.sin(awayYaw) * 8;
+      if (!collidesAt(cat.x + fleeKickX, cat.y + fleeKickY)) {
+        cat.x += fleeKickX;
+        cat.y += fleeKickY;
+      }
+      cat.vx = Math.cos(awayYaw) * cat.maxSpeed;
+      cat.vy = Math.sin(awayYaw) * cat.maxSpeed;
+      cat.yaw = awayYaw;
+      cat.facing = cat.vx < 0 ? 'left' : 'right';
+      debugLog('Cat state changed: latched -> flee');
+    }
+    return;
+  }
+
+  if (cat.mode === 'hostile') {
+    cat.blinkRedTimer += dtSeconds;
+    cat.animTimer += dtSeconds;
+    cat.jumpPhase = (cat.jumpPhase + dtSeconds / CAT_JUMP_CYCLE_SECONDS) % 1;
+    cat.jumpZ = 4 * CAT_JUMP_PEAK_Z * cat.jumpPhase * (1 - cat.jumpPhase);
+
+    const ux = dist > 0.001 ? dx / dist : 1;
+    const uy = dist > 0.001 ? dy / dist : 0;
+    cat.vx = ux * CAT_HOSTILE_JUMP_SPEED;
+    cat.vy = uy * CAT_HOSTILE_JUMP_SPEED;
+    cat.yaw = Math.atan2(uy, ux);
+    cat.facing = ux < 0 ? 'left' : 'right';
+
+    const stepDist = Math.min(dist, CAT_HOSTILE_JUMP_SPEED * dtSeconds);
+    const nextX = cat.x + ux * stepDist;
+    if (!collidesAt(nextX, cat.y)) {
+      cat.x = nextX;
+    } else {
+      cat.vx = 0;
+    }
+
+    const nextY = cat.y + uy * stepDist;
+    if (!collidesAt(cat.x, nextY)) {
+      cat.y = nextY;
+    } else {
+      cat.vy = 0;
+    }
+
+    const newDist = Math.hypot(
+      playerCenterX - (cat.x + cat.width * 0.5),
+      playerCenterY - (cat.y + cat.height * 0.5)
+    );
+    if (rectsIntersect(cat, player) || newDist <= 12) {
+      cat.mode = 'latched';
+      cat.latchTimer = CAT_LATCH_DURATION_SECONDS;
+      cat.latchDamageAccum = 0;
+      cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
+      cat.vx = 0;
+      cat.vy = 0;
+      debugLog('Cat state changed: hostile -> latched');
+    }
+    return;
+  }
+
+  cat.jumpZ = 0;
+  cat.blinkRedTimer = 0;
 
   // 1. Activation and state transition logic
   const prevMode = cat.mode;

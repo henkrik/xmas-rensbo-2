@@ -2,6 +2,7 @@ import { InputState } from '../core/input';
 import { Direction } from '../entities/player';
 import { LineOfSight } from '../entities/sight';
 import { GameState } from '../world/gameState';
+import { UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS } from '../world/levels/levelUpstairs';
 import { LevelId } from '../world/levels/types';
 import {
   CAMERA_NON_BLOCKING_TILES,
@@ -593,7 +594,8 @@ export function updateCamera3D(
     (state.currentLevelId === 'level-outside' &&
       (state.motorcycle.status === 'driving' || state.climbing !== null)) ||
     (state.currentLevelId === 'level-upstairs' &&
-      state.levels['level-upstairs'].rosannaCutscene?.active === true) ||
+      (state.levels['level-upstairs'].rosannaCutscene?.active === true ||
+        state.levels['level-upstairs'].tableRoomAmbushCutscene?.active === true)) ||
     (state.currentLevelId === 'level-basement' &&
       state.levels['level-basement'].toiletCutscene?.active === true);
   if (
@@ -653,10 +655,14 @@ export function updateCamera3D(
     z: pz,
   };
 
-  // Dramatic cutscene zoom helper (Rosanna north-window & Basement toilet detection)
+  // Dramatic cutscene zoom helper (Rosanna north-window, Table Room ambush door & Basement toilet detection)
   const rosannaCutscene =
     state.currentLevelId === 'level-upstairs'
       ? state.levels['level-upstairs'].rosannaCutscene
+      : null;
+  const tableRoomAmbush =
+    state.currentLevelId === 'level-upstairs'
+      ? state.levels['level-upstairs'].tableRoomAmbushCutscene
       : null;
   const toiletCutscene =
     state.currentLevelId === 'level-basement'
@@ -664,7 +670,7 @@ export function updateCamera3D(
       : null;
   let zoomEase = 0;
 
-  if (rosannaCutscene?.active || toiletCutscene?.active) {
+  if (rosannaCutscene?.active || tableRoomAmbush?.active || toiletCutscene?.active) {
     let targetYaw = -Math.PI / 2;
     let elapsed = 0;
     let targetOffsetX = 0;
@@ -680,6 +686,18 @@ export function updateCamera3D(
       targetOffsetX = (tx - px) * 0.45;
       targetOffsetY = 1.5;
       targetOffsetZ = (tz - pz) * 0.45;
+    } else if (tableRoomAmbush?.active) {
+      const doorX =
+        UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.x +
+        UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.width * 0.5;
+      const doorZ =
+        UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.y +
+        UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.height * 0.5;
+      targetYaw = Math.atan2(doorZ - pz, doorX - px);
+      elapsed = tableRoomAmbush.timer;
+      targetOffsetX = (doorX - px) * 0.45;
+      targetOffsetY = 1.5;
+      targetOffsetZ = (doorZ - pz) * 0.45;
     } else if (rosannaCutscene?.active) {
       elapsed = rosannaCutscene.elapsed;
     }
@@ -715,6 +733,7 @@ export function updateCamera3D(
   const wantsShoulderOffset =
     player.equippedItem !== 'empty' &&
     !rosannaCutscene?.active &&
+    !tableRoomAmbush?.active &&
     !toiletCutscene?.active &&
     !(state.currentLevelId === 'level-outside' && state.motorcycle.status === 'driving') &&
     !state.climbing;

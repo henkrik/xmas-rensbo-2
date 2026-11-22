@@ -10,6 +10,7 @@ import {
 } from '../entities/player';
 import {
   DAMAGE_FLASH_DURATION_SECONDS,
+  FIRE_FLASH_DURATION_SECONDS,
   GameState,
   MotorcycleState,
 } from '../world/gameState';
@@ -1020,6 +1021,24 @@ export function drawEquippedItemHud(
     );
   }
 
+  ctx.restore();
+}
+
+function drawFireFlashOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: GameState
+): void {
+  if (state.fireFlashTimer <= 0) {
+    return;
+  }
+  const ratio = Math.max(
+    0,
+    Math.min(1, state.fireFlashTimer / FIRE_FLASH_DURATION_SECONDS)
+  );
+  const alpha = ratio * 0.28;
+  ctx.save();
+  ctx.fillStyle = `rgba(255, 224, 64, ${alpha.toFixed(4)})`;
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.restore();
 }
 
@@ -2130,6 +2149,7 @@ export function renderGame(
         drawEquippedItemHud(ctx, player, state.elapsedTime);
       }
     }
+    drawFireFlashOverlay(ctx, state);
     drawDamageFlashOverlay(ctx, state);
     drawDialogueOverlay(ctx, state, assets);
     drawScreenFadeOverlay(ctx, state);
@@ -2825,6 +2845,7 @@ export function renderGame(
       drawEquippedItemHud(ctx, player, elapsedTime);
     }
   }
+  drawFireFlashOverlay(ctx, state);
   drawDamageFlashOverlay(ctx, state);
   drawDialogueOverlay(ctx, state, assets);
   drawScreenFadeOverlay(ctx, state);

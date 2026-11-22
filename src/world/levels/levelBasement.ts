@@ -623,7 +623,9 @@ export class LevelBasement implements GameLevel {
       this.flamethrowerPickedUp = true;
       player.unlockedFlamethrower = true;
       selectPlayerEquipmentSlot(player, 4);
-      ctx?.openDialogue(['Use the number keys to change weapon.']);
+      if (!ctx?.isMobile) {
+        ctx?.openDialogue(['Use the number keys to change weapon.']);
+      }
     }
 
     // Per-tile local wood fire burning (3.0s) and immediate neighbor spread at 2.5s
@@ -662,7 +664,9 @@ export class LevelBasement implements GameLevel {
       this.flamethrowerPickedUp = true;
       player.unlockedFlamethrower = true;
       selectPlayerEquipmentSlot(player, 4);
-      ctx.openDialogue(['Use the number keys to change weapon.']);
+      if (!ctx.isMobile) {
+        ctx.openDialogue(['Use the number keys to change weapon.']);
+      }
       return true;
     }
 

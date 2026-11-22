@@ -165,8 +165,11 @@ export function equipPlayerBodyArmor(player: Player): void {
   setPlayerHealth(player, ARMOR_MAX_PLAYER_HEALTH);
 }
 
+export const PLAYER_DAMAGE_MULTIPLIER = 0.5;
+
 export function applyPlayerDamage(player: Player, amount: number): void {
-  setPlayerHealth(player, player.health - amount);
+  if (amount <= 0) return;
+  setPlayerHealth(player, player.health - amount * PLAYER_DAMAGE_MULTIPLIER);
 }
 
 export function updatePlayerHealthAndTimers(player: Player, dtSeconds: number): void {

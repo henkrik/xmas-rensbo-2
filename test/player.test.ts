@@ -36,6 +36,7 @@ import {
   FOOTPRINT_DURATION_SECONDS,
   MAX_PLAYER_HEALTH,
   MAX_UZI_AMMO,
+  PLAYER_DAMAGE_MULTIPLIER,
   PLAYER_JUMP_HEIGHT,
   PLAYER_UZI_RELOAD_SECONDS,
   PUNCH_DURATION_SECONDS,
@@ -3230,47 +3231,47 @@ Tanja -> Alex
     expect(state.player.health).toBe(MAX_PLAYER_HEALTH);
     expect(state.player.delayedHealth).toBe(MAX_PLAYER_HEALTH);
 
-    // 1. Motorcycle crash deals 10 hp without respawn and sets delayedHealthRate = 10/sec (1 second catch-up)
+    // 1. Motorcycle crash deals 10 * 0.5 = 5 hp without respawn and sets delayedHealthRate = 5/sec (1 second catch-up)
     state.motorcycle.status = 'driving';
     state.motorcycle.x = MOTORCYCLE_CRASH_X - 1;
     updateGameState(state, input, 0.1);
     expect(state.motorcycle.status).toBe('crashed');
-    expect(state.player.health).toBe(90);
+    expect(state.player.health).toBe(95);
     expect(state.player.delayedHealth).toBe(100);
 
-    // After 0.5 seconds, delayedHealth moves halfway from 100 toward 90 (~95)
+    // After 0.5 seconds, delayedHealth moves halfway from 100 toward 95 (~97.5)
     updateGameState(state, input, 0.5);
-    expect(state.player.delayedHealth).toBeCloseTo(95, 2);
+    expect(state.player.delayedHealth).toBeCloseTo(97.5, 2);
 
     // Another health change recalculates rate so delayedHealth still reaches health in 1.0 second
-    setPlayerHealth(state.player, 65);
+    setPlayerHealth(state.player, 67.5);
     expect(state.player.delayedHealthRate).toBeCloseTo(30, 2);
     updateGameState(state, input, 0.5);
-    expect(state.player.delayedHealth).toBeCloseTo(80, 2);
+    expect(state.player.delayedHealth).toBeCloseTo(82.5, 2);
     updateGameState(state, input, 0.5);
-    expect(state.player.delayedHealth).toBeCloseTo(65, 4);
+    expect(state.player.delayedHealth).toBeCloseTo(67.5, 4);
 
-    // 2. Respawn hazards deal 30 hp (snowball/outdoor reset) and hostile NPC Uzi bullets deal 5 hp
+    // 2. Respawn hazards deal 30 * 0.5 = 15 hp and hostile NPC Uzi bullets deal 5 * 0.5 = 2.5 hp
     const outsideRespawn = createGameState({ showIntroDialogue: false });
     resetAfterSnowballHit(outsideRespawn);
-    expect(outsideRespawn.player.health).toBe(70);
+    expect(outsideRespawn.player.health).toBe(85);
 
     const basementState = createGameState({ initialLevelId: 'level-basement' });
     const basement = basementState.levels['level-basement'];
     basementState.player.x = basement.windowNpc.x;
     basementState.player.y = basement.windowNpc.y - TILE_SIZE;
-    // Arjan detects Santa -> 1s alert, then becomes hostile and fires 5hp Uzi bullets
+    // Arjan detects Santa -> 1s alert, then becomes hostile and fires halved Uzi bullets
     for (let i = 0; i < 32; i++) {
       updateGameState(basementState, createEmptyInput(), 0.05);
     }
     expect(basement.arjanCombat.mode).toBe('hostile');
     expect(basementState.player.health).toBeLessThan(100);
-    expect((100 - basementState.player.health) % NPC_UZI_BULLET_DAMAGE).toBe(0);
+    expect((100 - basementState.player.health) % (NPC_UZI_BULLET_DAMAGE * PLAYER_DAMAGE_MULTIPLIER)).toBe(0);
 
     // 3. Reaching <= 0 hp triggers Game Over ("Try again?") and advancing restarts from level-outside
-    damagePlayer(outsideRespawn, 30); // 40
-    damagePlayer(outsideRespawn, 30); // 10
-    damagePlayer(outsideRespawn, 30); // 0
+    damagePlayer(outsideRespawn, 60); // 85 - 30 = 55
+    damagePlayer(outsideRespawn, 60); // 55 - 30 = 25
+    damagePlayer(outsideRespawn, 60); // 0
     expect(outsideRespawn.player.health).toBe(0);
     expect(outsideRespawn.gameOver).toBe(true);
     expect(outsideRespawn.activeDialogue?.variant).toBe('gameover');
@@ -3288,7 +3289,7 @@ Tanja -> Alex
 
     // 4. With ?cheat enabled, running out of health does NOT trigger Game Over
     const cheatState = createGameState({ cheat: true });
-    damagePlayer(cheatState, 120);
+    damagePlayer(cheatState, 240);
     expect(cheatState.player.health).toBe(0);
     expect(cheatState.gameOver).toBe(false);
     expect(cheatState.activeDialogue).toBeNull();
@@ -4185,7 +4186,7 @@ Tanja -> Alex
     expect(basement.mineState).toBe('blinking');
     updateGameState(state, input, BASEMENT_MINE_FUSE_SECONDS + 0.1);
     expect(basement.mineState).toBe('exploded');
-    expect(state.player.health).toBe(50);
+    expect(state.player.health).toBe(100 - 50 * PLAYER_DAMAGE_MULTIPLIER);
 
     // 2. Kill Arjan -> drops a pickupable Uzi on the floor; player without an Uzi picks it up on touch
     state.player.unlockedUzi = true;
@@ -4243,7 +4244,7 @@ Tanja -> Alex
     state.player.x = spaMedkit!.x - 4;
     state.player.y = spaMedkit!.y - 4;
     updateGameState(state, input, 0.05);
-    expect(state.player.health).toBe(85);
+    expect(state.player.health).toBe(100);
     expect(state.medkits.some((m) => m.id === 'basement-spa-medkit')).toBe(false);
 
     // 2. Hitting Olexa with Flamethrower switches him to 'burning' mode (takes 20 HP/s, runs & fires randomly)
@@ -4484,7 +4485,7 @@ Tanja -> Alex
     for (let i = 0; i < 30 && bossState.player.health === MAX_PLAYER_HEALTH; i++) {
       updateGameState(bossState, input, 0.05);
     }
-    expect(bossState.player.health).toBe(80);
+    expect(bossState.player.health).toBe(100 - 20 * PLAYER_DAMAGE_MULTIPLIER);
     expect(bossState.explosions.length).toBeGreaterThan(0);
     const meshWithExplosion = buildDynamicSceneMeshes(bossState, 40);
     expect(meshWithExplosion.translucent.vertexCount).toBeGreaterThan(0);
@@ -4800,7 +4801,10 @@ describe('Hostile armored headcrab cat', () => {
     }
 
     expect(state.player.health).toBe(
-      healthBeforeLatch - CAT_LATCH_DURATION_SECONDS * CAT_LATCH_DAMAGE_PER_SECOND
+      healthBeforeLatch -
+        CAT_LATCH_DURATION_SECONDS *
+          CAT_LATCH_DAMAGE_PER_SECOND *
+          PLAYER_DAMAGE_MULTIPLIER
     );
     // Right after 10 seconds, cat jumps off and becomes non-hostile ('flee')
     expect(cat.mode).toBe('flee');
@@ -4841,9 +4845,9 @@ describe('Hostile armored headcrab cat', () => {
     const input = createEmptyInput();
     state.player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
 
-    // 1. Kitchen medkit exists & heals +25 HP on touch; taking damage triggers red flash timer
+    // 1. Kitchen medkit exists & heals +25 HP on touch; taking damage triggers red flash timer (all damage halved)
     expect(state.medkits.some((m) => m.id === 'upstairs-kitchen-medkit')).toBe(true);
-    damagePlayer(state, 40);
+    damagePlayer(state, 80); // 80 * 0.5 = 40 actual damage -> 60 HP
     expect(state.player.health).toBe(60);
     expect(state.damageFlashTimer).toBeGreaterThan(0);
     updateGameState(state, input, 0.35);
@@ -4895,10 +4899,10 @@ describe('Hostile armored headcrab cat', () => {
     drawHealthBar(mockCtx, state.player);
     expect(fills).toContain('#1e3a8a');
 
-    // Damage drains armor (200 -> 140) before touching base 0..100 HP
-    damagePlayer(state, 60);
+    // Damage drains armor (200 -> 140) before touching base 0..100 HP (damage halved: 120 * 0.5 = 60)
+    damagePlayer(state, 120);
     expect(state.player.health).toBe(140);
-    damagePlayer(state, 60);
+    damagePlayer(state, 120);
     expect(state.player.health).toBe(80);
 
     // 3. Blowing up a wall around Anne-Marie's bedroom makes her hostile & triggers her Rudolph confession dialogue
@@ -5069,5 +5073,90 @@ describe('Hostile armored headcrab cat', () => {
       'You better run, Santa Claus is coming to town.',
       'Tap anywhere inside the game screen to fire your weapon (hold to keep firing).',
     ]);
+
+    // 9. Mobile flamethrower pickup suppresses the "Use the number keys to change weapon." dialog
+    const mobBase = createGameState({
+      initialLevelId: 'level-basement',
+      isMobile: true,
+      showIntroDialogue: false,
+    });
+    mobBase.levels['level-basement'].spaDoorClosed = false;
+    mobBase.player.x = BASEMENT_FLAMETHROWER_BOUNDS.x + 2;
+    mobBase.player.y = BASEMENT_FLAMETHROWER_BOUNDS.y + 2;
+    updateGameState(mobBase, createEmptyInput(), 0.05);
+    expect(mobBase.player.unlockedFlamethrower).toBe(true);
+    expect(mobBase.activeDialogue).toBeNull();
+
+    // 10. Mobile-only auto-aim: aims at closest hostile NPC in FOV when right joystick is idle, disabled when right joystick is used or on desktop
+    const aimState = createGameState({
+      initialLevelId: 'level-upstairs',
+      isMobile: true,
+      showIntroDialogue: false,
+    });
+    const aimUp = aimState.levels['level-upstairs'];
+    aimState.player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
+    aimState.player.x = 4 * TILE_SIZE;
+    aimState.player.y = 14 * TILE_SIZE;
+    aimState.player.yaw = -Math.PI / 2;
+    // Diana (closer) & Simon (farther) both hostile inside FOV
+    aimUp.dianaNpc.x = 5 * TILE_SIZE;
+    aimUp.dianaNpc.y = 12 * TILE_SIZE;
+    aimUp.dianaCombat.mode = 'hostile';
+    aimUp.dianaCombat.hostileAlertTimer = 1.0;
+    aimUp.simonNpc.x = 6 * TILE_SIZE;
+    aimUp.simonNpc.y = 11 * TILE_SIZE;
+    aimUp.simonCombat.mode = 'hostile';
+    aimUp.simonCombat.hostileAlertTimer = 1.0;
+
+    const expectedDianaAngle = Math.atan2(
+      aimUp.dianaNpc.y + aimUp.dianaNpc.height * 0.5 - (aimState.player.y + aimState.player.height * 0.5),
+      aimUp.dianaNpc.x + aimUp.dianaNpc.width * 0.5 - (aimState.player.x + aimState.player.width * 0.5)
+    );
+
+    const aimInput = createEmptyInput();
+    aimInput.cameraYaw = -Math.PI / 2;
+    updateGameState(aimState, aimInput, 0.05);
+    expect(aimState.player.yaw).toBeCloseTo(expectedDianaAngle, 2);
+
+    // When right joystick is actively used, auto-aim does NOT trigger
+    aimState.player.yaw = -Math.PI / 2;
+    aimInput.cameraYaw = -Math.PI / 2;
+    aimInput.cameraLookVector = { x: 0.7, y: 0 };
+    updateGameState(aimState, aimInput, 0.05);
+    expect(aimState.player.yaw).not.toBeCloseTo(expectedDianaAngle, 2);
+
+    // On desktop (joystickActive = false), auto-aim does NOT trigger
+    aimState.joystickActive = false;
+    aimState.player.yaw = -Math.PI / 2;
+    aimInput.cameraLookVector = null;
+    aimInput.cameraYaw = -Math.PI / 2;
+    updateGameState(aimState, aimInput, 0.05);
+    expect(aimState.player.yaw).toBeCloseTo(-Math.PI / 2, 2);
+
+    // 11. Screen blinks yellow when firing a weapon with ammo, and does not blink when out of ammo
+    const flashState = createGameState({
+      initialLevelId: 'level-upstairs',
+      showIntroDialogue: false,
+    });
+    const flashInput = createEmptyInput();
+    flashState.player.unlockedUzi = true;
+    flashState.player.equippedItem = 'uzi';
+    flashState.player.uziAmmo = 5;
+    applyKeyEvent(flashInput, 'Space', true);
+    updateGameState(flashState, flashInput, 0.01);
+    applyKeyEvent(flashInput, 'Space', false);
+    expect(flashState.fireFlashTimer).toBeGreaterThan(0);
+
+    updateGameState(flashState, flashInput, 0.1);
+    expect(flashState.fireFlashTimer).toBe(0);
+
+    // Out-of-ammo flamethrower does NOT trigger yellow flash
+    flashState.player.unlockedFlamethrower = true;
+    flashState.player.equippedItem = 'flamethrower';
+    flashState.player.flamethrowerAmmo = 0;
+    applyKeyEvent(flashInput, 'Space', true);
+    updateGameState(flashState, flashInput, 0.01);
+    applyKeyEvent(flashInput, 'Space', false);
+    expect(flashState.fireFlashTimer).toBe(0);
   });
 });

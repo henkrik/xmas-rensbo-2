@@ -827,8 +827,10 @@
     player.maxHealth = ARMOR_MAX_PLAYER_HEALTH;
     setPlayerHealth(player, ARMOR_MAX_PLAYER_HEALTH);
   }
+  var PLAYER_DAMAGE_MULTIPLIER = 0.5;
   function applyPlayerDamage(player, amount) {
-    setPlayerHealth(player, player.health - amount);
+    if (amount <= 0) return;
+    setPlayerHealth(player, player.health - amount * PLAYER_DAMAGE_MULTIPLIER);
   }
   function updatePlayerHealthAndTimers(player, dtSeconds) {
     if (dtSeconds <= 0) {
@@ -4855,7 +4857,9 @@
         this.flamethrowerPickedUp = true;
         player.unlockedFlamethrower = true;
         selectPlayerEquipmentSlot(player, 4);
-        ctx?.openDialogue(["Use the number keys to change weapon."]);
+        if (!ctx?.isMobile) {
+          ctx?.openDialogue(["Use the number keys to change weapon."]);
+        }
       }
       const toIgnite = [];
       for (const tile of this.stairsWoodTiles) {
@@ -4883,7 +4887,9 @@
         this.flamethrowerPickedUp = true;
         player.unlockedFlamethrower = true;
         selectPlayerEquipmentSlot(player, 4);
-        ctx.openDialogue(["Use the number keys to change weapon."]);
+        if (!ctx.isMobile) {
+          ctx.openDialogue(["Use the number keys to change weapon."]);
+        }
         return true;
       }
       const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
@@ -5655,7 +5661,7 @@
       isOnRoof: levelOutside.isOnRoof,
       climbing: levelOutside.climbing,
       electrocutionTimer: levelOutside.electrocutionTimer,
-      joystickActive: false,
+      joystickActive: isMobile,
       interactables: activeLevel.getInteractables(player),
       nearbyInteractable: null,
       activeDialogue,
@@ -5665,6 +5671,7 @@
       cheatMode,
       worldFadedToBlack,
       damageFlashTimer: 0,
+      fireFlashTimer: 0,
       houseExploding: false,
       houseExplosionTimer: 0,
       houseExplosionSpawnAccum: 0,
@@ -5707,6 +5714,7 @@
     state.joystickActive = prevJoystick;
   }
   var DAMAGE_FLASH_DURATION_SECONDS = 0.3;
+  var FIRE_FLASH_DURATION_SECONDS = 0.08;
   var BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 20;
   function damagePlayer(state, amount) {
     applyPlayerDamage(state.player, amount);
@@ -6850,6 +6858,88 @@
       }
     }
   }
+  var MOBILE_AUTO_AIM_HALF_FOV_RAD = 45 * Math.PI / 180;
+  function applyMobileAutoAim(state, input, dtSeconds) {
+    if (!state.joystickActive || state.activeDialogue) {
+      return false;
+    }
+    if (input.cameraLookVector && (Math.abs(input.cameraLookVector.x) > 0.05 || Math.abs(input.cameraLookVector.y) > 0.05)) {
+      return false;
+    }
+    const candidates = [];
+    if (state.currentLevelId === "level-basement") {
+      const basement = state.levels["level-basement"];
+      if (basement.toiletCutscene?.active) return false;
+      for (const entry of basement.getArmedNpcs()) {
+        if (entry.visible && (entry.state.mode === "hostile" || entry.state.mode === "burning")) {
+          candidates.push({ bounds: entry.bounds });
+        }
+      }
+    } else if (state.currentLevelId === "level-upstairs") {
+      const upstairs = state.levels["level-upstairs"];
+      if (upstairs.rosannaCutscene?.active || upstairs.tableRoomAmbushCutscene?.active) {
+        return false;
+      }
+      for (const entry of upstairs.getArmedNpcs()) {
+        if (entry.visible && (entry.state.mode === "hostile" || entry.state.mode === "burning")) {
+          candidates.push({ bounds: entry.bounds });
+        }
+      }
+      if (upstairs.cat.mode === "hostile") {
+        candidates.push({ bounds: upstairs.cat });
+      }
+    } else {
+      return false;
+    }
+    if (candidates.length === 0) {
+      return false;
+    }
+    const player = state.player;
+    const playerCx = player.x + player.width * 0.5;
+    const playerCy = player.y + player.height * 0.5;
+    const lookYaw = typeof input.cameraYaw === "number" ? input.cameraYaw : typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    let bestDist = Infinity;
+    let bestAngle = null;
+    for (const c of candidates) {
+      const cx = c.bounds.x + c.bounds.width * 0.5;
+      const cy = c.bounds.y + c.bounds.height * 0.5;
+      const dist = Math.hypot(cx - playerCx, cy - playerCy);
+      if (dist <= 1e-3 || dist >= bestDist) continue;
+      const angle = Math.atan2(cy - playerCy, cx - playerCx);
+      const delta = Math.atan2(Math.sin(angle - lookYaw), Math.cos(angle - lookYaw));
+      if (Math.abs(delta) > MOBILE_AUTO_AIM_HALF_FOV_RAD) continue;
+      const los = new LineOfSight(
+        { x: playerCx, y: playerCy },
+        angle,
+        dist,
+        state.map
+      );
+      const hasClearLos = los.n >= los.maxPoints || los.boxes.some((b) => rectsIntersect(b, c.bounds));
+      if (!hasClearLos) continue;
+      bestDist = dist;
+      bestAngle = angle;
+    }
+    if (bestAngle === null) {
+      return false;
+    }
+    player.yaw = bestAngle;
+    const ax = Math.cos(bestAngle);
+    const ay = Math.sin(bestAngle);
+    if (Math.abs(ax) >= Math.abs(ay)) {
+      player.facing = ax >= 0 ? "right" : "left";
+    } else {
+      player.facing = ay >= 0 ? "down" : "up";
+    }
+    if (typeof input.cameraYaw === "number") {
+      const camDiff = Math.atan2(
+        Math.sin(bestAngle - input.cameraYaw),
+        Math.cos(bestAngle - input.cameraYaw)
+      );
+      const blend = dtSeconds > 0 ? Math.min(1, dtSeconds * 12) : 1;
+      input.cameraYaw += camDiff * blend;
+    }
+    return true;
+  }
   function fireUziProjectile(state) {
     const player = state.player;
     if (player.uziAmmo <= 0 || player.uziReloadTimer > 0 || player.uziDepleted) {
@@ -6883,6 +6973,7 @@
       player.weaponVibrationTimer,
       UZI_FIRE_INTERVAL_SECONDS + 0.05
     );
+    state.fireFlashTimer = FIRE_FLASH_DURATION_SECONDS;
     player.uziAmmo = Math.max(0, player.uziAmmo - 1);
     if (player.uziAmmo <= 0) {
       player.uziReloadTimer = PLAYER_UZI_RELOAD_SECONDS;
@@ -6923,6 +7014,7 @@
       player.weaponVibrationTimer,
       FLAMETHROWER_FIRE_INTERVAL_SECONDS + 0.05
     );
+    state.fireFlashTimer = FIRE_FLASH_DURATION_SECONDS;
   }
   function firePlayerBazookaProjectile(state) {
     const player = state.player;
@@ -6950,6 +7042,7 @@
       fromRoof: onRoof
     });
     player.weaponVibrationTimer = Math.max(player.weaponVibrationTimer, 0.25);
+    state.fireFlashTimer = FIRE_FLASH_DURATION_SECONDS;
   }
   function updateGameState(state, input, dtSeconds) {
     const safeDt = Math.max(0, dtSeconds);
@@ -6960,6 +7053,9 @@
     updatePlayerHealthAndTimers(state.player, dtSeconds);
     if (state.damageFlashTimer > 0) {
       state.damageFlashTimer = Math.max(0, state.damageFlashTimer - dtSeconds);
+    }
+    if (state.fireFlashTimer > 0) {
+      state.fireFlashTimer = Math.max(0, state.fireFlashTimer - dtSeconds);
     }
     if (state.cheatMode && state.player.uziDepleted && state.player.uziCheatRefillTimer > 0) {
       state.player.uziCheatRefillTimer = Math.max(
@@ -7393,6 +7489,7 @@
       }
       return;
     }
+    applyMobileAutoAim(state, input, dtSeconds);
     if (state.player.equippedItem === "empty") {
       if (actionPressed && !state.nearbyInteractable) {
         triggerPlayerJump(state.player);
@@ -12845,6 +12942,20 @@
     }
     ctx.restore();
   }
+  function drawFireFlashOverlay(ctx, state) {
+    if (state.fireFlashTimer <= 0) {
+      return;
+    }
+    const ratio = Math.max(
+      0,
+      Math.min(1, state.fireFlashTimer / FIRE_FLASH_DURATION_SECONDS)
+    );
+    const alpha = ratio * 0.28;
+    ctx.save();
+    ctx.fillStyle = `rgba(255, 224, 64, ${alpha.toFixed(4)})`;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.restore();
+  }
   function drawDamageFlashOverlay(ctx, state) {
     if (state.damageFlashTimer <= 0) {
       return;
@@ -13630,6 +13741,7 @@
           drawEquippedItemHud(ctx, player, state.elapsedTime);
         }
       }
+      drawFireFlashOverlay(ctx, state);
       drawDamageFlashOverlay(ctx, state);
       drawDialogueOverlay(ctx, state, assets);
       drawScreenFadeOverlay(ctx, state);
@@ -14208,6 +14320,7 @@
         drawEquippedItemHud(ctx, player, elapsedTime);
       }
     }
+    drawFireFlashOverlay(ctx, state);
     drawDamageFlashOverlay(ctx, state);
     drawDialogueOverlay(ctx, state, assets);
     drawScreenFadeOverlay(ctx, state);

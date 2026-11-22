@@ -22,7 +22,7 @@ import {
   PLAYER_UZI_NPC_DAMAGE,
   propagateHostileAlert,
 } from '../entities/npcCombat';
-import { ConeOfSight } from '../entities/sight';
+import { ConeOfSight, LineOfSight } from '../entities/sight';
 import {
   applyPlayerDamage,
   BAZOOKA_FIRE_INTERVAL_SECONDS,
@@ -306,6 +306,7 @@ export interface GameState {
   cheatMode: boolean;
   worldFadedToBlack: boolean;
   damageFlashTimer: number;
+  fireFlashTimer: number;
   houseExploding: boolean;
   houseExplosionTimer: number;
   houseExplosionSpawnAccum: number;
@@ -624,7 +625,7 @@ export function createGameState(
     isOnRoof: levelOutside.isOnRoof,
     climbing: levelOutside.climbing,
     electrocutionTimer: levelOutside.electrocutionTimer,
-    joystickActive: false,
+    joystickActive: isMobile,
     interactables: activeLevel.getInteractables(player),
     nearbyInteractable: null,
     activeDialogue,
@@ -634,6 +635,7 @@ export function createGameState(
     cheatMode,
     worldFadedToBlack,
     damageFlashTimer: 0,
+    fireFlashTimer: 0,
     houseExploding: false,
     houseExplosionTimer: 0,
     houseExplosionSpawnAccum: 0,
@@ -680,6 +682,7 @@ export function restartFromBasementCheckpoint(state: GameState): void {
 }
 
 export const DAMAGE_FLASH_DURATION_SECONDS = 0.3;
+export const FIRE_FLASH_DURATION_SECONDS = 0.08;
 export const BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 20;
 
 export function damagePlayer(state: GameState, amount: number): void {
@@ -2080,6 +2083,128 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
   }
 }
 
+export const MOBILE_AUTO_AIM_HALF_FOV_RAD = (45 * Math.PI) / 180;
+
+function applyMobileAutoAim(
+  state: GameState,
+  input: InputState,
+  dtSeconds: number
+): boolean {
+  if (!state.joystickActive || state.activeDialogue) {
+    return false;
+  }
+
+  // Disabled while the right (camera) joystick is being used
+  if (
+    input.cameraLookVector &&
+    (Math.abs(input.cameraLookVector.x) > 0.05 ||
+      Math.abs(input.cameraLookVector.y) > 0.05)
+  ) {
+    return false;
+  }
+
+  const candidates: Array<{ bounds: Rect }> = [];
+  if (state.currentLevelId === 'level-basement') {
+    const basement = state.levels['level-basement'];
+    if (basement.toiletCutscene?.active) return false;
+    for (const entry of basement.getArmedNpcs()) {
+      if (
+        entry.visible &&
+        (entry.state.mode === 'hostile' || entry.state.mode === 'burning')
+      ) {
+        candidates.push({ bounds: entry.bounds });
+      }
+    }
+  } else if (state.currentLevelId === 'level-upstairs') {
+    const upstairs = state.levels['level-upstairs'];
+    if (
+      upstairs.rosannaCutscene?.active ||
+      upstairs.tableRoomAmbushCutscene?.active
+    ) {
+      return false;
+    }
+    for (const entry of upstairs.getArmedNpcs()) {
+      if (
+        entry.visible &&
+        (entry.state.mode === 'hostile' || entry.state.mode === 'burning')
+      ) {
+        candidates.push({ bounds: entry.bounds });
+      }
+    }
+    if (upstairs.cat.mode === 'hostile') {
+      candidates.push({ bounds: upstairs.cat });
+    }
+  } else {
+    return false;
+  }
+
+  if (candidates.length === 0) {
+    return false;
+  }
+
+  const player = state.player;
+  const playerCx = player.x + player.width * 0.5;
+  const playerCy = player.y + player.height * 0.5;
+  const lookYaw =
+    typeof input.cameraYaw === 'number'
+      ? input.cameraYaw
+      : typeof player.yaw === 'number'
+        ? player.yaw
+        : directionToYaw(player.facing);
+
+  let bestDist = Infinity;
+  let bestAngle: number | null = null;
+
+  for (const c of candidates) {
+    const cx = c.bounds.x + c.bounds.width * 0.5;
+    const cy = c.bounds.y + c.bounds.height * 0.5;
+    const dist = Math.hypot(cx - playerCx, cy - playerCy);
+    if (dist <= 0.001 || dist >= bestDist) continue;
+
+    const angle = Math.atan2(cy - playerCy, cx - playerCx);
+    const delta = Math.atan2(Math.sin(angle - lookYaw), Math.cos(angle - lookYaw));
+    if (Math.abs(delta) > MOBILE_AUTO_AIM_HALF_FOV_RAD) continue;
+
+    const los = new LineOfSight(
+      { x: playerCx, y: playerCy },
+      angle,
+      dist,
+      state.map
+    );
+    const hasClearLos =
+      los.n >= los.maxPoints ||
+      los.boxes.some((b) => rectsIntersect(b, c.bounds));
+    if (!hasClearLos) continue;
+
+    bestDist = dist;
+    bestAngle = angle;
+  }
+
+  if (bestAngle === null) {
+    return false;
+  }
+
+  player.yaw = bestAngle;
+  const ax = Math.cos(bestAngle);
+  const ay = Math.sin(bestAngle);
+  if (Math.abs(ax) >= Math.abs(ay)) {
+    player.facing = ax >= 0 ? 'right' : 'left';
+  } else {
+    player.facing = ay >= 0 ? 'down' : 'up';
+  }
+
+  if (typeof input.cameraYaw === 'number') {
+    const camDiff = Math.atan2(
+      Math.sin(bestAngle - input.cameraYaw),
+      Math.cos(bestAngle - input.cameraYaw)
+    );
+    const blend = dtSeconds > 0 ? Math.min(1, dtSeconds * 12) : 1;
+    input.cameraYaw += camDiff * blend;
+  }
+
+  return true;
+}
+
 function fireUziProjectile(state: GameState): void {
   const player = state.player;
   if (player.uziAmmo <= 0 || player.uziReloadTimer > 0 || player.uziDepleted) {
@@ -2125,6 +2250,7 @@ function fireUziProjectile(state: GameState): void {
     player.weaponVibrationTimer,
     UZI_FIRE_INTERVAL_SECONDS + 0.05
   );
+  state.fireFlashTimer = FIRE_FLASH_DURATION_SECONDS;
   player.uziAmmo = Math.max(0, player.uziAmmo - 1);
 
   if (player.uziAmmo <= 0) {
@@ -2177,6 +2303,7 @@ function fireFlamethrowerProjectile(state: GameState): void {
     player.weaponVibrationTimer,
     FLAMETHROWER_FIRE_INTERVAL_SECONDS + 0.05
   );
+  state.fireFlashTimer = FIRE_FLASH_DURATION_SECONDS;
 }
 
 function firePlayerBazookaProjectile(state: GameState): void {
@@ -2213,6 +2340,7 @@ function firePlayerBazookaProjectile(state: GameState): void {
   });
 
   player.weaponVibrationTimer = Math.max(player.weaponVibrationTimer, 0.25);
+  state.fireFlashTimer = FIRE_FLASH_DURATION_SECONDS;
 }
 
 export function updateGameState(
@@ -2228,6 +2356,9 @@ export function updateGameState(
   updatePlayerHealthAndTimers(state.player, dtSeconds);
   if (state.damageFlashTimer > 0) {
     state.damageFlashTimer = Math.max(0, state.damageFlashTimer - dtSeconds);
+  }
+  if (state.fireFlashTimer > 0) {
+    state.fireFlashTimer = Math.max(0, state.fireFlashTimer - dtSeconds);
   }
   if (
     state.cheatMode &&
@@ -2769,6 +2900,9 @@ export function updateGameState(
     }
     return;
   }
+
+  // Mobile-only auto-aim toward closest hostile NPC in field of view when right joystick is idle
+  applyMobileAutoAim(state, input, dtSeconds);
 
   if (state.player.equippedItem === 'empty') {
     if (actionPressed && !state.nearbyInteractable) {

@@ -1092,6 +1092,12 @@ function damageArmedNpc(
         z: groundZ,
         yaw: npc.aimYaw + 0.4,
       });
+      if (key === 'upstairs:Anne-Marie') {
+        state.activeDialogue = {
+          lines: ["I guess it's my turn to...", 'Take out the trash.'],
+          currentIndex: 0,
+        };
+      }
     } else if (npc.weapon === 'flamethrower') {
       state.droppedFlamethrowers.push({
         levelId: state.currentLevelId,
@@ -2617,7 +2623,7 @@ export function updateGameState(
           if (!state.player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
             state.player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
             transitionCtx.openDialogue([
-              'Hmm... so I believe the Christmas tree is to the left, but I must not be seen!',
+              "Heeeeere's Santa.",
             ]);
           }
         },

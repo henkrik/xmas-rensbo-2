@@ -623,6 +623,7 @@ export class LevelBasement implements GameLevel {
       this.flamethrowerPickedUp = true;
       player.unlockedFlamethrower = true;
       selectPlayerEquipmentSlot(player, 4);
+      ctx?.openDialogue(['Use the number keys to change weapon.']);
     }
 
     // Per-tile local wood fire burning (3.0s) and immediate neighbor spread at 2.5s
@@ -661,6 +662,7 @@ export class LevelBasement implements GameLevel {
       this.flamethrowerPickedUp = true;
       player.unlockedFlamethrower = true;
       selectPlayerEquipmentSlot(player, 4);
+      ctx.openDialogue(['Use the number keys to change weapon.']);
       return true;
     }
 
@@ -686,7 +688,7 @@ export class LevelBasement implements GameLevel {
       if (!player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
         player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
         ctx.openDialogue([
-          'Hmm... so I believe the Christmas tree is to the left, but I must not be seen!',
+          "Heeeeere's Santa.",
         ]);
       }
       return true;

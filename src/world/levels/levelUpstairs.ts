@@ -894,7 +894,7 @@ export class LevelUpstairs implements GameLevel {
       const door = this.doors[doorIdx];
       if (door.id === 'upstairs-office-door') {
         ctx.openDialogue([
-          'The office door is locked tight. You will need something explosive to blast through the wall!',
+          "It's locked. Maybe I can blow it open.",
         ]);
         return true;
       }
@@ -1063,7 +1063,8 @@ export class LevelUpstairs implements GameLevel {
       player,
       this.map,
       this.getSolidObstacles(),
-      dtSeconds
+      dtSeconds,
+      combat.key === 'upstairs:Anne-Marie' ? 2 : 1
     );
     const originX = bounds.x + bounds.width * 0.5;
     const originY = bounds.y + bounds.height * 0.5;
@@ -1464,7 +1465,19 @@ export class LevelUpstairs implements GameLevel {
         !player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)
       ) {
         player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
-        ctx.openDialogue([...ANNE_MARIE_HOSTILE_DIALOGUE_LINES], undefined, 'Anne Marie');
+        ctx.openDialogue(
+          [...ANNE_MARIE_HOSTILE_DIALOGUE_LINES],
+          () => {
+            ctx.openDialogue(
+              ['ACHIEVEMENT UNLOCKED: Murder-mystery solved.'],
+              undefined,
+              undefined,
+              false,
+              'achievement'
+            );
+          },
+          'Anne-Marie'
+        );
       }
     }
 

@@ -197,8 +197,7 @@ export class LevelOutside implements GameLevel {
       if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
         player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
         ctx.openDialogue([
-          "Okay... I'm inside the house. And I'm Santa. Needless to say NOBODY MUST SEE ME.",
-          'I have to get to the Christmas tree in time for Christmas.',
+          'You better run, Santa Claus is coming to town.',
         ]);
       }
       return true;

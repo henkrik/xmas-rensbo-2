@@ -52,6 +52,8 @@ import { drawPixelText, measurePixelText } from '../src/rendering/pixelFont';
 import {
   drawEquippedItemHud,
   drawHealthBar,
+  shouldShowEquipmentHud,
+  shouldShowHealthBar,
   wrapTextLines,
 } from '../src/rendering/renderer';
 import {
@@ -537,22 +539,13 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.player.x).toBe(BASEMENT_FIREPLACE_SPAWN.x);
     expect(state.player.y).toBe(BASEMENT_FIREPLACE_SPAWN.y);
 
-    // Chimney intro dialogue line 1
+    // Chimney intro dialogue
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
-      "Okay... I'm inside the house. And I'm Santa. Needless to say NOBODY MUST SEE ME."
+      'You better run, Santa Claus is coming to town.'
     );
 
-    // Press Z -> Chimney intro dialogue line 2
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    expect(state.activeDialogue).not.toBeNull();
-    expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
-      'I have to get to the Christmas tree in time for Christmas.'
-    );
-
-    // Press Z -> Closes dialogue
+    // Press Space -> Closes dialogue
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
@@ -1158,7 +1151,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.player.y).toBe(UPSTAIRS_STAIRS_SPAWN.y);
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[0]).toBe(
-      'Hmm... so I believe the Christmas tree is to the left, but I must not be seen!'
+      "Heeeeere's Santa."
     );
     // Dismiss upstairs intro dialogue
     applyKeyEvent(input, 'Space', true);
@@ -1224,7 +1217,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines[0]).toBe(
-      'The office door is locked tight. You will need something explosive to blast through the wall!'
+      "It's locked. Maybe I can blow it open."
     );
     // Dismiss dialogue
     applyKeyEvent(input, 'Space', true);
@@ -3796,6 +3789,13 @@ Tanja -> Alex
     expect(basement.flamethrowerPickedUp).toBe(true);
     expect(state.player.unlockedFlamethrower).toBe(true);
     expect(state.player.equippedItem).toBe('flamethrower');
+    expect(state.activeDialogue?.lines).toEqual([
+      'Use the number keys to change weapon.',
+    ]);
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
+    expect(state.activeDialogue).toBeNull();
 
     // Switch slot 1 (empty) and back to slot 4 (flamethrower)
     applyKeyEvent(input, 'Digit1', true);
@@ -4325,6 +4325,17 @@ Tanja -> Alex
     }
     expect(upstairs.anneMarieCombat.mode).toBe('dead');
     expect(upState.droppedKatanas.length).toBe(1);
+    expect(upState.activeDialogue?.lines).toEqual([
+      "I guess it's my turn to...",
+      'Take out the trash.',
+    ]);
+    // Dismiss Santa's post-kill one-liner dialogue
+    for (let i = 0; i < 2; i++) {
+      applyKeyEvent(input, 'Space', true);
+      updateGameState(upState, input, 0.02);
+      applyKeyEvent(input, 'Space', false);
+    }
+    expect(upState.activeDialogue).toBeNull();
 
     // Walk onto dropped katana -> unlocks & equips slot 5 ('katana')
     upState.player.x = upState.droppedKatanas[0].x - 4;
@@ -4926,7 +4937,34 @@ describe('Hostile armored headcrab cat', () => {
     }
     expect(upstairs.anneMarieCombat.mode).toBe('hostile');
     expect(state.player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)).toBe(true);
+    expect(state.activeDialogue?.speakerPortrait).toBe('Anne-Marie');
     expect(state.activeDialogue?.lines).toEqual([...ANNE_MARIE_HOSTILE_DIALOGUE_LINES]);
+
+    // Advancing through Anne-Marie's reveal chains into the "Murder-mystery solved." achievement banner
+    for (let i = 0; i < ANNE_MARIE_HOSTILE_DIALOGUE_LINES.length; i++) {
+      applyKeyEvent(input, 'Space', true);
+      updateGameState(state, input, 0.02);
+      applyKeyEvent(input, 'Space', false);
+    }
+    expect(state.activeDialogue?.variant).toBe('achievement');
+    expect(state.activeDialogue?.lines).toEqual([
+      'ACHIEVEMENT UNLOCKED: Murder-mystery solved.',
+    ]);
+    // Dismiss achievement banner and verify Anne-Marie runs at 2x speed (48 px/s) when chasing Santa
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    upstairs.anneMarieCombat.hostileAlertTimer = 0;
+    upstairs.anneMarieCombat.pathTimer = 0;
+    upstairs.anneMarieNpc.x = 24 * TILE_SIZE + 2;
+    upstairs.anneMarieNpc.y = 6 * TILE_SIZE + 2;
+    state.player.x = 24 * TILE_SIZE + 2;
+    state.player.y = 9.5 * TILE_SIZE;
+    const amStartY = upstairs.anneMarieNpc.y;
+    for (let i = 0; i < 10; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    expect(upstairs.anneMarieNpc.y - amStartY).toBeGreaterThan(20); // > normal 12px in 0.5s (2x = 24px)
 
     // 4. Blowing up a wall around the basement bathroom makes Hanneloes active & hostile
     loadLevel(state, 'level-basement');
@@ -5001,5 +5039,25 @@ describe('Hostile armored headcrab cat', () => {
       updateGameState(npcBlastState, retryInput, 0.02);
     }
     expect(upLvl.dianaCombat.health).toBe(dianaStartHp - 50);
+
+    // 7. Outside HUD visibility: equipment & full-HP health bar hidden until Rudolph interaction / Uzi unlock
+    const hudOutside = createGameState({
+      initialLevelId: 'level-outside',
+      showIntroDialogue: false,
+    });
+    expect(shouldShowEquipmentHud(hudOutside)).toBe(false);
+    expect(shouldShowHealthBar(hudOutside)).toBe(false);
+
+    // Taking damage outside reveals health bar, while equipment HUD remains hidden
+    damagePlayer(hudOutside, 10);
+    expect(shouldShowHealthBar(hudOutside)).toBe(true);
+    expect(shouldShowEquipmentHud(hudOutside)).toBe(false);
+
+    // After interacting with Rudolph on the roof, all HUD elements are displayed at full health
+    setPlayerHealth(hudOutside.player, MAX_PLAYER_HEALTH);
+    hudOutside.player.delayedHealth = MAX_PLAYER_HEALTH;
+    hudOutside.player.states.set(RUDOLPH_INSPECTED_KEY, true);
+    expect(shouldShowEquipmentHud(hudOutside)).toBe(true);
+    expect(shouldShowHealthBar(hudOutside)).toBe(true);
   });
 });

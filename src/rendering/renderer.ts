@@ -33,6 +33,7 @@ import {
   UPSTAIRS_DIANA_PRESENT_BOUNDS,
   UPSTAIRS_SIMON_PRESENT_BOUNDS,
 } from '../world/levels/levelUpstairs';
+import { RUDOLPH_INSPECTED_KEY } from '../world/levels/levelOutside';
 import { CollidableDoor } from '../world/levels/types';
 import {
   DAMAGED_WIRE_HAZARD,
@@ -604,6 +605,22 @@ function drawBazookaIcon(
   ctx.fillStyle = '#eab308';
   ctx.fillRect(1, -5, 3, 2);
   ctx.restore();
+}
+
+export function shouldShowEquipmentHud(state: GameState): boolean {
+  return (
+    state.currentLevelId !== 'level-outside' ||
+    state.player.unlockedUzi ||
+    Boolean(state.player.states.get(RUDOLPH_INSPECTED_KEY))
+  );
+}
+
+export function shouldShowHealthBar(state: GameState): boolean {
+  return (
+    shouldShowEquipmentHud(state) ||
+    state.player.health < state.player.maxHealth ||
+    state.player.delayedHealth !== state.player.health
+  );
 }
 
 export function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
@@ -2106,8 +2123,12 @@ export function renderGame(
     // 2D HUD overlay on top of the 3D scene (NPC Billboards, Health Bar, Equipped Item, Dialogue, Interaction Prompts)
     if (!state.worldFadedToBlack) {
       drawNpcBillboards3D(ctx, state, cam, assets);
-      drawHealthBar(ctx, player);
-      drawEquippedItemHud(ctx, player, state.elapsedTime);
+      if (shouldShowHealthBar(state)) {
+        drawHealthBar(ctx, player);
+      }
+      if (shouldShowEquipmentHud(state)) {
+        drawEquippedItemHud(ctx, player, state.elapsedTime);
+      }
     }
     drawDamageFlashOverlay(ctx, state);
     drawDialogueOverlay(ctx, state, assets);
@@ -2797,8 +2818,12 @@ export function renderGame(
 
   // Screen-space UI overlay: Health Bar, Equipped Item HUD, Dialogue/Achievement/GameOver
   if (!state.worldFadedToBlack) {
-    drawHealthBar(ctx, player);
-    drawEquippedItemHud(ctx, player, elapsedTime);
+    if (shouldShowHealthBar(state)) {
+      drawHealthBar(ctx, player);
+    }
+    if (shouldShowEquipmentHud(state)) {
+      drawEquippedItemHud(ctx, player, elapsedTime);
+    }
   }
   drawDamageFlashOverlay(ctx, state);
   drawDialogueOverlay(ctx, state, assets);

@@ -463,7 +463,8 @@ export function stepHostileNpcAlongPath(
   player: Player,
   map: TileMap,
   solidObstacles: readonly Rect[],
-  dtSeconds: number
+  dtSeconds: number,
+  speedMultiplier: number = 1
 ): void {
   if (npc.mode !== 'hostile' || npc.hostileAlertTimer > 0 || dtSeconds <= 0) {
     npc.isMoving = false;
@@ -528,7 +529,10 @@ export function stepHostileNpcAlongPath(
     return;
   }
 
-  const step = Math.min(adist, NPC_HOSTILE_WALK_SPEED * dtSeconds);
+  const step = Math.min(
+    adist,
+    NPC_HOSTILE_WALK_SPEED * speedMultiplier * dtSeconds
+  );
   const vx = (ax / adist) * step;
   const vy = (ay / adist) * step;
 

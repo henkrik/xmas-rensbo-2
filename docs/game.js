@@ -2087,7 +2087,7 @@
       }
     }
   }
-  function stepHostileNpcAlongPath(npc, bounds, player, map, solidObstacles, dtSeconds) {
+  function stepHostileNpcAlongPath(npc, bounds, player, map, solidObstacles, dtSeconds, speedMultiplier = 1) {
     if (npc.mode !== "hostile" || npc.hostileAlertTimer > 0 || dtSeconds <= 0) {
       npc.isMoving = false;
       return;
@@ -2137,7 +2137,10 @@
       npc.isMoving = false;
       return;
     }
-    const step = Math.min(adist, NPC_HOSTILE_WALK_SPEED * dtSeconds);
+    const step = Math.min(
+      adist,
+      NPC_HOSTILE_WALK_SPEED * speedMultiplier * dtSeconds
+    );
     const vx = ax / adist * step;
     const vy = ay / adist * step;
     const canMoveTo = (nx, ny) => {
@@ -2893,7 +2896,7 @@
         const door = this.doors[doorIdx];
         if (door.id === "upstairs-office-door") {
           ctx.openDialogue([
-            "The office door is locked tight. You will need something explosive to blast through the wall!"
+            "It's locked. Maybe I can blow it open."
           ]);
           return true;
         }
@@ -3029,7 +3032,8 @@
         player,
         this.map,
         this.getSolidObstacles(),
-        dtSeconds
+        dtSeconds,
+        combat.key === "upstairs:Anne-Marie" ? 2 : 1
       );
       const originX = bounds.x + bounds.width * 0.5;
       const originY = bounds.y + bounds.height * 0.5;
@@ -3405,7 +3409,19 @@
         }
         if ((this.anneMarieCombat.mode === "hostile" || this.anneMarieCombat.mode === "burning") && !player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)) {
           player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
-          ctx.openDialogue([...ANNE_MARIE_HOSTILE_DIALOGUE_LINES], void 0, "Anne Marie");
+          ctx.openDialogue(
+            [...ANNE_MARIE_HOSTILE_DIALOGUE_LINES],
+            () => {
+              ctx.openDialogue(
+                ["ACHIEVEMENT UNLOCKED: Murder-mystery solved."],
+                void 0,
+                void 0,
+                false,
+                "achievement"
+              );
+            },
+            "Anne-Marie"
+          );
         }
       }
       if (this.rosannaSpawned) {
@@ -4823,6 +4839,7 @@
         this.flamethrowerPickedUp = true;
         player.unlockedFlamethrower = true;
         selectPlayerEquipmentSlot(player, 4);
+        ctx?.openDialogue(["Use the number keys to change weapon."]);
       }
       const toIgnite = [];
       for (const tile of this.stairsWoodTiles) {
@@ -4850,6 +4867,7 @@
         this.flamethrowerPickedUp = true;
         player.unlockedFlamethrower = true;
         selectPlayerEquipmentSlot(player, 4);
+        ctx.openDialogue(["Use the number keys to change weapon."]);
         return true;
       }
       const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
@@ -4873,7 +4891,7 @@
         if (!player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
           player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
           ctx.openDialogue([
-            "Hmm... so I believe the Christmas tree is to the left, but I must not be seen!"
+            "Heeeeere's Santa."
           ]);
         }
         return true;
@@ -5261,8 +5279,7 @@
         if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
           player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
           ctx.openDialogue([
-            "Okay... I'm inside the house. And I'm Santa. Needless to say NOBODY MUST SEE ME.",
-            "I have to get to the Christmas tree in time for Christmas."
+            "You better run, Santa Claus is coming to town."
           ]);
         }
         return true;
@@ -6008,6 +6025,12 @@
           z: groundZ,
           yaw: npc.aimYaw + 0.4
         });
+        if (key === "upstairs:Anne-Marie") {
+          state.activeDialogue = {
+            lines: ["I guess it's my turn to...", "Take out the trash."],
+            currentIndex: 0
+          };
+        }
       } else if (npc.weapon === "flamethrower") {
         state.droppedFlamethrowers.push({
           levelId: state.currentLevelId,
@@ -7233,7 +7256,7 @@
             if (!state.player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
               state.player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
               transitionCtx.openDialogue([
-                "Hmm... so I believe the Christmas tree is to the left, but I must not be seen!"
+                "Heeeeere's Santa."
               ]);
             }
           }
@@ -12479,6 +12502,12 @@
     ctx.fillRect(1, -5, 3, 2);
     ctx.restore();
   }
+  function shouldShowEquipmentHud(state) {
+    return state.currentLevelId !== "level-outside" || state.player.unlockedUzi || Boolean(state.player.states.get(RUDOLPH_INSPECTED_KEY));
+  }
+  function shouldShowHealthBar(state) {
+    return shouldShowEquipmentHud(state) || state.player.health < state.player.maxHealth || state.player.delayedHealth !== state.player.health;
+  }
   function drawHealthBar(ctx, player) {
     const x = 8;
     const y = 8;
@@ -13576,8 +13605,12 @@
       }
       if (!state.worldFadedToBlack) {
         drawNpcBillboards3D(ctx, state, cam, assets);
-        drawHealthBar(ctx, player);
-        drawEquippedItemHud(ctx, player, state.elapsedTime);
+        if (shouldShowHealthBar(state)) {
+          drawHealthBar(ctx, player);
+        }
+        if (shouldShowEquipmentHud(state)) {
+          drawEquippedItemHud(ctx, player, state.elapsedTime);
+        }
       }
       drawDamageFlashOverlay(ctx, state);
       drawDialogueOverlay(ctx, state, assets);
@@ -14150,8 +14183,12 @@
       drawSnowfall(ctx, elapsedTime, camera);
     }
     if (!state.worldFadedToBlack) {
-      drawHealthBar(ctx, player);
-      drawEquippedItemHud(ctx, player, elapsedTime);
+      if (shouldShowHealthBar(state)) {
+        drawHealthBar(ctx, player);
+      }
+      if (shouldShowEquipmentHud(state)) {
+        drawEquippedItemHud(ctx, player, elapsedTime);
+      }
     }
     drawDamageFlashOverlay(ctx, state);
     drawDialogueOverlay(ctx, state, assets);

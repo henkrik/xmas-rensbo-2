@@ -22,6 +22,7 @@ import {
   EquipmentId,
   KATANA_SWING_DURATION_SECONDS,
   PUNCH_DURATION_SECONDS,
+  PLAYER_UZI_RELOAD_SECONDS,
   UZI_DROP_DURATION_SECONDS,
   UZI_EQUIP_DURATION_SECONDS,
 } from '../entities/player';
@@ -36,6 +37,7 @@ import {
   STAIRS_WOOD_BURN_DURATION,
 } from '../world/levels/levelBasement';
 import {
+  BODY_ARMOR_TAKEN_KEY,
   C4_PLACED_STATE_KEY,
   C4_TAKEN_STATE_KEY,
   DIANA_DISTRACTED_KEY,
@@ -43,6 +45,7 @@ import {
   SIMON_DISTRACTED_KEY,
   SIMON_PRESENT_TAKEN_KEY,
   UPSTAIRS_ALBIN_X,
+  UPSTAIRS_BODY_ARMOR_BOUNDS,
   UPSTAIRS_C4_BOUNDS,
   UPSTAIRS_DIANA_PRESENT_BOUNDS,
   UPSTAIRS_SIMON_PRESENT_BOUNDS,
@@ -2713,6 +2716,7 @@ export interface CharacterColors3D {
   uziEquipTimer?: number;
   uziDropTimer?: number;
   uziReloadTimer?: number;
+  uziReloadDuration?: number;
   katanaSwingTimer?: number;
   wildKatanaSwing?: boolean;
   isCharred?: boolean;
@@ -2907,8 +2911,9 @@ export function addHumanoid3D(
   const isHoldingFlamethrower = equippedItem === 'flamethrower';
   const isHoldingKatana = equippedItem === 'katana';
   const isReloadingUzi = isHoldingUzi && (style.uziReloadTimer ?? 0) > 0;
+  const reloadDuration = style.uziReloadDuration ?? NPC_UZI_RELOAD_SECONDS;
   const reloadProgress = isReloadingUzi
-    ? 1 - Math.max(0, Math.min(1, (style.uziReloadTimer ?? 0) / NPC_UZI_RELOAD_SECONDS))
+    ? 1 - Math.max(0, Math.min(1, (style.uziReloadTimer ?? 0) / reloadDuration))
     : 0;
   const isDroppingUzi =
     (style.uziDropTimer ?? 0) > 0 && !isHoldingUzi && !isHoldingFlamethrower;
@@ -3476,6 +3481,28 @@ function addDog3D(
   }
 }
 
+function addBodyArmor3D(
+  opaque: MeshBuilder,
+  translucent: MeshBuilder,
+  cx: number,
+  cz: number,
+  elapsedTime: number
+): void {
+  const pulse = 0.5 + 0.5 * Math.sin(elapsedTime * 5);
+  translucent.addShadowDisc(cx, 0.03, cz, 6.2 + pulse * 0.5, 6.2 + pulse * 0.5, 0.35);
+  opaque.addTorus(cx, 0.25, cz, 5.4, 0.32, 16, 6, 'y', rgb(30, 58, 138), TexId.SOLID, 0.2);
+
+  const bob = Math.sin(elapsedTime * 3.2) * 0.55;
+  const navyMain = rgb(24, 48, 112);
+  const navyPlate = rgb(38, 72, 152);
+  const strapDark = rgb(26, 30, 38);
+  // Tactical vest torso + reinforced ballistic chest plate + shoulder straps
+  opaque.addBox(cx - 2.9, 1.4 + bob, cz - 1.5, 5.8, 5.4, 3.0, navyMain, TexId.FABRIC, 0.6);
+  opaque.addBox(cx - 2.1, 2.2 + bob, cz - 1.8, 4.2, 3.6, 3.6, navyPlate, TexId.SOLID, 0.5);
+  opaque.addBox(cx - 2.6, 6.8 + bob, cz - 1.2, 1.3, 1.5, 2.4, strapDark, TexId.SOLID, 0.4);
+  opaque.addBox(cx + 1.3, 6.8 + bob, cz - 1.2, 1.3, 1.5, 2.4, strapDark, TexId.SOLID, 0.4);
+}
+
 function addC4Explosive3D(
   opaque: MeshBuilder,
   translucent: MeshBuilder,
@@ -3888,6 +3915,8 @@ export function buildDynamicSceneMeshes(
       punchHand: state.player.punchHand,
       uziEquipTimer: state.player.uziEquipTimer,
       uziDropTimer: state.player.uziDropTimer,
+      uziReloadTimer: state.player.uziReloadTimer,
+      uziReloadDuration: PLAYER_UZI_RELOAD_SECONDS,
       katanaSwingTimer: state.player.katanaSwingTimer,
       weaponVibrationTimer: state.player.weaponVibrationTimer,
       elapsedTime: t,
@@ -4224,7 +4253,9 @@ export function buildDynamicSceneMeshes(
     }
 
     // Hanneloes in the bathroom (sitting on toilet when passive, chasing with Uzi when hostile)
-    const isBathroomClosed = basement.doors.some((d) => d.id === 'basement-bathroom-door');
+    const isBathroomClosed = basement.doors.some(
+      (d) => d.id === 'basement-bathroom-door' && d.hiddenRegions.length > 0
+    );
     if (!isBathroomClosed) {
       const tx = basement.toiletNpc.x + basement.toiletNpc.width * 0.5;
       const tz = basement.toiletNpc.y + basement.toiletNpc.height * 0.5;
@@ -4563,6 +4594,9 @@ export function buildDynamicSceneMeshes(
       }
     }
 
+    const isShowerDoorOpen = !upstairs.doors.some(
+      (d) => d.id === 'upstairs-shower-door' && d.hiddenRegions.length > 0
+    );
     const isTableRoomDoorOpen = !upstairs.doors.some(
       (d) => d.id === 'upstairs-table-room-door' && d.hiddenRegions.length > 0
     );
@@ -4572,6 +4606,16 @@ export function buildDynamicSceneMeshes(
     const isOfficeDoorOpen = !upstairs.doors.some(
       (d) => d.id === 'upstairs-office-door' && d.hiddenRegions.length > 0
     );
+
+    // Military-grade Body Armor inside Upstairs Bathroom (Shower room)
+    if (
+      isShowerDoorOpen &&
+      !state.player.hasBodyArmor &&
+      !state.player.states.get(BODY_ARMOR_TAKEN_KEY)
+    ) {
+      const ar = UPSTAIRS_BODY_ARMOR_BOUNDS;
+      addBodyArmor3D(opaque, translucent, ar.x + ar.width * 0.5, ar.y + ar.height * 0.5, t);
+    }
 
     // Diana's Present in Bedroom
     if (isBedroomDoorOpen && !state.player.states.get(DIANA_PRESENT_TAKEN_KEY)) {

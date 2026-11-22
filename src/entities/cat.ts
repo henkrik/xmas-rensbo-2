@@ -55,8 +55,8 @@ export const CAT_STOP_FLEE_DISTANCE = 5.0 * TILE_SIZE; // > 5 tiles -> standing 
 export const CAT_RETRIGGER_FLEE_DISTANCE = 2.0 * TILE_SIZE; // <= 2 tiles -> flee again
 
 // Combat & headcrab parameters
-export const MAX_CAT_HEALTH = 100;
-export const CAT_ARMOR_DAMAGE_MULTIPLIER = 0.1; // Takes 1/10th damage compared to NPCs
+export const MAX_CAT_HEALTH = 500;
+export const CAT_ARMOR_DAMAGE_MULTIPLIER = 1.0; // Takes normal damage
 export const CAT_HOSTILE_JUMP_SPEED = 95; // px/s
 export const CAT_JUMP_CYCLE_SECONDS = 0.55;
 export const CAT_JUMP_PEAK_Z = 13.5;

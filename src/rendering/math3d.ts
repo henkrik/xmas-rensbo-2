@@ -699,7 +699,13 @@ export function updateCamera3D(
       targetOffsetY = 1.5;
       targetOffsetZ = (doorZ - pz) * 0.45;
     } else if (rosannaCutscene?.active) {
+      const winX = rosannaCutscene.santaX + 8;
+      const winZ = 4.0 * TILE_SIZE;
+      targetYaw = Math.atan2(winZ - pz, winX - px);
       elapsed = rosannaCutscene.elapsed;
+      targetOffsetX = (winX - px) * 0.45;
+      targetOffsetY = 2.0;
+      targetOffsetZ = (winZ - pz) * 0.45;
     }
 
     const turnBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 6) : 1;

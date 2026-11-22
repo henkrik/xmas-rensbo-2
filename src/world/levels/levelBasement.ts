@@ -430,7 +430,9 @@ export class LevelBasement implements GameLevel {
   }
 
   public getArmedNpcs(): Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> {
-    const isBathroomOpen = !this.doors.some((d) => d.id === 'basement-bathroom-door');
+    const isBathroomOpen = !this.doors.some(
+      (d) => d.id === 'basement-bathroom-door' && d.hiddenRegions.length > 0
+    );
     return [
       { state: this.arjanCombat, bounds: this.windowNpc, visible: true },
       { state: this.olexaCombat, bounds: this.olexaNpc, visible: true },
@@ -520,7 +522,9 @@ export class LevelBasement implements GameLevel {
     if (this.olexaCombat.mode !== 'dead') {
       obs.push(this.olexaNpc);
     }
-    const isBathroomOpen = !this.doors.some((d) => d.id === 'basement-bathroom-door');
+    const isBathroomOpen = !this.doors.some(
+      (d) => d.id === 'basement-bathroom-door' && d.hiddenRegions.length > 0
+    );
     if (isBathroomOpen && this.hanneloesCombat.mode !== 'dead') {
       obs.push(this.toiletNpc);
     }
@@ -852,8 +856,10 @@ export class LevelBasement implements GameLevel {
       }
     }
 
-    // 3. Hanneloes (toiletNpc, active once bathroom door is opened)
-    const isBathroomOpen = !this.doors.some((d) => d.id === 'basement-bathroom-door');
+    // 3. Hanneloes (toiletNpc, active once bathroom door or surrounding wall is opened)
+    const isBathroomOpen = !this.doors.some(
+      (d) => d.id === 'basement-bathroom-door' && d.hiddenRegions.length > 0
+    );
     updateNpcHealthAndTimers(this.hanneloesCombat, dtSeconds);
     if (this.hanneloesCombat.mode === 'dead') {
       this.hanneloesCone = null;

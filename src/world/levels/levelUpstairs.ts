@@ -3,6 +3,7 @@ import {
   ArmedNpcState,
   createArmedNpcState,
   enterHostileMode,
+  MAX_NPC_HEALTH,
   NPC_HOSTILE_LOSE_SIGHT_SECONDS,
   NPC_KATANA_MELEE_COOLDOWN,
   NPC_KATANA_MELEE_DAMAGE,
@@ -17,6 +18,7 @@ import {
 } from '../../entities/npcCombat';
 import {
   Direction,
+  equipPlayerBodyArmor,
   Player,
   Rect,
   rectsIntersect,
@@ -264,6 +266,30 @@ export const UPSTAIRS_COMPUTER_BOUNDS: Rect = {
 
 export const C4_TAKEN_STATE_KEY = 'upstairsC4Taken';
 export const C4_PLACED_STATE_KEY = 'upstairsC4Placed';
+export const BODY_ARMOR_TAKEN_KEY = 'upstairsBodyArmorTaken';
+export const ANNE_MARIE_HOSTILE_DIALOGUE_KEY = 'upstairsAnneMarieHostileDialogueShown';
+export const ANNE_MARIE_MAX_HEALTH = MAX_NPC_HEALTH * 5;
+export const ANNE_MARIE_HOSTILE_DIALOGUE_LINES: readonly string[] = [
+  'I was just sharpening my knife.',
+  'You see... my other knife is missing. Where did I leave it?',
+  'Oh I remember.',
+  'And I want you to know, it was me.',
+  'I stabbed Rudolph.',
+];
+
+/** Medkit lying in the open kitchen floor east of the kitchen island (col 12.5, row 7.5). */
+export const UPSTAIRS_KITCHEN_MEDKIT_POS = {
+  x: 12.5 * TILE_SIZE,
+  y: 7.5 * TILE_SIZE,
+};
+
+/** Military-grade body armor inside the upstairs bathroom (shower room, col 18, row 5). */
+export const UPSTAIRS_BODY_ARMOR_BOUNDS: Rect = {
+  x: 18 * TILE_SIZE + 2,
+  y: 5 * TILE_SIZE + 2,
+  width: 12,
+  height: 12,
+};
 
 /** Military C4 explosive charge inside Arjan's office (col 23, row 15). */
 export const UPSTAIRS_C4_BOUNDS: Rect = {
@@ -513,7 +539,8 @@ export class LevelUpstairs implements GameLevel {
       'upstairs:Anne-Marie',
       'Anne-Marie',
       this.anneMarieAngle,
-      'katana'
+      'katana',
+      ANNE_MARIE_MAX_HEALTH
     );
     this.anneMarieCone = new ConeOfSight(
       { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
@@ -728,6 +755,16 @@ export class LevelUpstairs implements GameLevel {
       });
     }
 
+    // Military-grade body armor in upstairs bathroom (if not already taken)
+    if (!player?.states.get(BODY_ARMOR_TAKEN_KEY) && !player?.hasBodyArmor) {
+      list.push({
+        id: 'upstairs-body-armor',
+        bounds: { ...UPSTAIRS_BODY_ARMOR_BOUNDS },
+        promptText: 'Take Body Armor',
+        dialogueLines: [],
+      });
+    }
+
     // Diana's Present in bedroom (if not already taken)
     if (!player?.states.get(DIANA_PRESENT_TAKEN_KEY)) {
       list.push({
@@ -786,21 +823,46 @@ export class LevelUpstairs implements GameLevel {
       return true;
     }
 
+    if (interactableId === 'upstairs-body-armor') {
+      player.states.set(BODY_ARMOR_TAKEN_KEY, true);
+      equipPlayerBodyArmor(player);
+      ctx.openDialogue([
+        'You put on military-grade body armor! Max HP increased to 200 and restored to full.',
+      ]);
+      return true;
+    }
+
     if (interactableId === 'upstairs-diana-present') {
       player.states.set(DIANA_PRESENT_TAKEN_KEY, true);
-      ctx.openDialogue(["You picked up Diana's Present."]);
+      ctx.openDialogue([
+        "I'll open this! Hmm, it's whiskey.",
+        'You drank the whole bottle.',
+      ]);
       return true;
     }
 
     if (interactableId === 'upstairs-simon-present') {
       player.states.set(SIMON_PRESENT_TAKEN_KEY, true);
-      ctx.openDialogue(["You picked up Simon's present."]);
+      ctx.openDialogue([
+        "I'll open this! Hmm, it's whiskey.",
+        'You drank the whole bottle.',
+      ]);
       return true;
     }
 
     if (interactableId === 'upstairs-xmas-tree') {
       if (!player.states.get(C4_TAKEN_STATE_KEY)) {
         return false;
+      }
+      const remainingNpcs = ctx.getRemainingNaughtyListNames
+        ? ctx.getRemainingNaughtyListNames()
+        : [];
+      if (remainingNpcs.length > 0) {
+        ctx.openDialogue([
+          "I'm not ready... I still have to say good-bye to the people on my naughty list. Which are:",
+          remainingNpcs.join(', '),
+        ]);
+        return true;
       }
       player.states.set(C4_PLACED_STATE_KEY, true);
       if (ctx.detonateHouseC4) {
@@ -1394,6 +1456,15 @@ export class LevelUpstairs implements GameLevel {
           );
           propagateHostileAlert(this.getArmedNpcs(), this.anneMarieCombat.key);
         }
+      }
+
+      if (
+        (this.anneMarieCombat.mode === 'hostile' ||
+          this.anneMarieCombat.mode === 'burning') &&
+        !player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)
+      ) {
+        player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
+        ctx.openDialogue([...ANNE_MARIE_HOSTILE_DIALOGUE_LINES], undefined, 'Anne Marie');
       }
     }
 

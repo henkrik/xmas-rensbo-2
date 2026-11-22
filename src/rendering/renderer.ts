@@ -8,7 +8,11 @@ import {
   Player,
   Rect,
 } from '../entities/player';
-import { GameState, MotorcycleState } from '../world/gameState';
+import {
+  DAMAGE_FLASH_DURATION_SECONDS,
+  GameState,
+  MotorcycleState,
+} from '../world/gameState';
 import {
   BASEMENT_FLAMETHROWER_BOUNDS,
   BASEMENT_HALL_NORTH_DOOR_BOUNDS,
@@ -16,6 +20,7 @@ import {
   BASEMENT_SPA_HIDDEN_MASK,
 } from '../world/levels/levelBasement';
 import {
+  BODY_ARMOR_TAKEN_KEY,
   C4_PLACED_STATE_KEY,
   C4_TAKEN_STATE_KEY,
   DIANA_DISTRACTED_KEY,
@@ -23,6 +28,7 @@ import {
   SIMON_DISTRACTED_KEY,
   SIMON_PRESENT_TAKEN_KEY,
   UPSTAIRS_ALBIN_X,
+  UPSTAIRS_BODY_ARMOR_BOUNDS,
   UPSTAIRS_C4_BOUNDS,
   UPSTAIRS_DIANA_PRESENT_BOUNDS,
   UPSTAIRS_SIMON_PRESENT_BOUNDS,
@@ -506,10 +512,11 @@ function drawNpcBillboards3D(
 
     const innerX = bx + 1;
     const innerY = by + 1;
-    const healthRatio = Math.max(0, Math.min(1, npc.health / MAX_NPC_HEALTH));
+    const npcMaxHp = npc.maxHealth || MAX_NPC_HEALTH;
+    const healthRatio = Math.max(0, Math.min(1, npc.health / npcMaxHp));
     const delayedRatio = Math.max(
       0,
-      Math.min(1, npc.delayedHealth / MAX_NPC_HEALTH)
+      Math.min(1, npc.delayedHealth / npcMaxHp)
     );
     const healthPx =
       npc.health > 0 ? Math.max(1, Math.round(barInnerW * healthRatio)) : 0;
@@ -599,7 +606,7 @@ function drawBazookaIcon(
   ctx.restore();
 }
 
-function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
+export function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
   const x = 8;
   const y = 8;
   const innerW = 88;
@@ -608,7 +615,7 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
   const outerH = innerH + 4;
 
   ctx.save();
-  // Drop shadow & frame
+  // Drop shadow & frame (base health 0..100)
   ctx.fillStyle = 'rgba(8, 12, 20, 0.7)';
   ctx.fillRect(x + 1, y + 1, outerW, outerH);
   ctx.fillStyle = '#18080e';
@@ -619,15 +626,14 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
 
   const bx = x + 2;
   const by = y + 2;
-  const healthRatio = Math.max(0, Math.min(1, player.health / MAX_PLAYER_HEALTH));
-  const delayedRatio = Math.max(
-    0,
-    Math.min(1, player.delayedHealth / MAX_PLAYER_HEALTH)
-  );
+  const baseHealth = Math.max(0, Math.min(MAX_PLAYER_HEALTH, player.health));
+  const baseDelayed = Math.max(0, Math.min(MAX_PLAYER_HEALTH, player.delayedHealth));
+  const healthRatio = baseHealth / MAX_PLAYER_HEALTH;
+  const delayedRatio = baseDelayed / MAX_PLAYER_HEALTH;
   const healthPx =
-    player.health > 0 ? Math.max(1, Math.round(innerW * healthRatio)) : 0;
+    baseHealth > 0 ? Math.max(1, Math.round(innerW * healthRatio)) : 0;
   const delayedPx =
-    player.delayedHealth > 0 ? Math.max(1, Math.round(innerW * delayedRatio)) : 0;
+    baseDelayed > 0 ? Math.max(1, Math.round(innerW * delayedRatio)) : 0;
 
   // Bright red active health bar
   if (healthPx > 0) {
@@ -637,8 +643,8 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
     ctx.fillRect(bx, by, healthPx, 2);
   }
 
-  // Darker red delta highlight on top whenever delayedHealth != health
-  if (player.delayedHealth !== player.health) {
+  // Darker red delta highlight on top whenever delayedHealth != health in 0..100 band
+  if (baseDelayed !== baseHealth) {
     const startPx = Math.min(healthPx, delayedPx);
     const endPx = Math.max(healthPx, delayedPx);
     const deltaW = Math.max(1, endPx - startPx);
@@ -646,6 +652,46 @@ function drawHealthBar(ctx: CanvasRenderingContext2D, player: Player): void {
     ctx.fillRect(bx + startPx, by, deltaW, innerH);
     ctx.fillStyle = '#a41623';
     ctx.fillRect(bx + startPx, by, deltaW, 2);
+  }
+
+  // Secondary Navy Blue Armor Bar (HP 100..200) underneath when player has picked up body armor
+  if (player.hasBodyArmor) {
+    const ay = y + outerH + 3;
+    ctx.fillStyle = 'rgba(8, 12, 20, 0.7)';
+    ctx.fillRect(x + 1, ay + 1, outerW, outerH);
+    ctx.fillStyle = '#090e1c';
+    ctx.fillRect(x, ay, outerW, outerH);
+    ctx.strokeStyle = '#e8f0ff';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, ay + 0.5, outerW - 1, outerH - 1);
+
+    const armorHealth = Math.max(0, Math.min(MAX_PLAYER_HEALTH, player.health - MAX_PLAYER_HEALTH));
+    const armorDelayed = Math.max(
+      0,
+      Math.min(MAX_PLAYER_HEALTH, player.delayedHealth - MAX_PLAYER_HEALTH)
+    );
+    const armorPx =
+      armorHealth > 0 ? Math.max(1, Math.round(innerW * (armorHealth / MAX_PLAYER_HEALTH))) : 0;
+    const armorDelayedPx =
+      armorDelayed > 0
+        ? Math.max(1, Math.round(innerW * (armorDelayed / MAX_PLAYER_HEALTH)))
+        : 0;
+
+    if (armorPx > 0) {
+      ctx.fillStyle = '#1e3a8a';
+      ctx.fillRect(bx, ay + 2, armorPx, innerH);
+      ctx.fillStyle = '#3b5998';
+      ctx.fillRect(bx, ay + 2, armorPx, 2);
+    }
+    if (armorDelayed !== armorHealth) {
+      const startPx = Math.min(armorPx, armorDelayedPx);
+      const endPx = Math.max(armorPx, armorDelayedPx);
+      const deltaW = Math.max(1, endPx - startPx);
+      ctx.fillStyle = '#0f1d45';
+      ctx.fillRect(bx + startPx, ay + 2, deltaW, innerH);
+      ctx.fillStyle = '#172554';
+      ctx.fillRect(bx + startPx, ay + 2, deltaW, 2);
+    }
   }
 
   ctx.restore();
@@ -756,7 +802,11 @@ function drawFlamethrowerIcon(
   ctx.restore();
 }
 
-export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Player): void {
+export function drawEquippedItemHud(
+  ctx: CanvasRenderingContext2D,
+  player: Player,
+  elapsedTime: number = 0
+): void {
   const boxW = 50;
   const boxH = 34;
   const boxX = ctx.canvas.width - boxW - 8;
@@ -926,6 +976,51 @@ export function drawEquippedItemHud(ctx: CanvasRenderingContext2D, player: Playe
     drawPixelText(ctx, slot.key, sx + 3, slotsY + 2, '#ffd166', '#0c101a');
   });
 
+  // Blinking status text beneath equipment slots ("RELOADING" for Uzi, "NO AMMO" for Flamethrower)
+  const isUziReloading =
+    player.equippedItem === 'uzi' && player.uziReloadTimer > 0;
+  const isFlamethrowerEmpty =
+    player.equippedItem === 'flamethrower' &&
+    Number.isFinite(player.flamethrowerAmmo) &&
+    player.flamethrowerAmmo <= 0;
+
+  if ((isUziReloading || isFlamethrowerEmpty) && Math.floor(elapsedTime * 6) % 2 === 0) {
+    const statusText = isUziReloading ? 'RELOADING' : 'NO AMMO';
+    const statusColor = isUziReloading ? '#ffd166' : '#f87171';
+    const tw = measurePixelText(statusText);
+    const pillW = tw + 10;
+    const pillH = 14;
+    const pillX = boxX + boxW - pillW;
+    const pillY = slotsY + slotSize + 4;
+    drawSnesFrame(ctx, pillX, pillY, pillW, pillH);
+    drawPixelText(
+      ctx,
+      statusText,
+      pillX + 5,
+      pillY + 4,
+      statusColor,
+      '#0c101a'
+    );
+  }
+
+  ctx.restore();
+}
+
+function drawDamageFlashOverlay(
+  ctx: CanvasRenderingContext2D,
+  state: GameState
+): void {
+  if (state.damageFlashTimer <= 0) {
+    return;
+  }
+  const ratio = Math.max(
+    0,
+    Math.min(1, state.damageFlashTimer / DAMAGE_FLASH_DURATION_SECONDS)
+  );
+  const alpha = ratio * 0.45;
+  ctx.save();
+  ctx.fillStyle = `rgba(220, 24, 24, ${alpha.toFixed(4)})`;
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.restore();
 }
 
@@ -2012,8 +2107,9 @@ export function renderGame(
     if (!state.worldFadedToBlack) {
       drawNpcBillboards3D(ctx, state, cam, assets);
       drawHealthBar(ctx, player);
-      drawEquippedItemHud(ctx, player);
+      drawEquippedItemHud(ctx, player, state.elapsedTime);
     }
+    drawDamageFlashOverlay(ctx, state);
     drawDialogueOverlay(ctx, state, assets);
     drawScreenFadeOverlay(ctx, state);
     return;
@@ -2360,6 +2456,20 @@ export function renderGame(
       );
     }
 
+    // Military Body Armor in upstairs bathroom (if not taken)
+    if (!state.player.hasBodyArmor && !state.player.states.get(BODY_ARMOR_TAKEN_KEY)) {
+      const ax = Math.round(UPSTAIRS_BODY_ARMOR_BOUNDS.x + 1);
+      const ay = Math.round(UPSTAIRS_BODY_ARMOR_BOUNDS.y + 1);
+      ctx.save();
+      ctx.fillStyle = '#090e1c';
+      ctx.fillRect(ax - 1, ay - 1, 12, 12);
+      ctx.fillStyle = '#1e3a8a';
+      ctx.fillRect(ax, ay + 1, 10, 9);
+      ctx.fillStyle = '#3b5998';
+      ctx.fillRect(ax + 2, ay + 3, 6, 5);
+      ctx.restore();
+    }
+
     // C4 Explosive in Arjan's office (if not taken) or planted under the Christmas tree
     if (!state.player.states.get(C4_TAKEN_STATE_KEY)) {
       drawC4Explosive(
@@ -2688,8 +2798,9 @@ export function renderGame(
   // Screen-space UI overlay: Health Bar, Equipped Item HUD, Dialogue/Achievement/GameOver
   if (!state.worldFadedToBlack) {
     drawHealthBar(ctx, player);
-    drawEquippedItemHud(ctx, player);
+    drawEquippedItemHud(ctx, player, elapsedTime);
   }
+  drawDamageFlashOverlay(ctx, state);
   drawDialogueOverlay(ctx, state, assets);
   drawScreenFadeOverlay(ctx, state);
 }

@@ -11,6 +11,7 @@ import { createDog, Dog, updateDog } from '../entities/dog';
 import {
   applyNpcDamage,
   ArmedNpcState,
+  enterHostileMode,
   igniteNpc,
   NPC_BAZOOKA_ROCKET_SPEED,
   NPC_BURN_DAMAGE_PER_SECOND,
@@ -31,9 +32,9 @@ import {
   FLAMETHROWER_MAX_DISTANCE,
   FLAMETHROWER_PROJECTILE_SPEED,
   Footprint,
-  MAX_PLAYER_HEALTH,
   MAX_UZI_AMMO,
   Player,
+  PLAYER_UZI_RELOAD_SECONDS,
   Rect,
   rectsIntersect,
   selectPlayerEquipmentSlot,
@@ -45,7 +46,6 @@ import {
   updatePlayer,
   updatePlayerHealthAndTimers,
   updatePlayerJump,
-  UZI_DROP_DURATION_SECONDS,
   UZI_EQUIP_DURATION_SECONDS,
   UZI_FIRE_INTERVAL_SECONDS,
   UZI_PROJECTILE_SPEED,
@@ -82,6 +82,7 @@ import {
 import {
   LevelUpstairs,
   UPSTAIRS_INTRO_STATE_KEY,
+  UPSTAIRS_KITCHEN_MEDKIT_POS,
   UPSTAIRS_STAIRS_TRIGGER_BOUNDS,
 } from './levels/levelUpstairs';
 import {
@@ -304,6 +305,7 @@ export interface GameState {
   debugMode: boolean;
   cheatMode: boolean;
   worldFadedToBlack: boolean;
+  damageFlashTimer: number;
   houseExploding: boolean;
   houseExplosionTimer: number;
   houseExplosionSpawnAccum: number;
@@ -603,6 +605,13 @@ export function createGameState(
         y: BASEMENT_SPA_MEDKIT_POS.y,
         z: 0,
       },
+      {
+        id: 'upstairs-kitchen-medkit',
+        levelId: 'level-upstairs',
+        x: UPSTAIRS_KITCHEN_MEDKIT_POS.x,
+        y: UPSTAIRS_KITCHEN_MEDKIT_POS.y,
+        z: 0,
+      },
     ],
     explosions: [],
     destroyingWalls: [],
@@ -624,6 +633,7 @@ export function createGameState(
     debugMode,
     cheatMode,
     worldFadedToBlack,
+    damageFlashTimer: 0,
     houseExploding: false,
     houseExplosionTimer: 0,
     houseExplosionSpawnAccum: 0,
@@ -647,9 +657,40 @@ export function restartEntireGame(state: GameState): void {
   state.joystickActive = prevJoystick;
 }
 
+export function restartFromBasementCheckpoint(state: GameState): void {
+  const prevJoystick = state.joystickActive;
+  const fresh = createGameState({
+    initialLevelId: 'level-basement',
+    showIntroDialogue: false,
+    debug: state.debugMode,
+    cheat: state.cheatMode,
+    secretSantaDB: state.secretSantaDB,
+  });
+  fresh.player.unlockedUzi = true;
+  fresh.player.uziAmmo = MAX_UZI_AMMO;
+  fresh.player.uziDepleted = false;
+  fresh.player.uziDropTimer = 0;
+  fresh.player.uziReloadTimer = 0;
+  fresh.player.equippedItem = 'uzi';
+  fresh.player.facing = 'down';
+  fresh.player.yaw = Math.PI / 2;
+  fresh.player.renderYaw = Math.PI / 2;
+  Object.assign(state, fresh);
+  state.joystickActive = prevJoystick;
+}
+
+export const DAMAGE_FLASH_DURATION_SECONDS = 0.3;
+export const BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 20;
+
 export function damagePlayer(state: GameState, amount: number): void {
   applyPlayerDamage(state.player, amount);
+  if (amount > 0) {
+    state.damageFlashTimer = DAMAGE_FLASH_DURATION_SECONDS;
+  }
   if (state.player.health <= 0 && !state.cheatMode) {
+    const insideHouse =
+      state.currentLevelId === 'level-basement' ||
+      state.currentLevelId === 'level-upstairs';
     state.gameOver = true;
     state.nearbyInteractable = null;
     state.activeDialogue = {
@@ -657,7 +698,11 @@ export function damagePlayer(state: GameState, amount: number): void {
       currentIndex: 0,
       variant: 'gameover',
       onClose: () => {
-        restartEntireGame(state);
+        if (insideHouse) {
+          restartFromBasementCheckpoint(state);
+        } else {
+          restartEntireGame(state);
+        }
       },
     };
   }
@@ -1004,6 +1049,8 @@ function getArmedNpcByKey(state: GameState, key: string): ArmedNpcState | undefi
   return undefined;
 }
 
+export const ROSANNA_DAMAGE_MULTIPLIER = 0.2; // Rosanna takes 1/5th damage
+
 function damageArmedNpc(
   state: GameState,
   key: string,
@@ -1015,7 +1062,9 @@ function damageArmedNpc(
   const npc = getArmedNpcByKey(state, key);
   if (!npc) return;
   const wasPassive = npc.mode === 'passive';
-  const died = applyNpcDamage(npc, damage);
+  const effectiveDamage =
+    key === 'upstairs:Rosanna' ? damage * ROSANNA_DAMAGE_MULTIPLIER : damage;
+  const died = applyNpcDamage(npc, effectiveDamage);
   if (wasPassive && (npc.mode as string) === 'hostile') {
     if (state.currentLevelId === 'level-basement') {
       propagateHostileAlert(state.levels['level-basement'].getArmedNpcs(), key);
@@ -1273,6 +1322,25 @@ function applyRocketExplosionToWallsAndDoors(
       ? state.levels['level-basement'].doors
       : state.levels['level-upstairs'].doors;
 
+  const activateNpcForRevealedDoor = (doorId: string): void => {
+    if (levelId === 'level-upstairs' && doorId === 'upstairs-bedroom-door') {
+      const upstairs = state.levels['level-upstairs'];
+      if (upstairs.anneMarieCombat.mode === 'passive') {
+        enterHostileMode(upstairs.anneMarieCombat);
+        propagateHostileAlert(upstairs.getArmedNpcs(), upstairs.anneMarieCombat.key);
+      }
+    } else if (levelId === 'level-basement' && doorId === 'basement-bathroom-door') {
+      const basement = state.levels['level-basement'];
+      if (basement.toiletNpc.x >= 21 * TILE_SIZE) {
+        basement.toiletNpc.x = 20 * TILE_SIZE + 2;
+      }
+      if (basement.hanneloesCombat.mode === 'passive') {
+        enterHostileMode(basement.hanneloesCombat);
+        propagateHostileAlert(basement.getArmedNpcs(), basement.hanneloesCombat.key);
+      }
+    }
+  };
+
   const revealRoomsTouchingRect = (rect: Rect): void => {
     const expanded: Rect = {
       x: rect.x - ts - 2,
@@ -1283,6 +1351,7 @@ function applyRocketExplosionToWallsAndDoors(
     for (const d of levelDoors) {
       if (d.hiddenRegions.some((hr) => rectsIntersect(expanded, hr))) {
         d.hiddenRegions = [];
+        activateNpcForRevealedDoor(d.id);
         changed = true;
       }
     }
@@ -1351,6 +1420,7 @@ function applyRocketExplosionToWallsAndDoors(
           duration: WALL_DESTRUCTION_DURATION_SECONDS,
         });
         door.hiddenRegions = [];
+        activateNpcForRevealedDoor(door.id);
         changed = true;
       }
     }
@@ -1529,7 +1599,7 @@ function detonateRocket(
       if (
         Math.hypot(playerCx - x, playerCy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS
       ) {
-        damagePlayer(state, BASEMENT_MINE_EXPLOSION_DAMAGE);
+        damagePlayer(state, BAZOOKA_PLAYER_EXPLOSION_DAMAGE);
       }
     }
 
@@ -2006,7 +2076,7 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
 
 function fireUziProjectile(state: GameState): void {
   const player = state.player;
-  if (player.uziAmmo <= 0 || player.uziDepleted) {
+  if (player.uziAmmo <= 0 || player.uziReloadTimer > 0 || player.uziDepleted) {
     return;
   }
 
@@ -2052,19 +2122,8 @@ function fireUziProjectile(state: GameState): void {
   player.uziAmmo = Math.max(0, player.uziAmmo - 1);
 
   if (player.uziAmmo <= 0) {
-    player.uziDepleted = true;
-    player.uziDropTimer = UZI_DROP_DURATION_SECONDS;
-    player.uziCheatRefillTimer = state.cheatMode ? 3.0 : 0;
-    player.equippedItem = 'empty';
-    state.droppedUzis.push({
-      levelId: state.currentLevelId,
-      x: cx + Math.cos(rightAngle) * 7,
-      y: cy + Math.sin(rightAngle) * 7,
-      z: groundZ,
-      yaw: aimYaw + 0.4,
-      age: 0,
-      maxAge: PLAYER_DROPPED_UZI_DURATION_SECONDS,
-    });
+    player.uziReloadTimer = PLAYER_UZI_RELOAD_SECONDS;
+    debugLog('Reloading Uzi...');
   }
 }
 
@@ -2161,6 +2220,9 @@ export function updateGameState(
   const prevUziCooldown = state.player.uziFireCooldown;
   const prevFlameCooldown = state.player.flamethrowerFireCooldown;
   updatePlayerHealthAndTimers(state.player, dtSeconds);
+  if (state.damageFlashTimer > 0) {
+    state.damageFlashTimer = Math.max(0, state.damageFlashTimer - dtSeconds);
+  }
   if (
     state.cheatMode &&
     state.player.uziDepleted &&
@@ -2255,6 +2317,7 @@ export function updateGameState(
       if (
         state.activeDialogue.currentIndex >= state.activeDialogue.lines.length
       ) {
+        const wasGameOver = state.gameOver;
         const onClose = state.activeDialogue.onClose;
         const prevLevel = state.currentLevelId;
         state.activeDialogue = null;
@@ -2262,7 +2325,7 @@ export function updateGameState(
           onClose();
         }
         if (
-          state.currentLevelId !== prevLevel &&
+          (state.currentLevelId !== prevLevel || wasGameOver) &&
           typeof input.cameraYaw === 'number'
         ) {
           input.cameraYaw =
@@ -2382,7 +2445,7 @@ export function updateGameState(
     ) {
       continue;
     }
-    if (state.player.health >= MAX_PLAYER_HEALTH) continue;
+    if (state.player.health >= state.player.maxHealth) continue;
     const medkitRect: Rect = {
       x: medkit.x - 7,
       y: medkit.y - 7,
@@ -2471,6 +2534,23 @@ export function updateGameState(
     },
     detonateHouseC4: () => {
       triggerUpstairsHouseExplosion(state);
+    },
+    getRemainingNaughtyListNames: () => {
+      const basement = state.levels['level-basement'];
+      const upstairs = state.levels['level-upstairs'];
+      const allNpcs: ArmedNpcState[] = [
+        basement.arjanCombat,
+        basement.olexaCombat,
+        basement.hanneloesCombat,
+        upstairs.albinCombat,
+        upstairs.henrikCombat,
+        upstairs.tanjaCombat,
+        upstairs.dianaCombat,
+        upstairs.simonCombat,
+        upstairs.anneMarieCombat,
+        upstairs.rosannaCombat,
+      ];
+      return allNpcs.filter((npc) => npc.mode !== 'dead').map((npc) => npc.name);
     },
   };
 

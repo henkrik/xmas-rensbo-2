@@ -30,7 +30,7 @@ export const NPC_KATANA_MELEE_COOLDOWN = 0.45;
 export const NPC_KATANA_MELEE_RANGE = 24;
 export const NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS = 0.12;
 export const NPC_BAZOOKA_SHOT_INTERVAL_SECONDS = 2.4;
-export const NPC_BAZOOKA_ROCKET_SPEED = 75;
+export const NPC_BAZOOKA_ROCKET_SPEED = 150;
 export const NPC_DEATH_FALL_DURATION = 0.45;
 
 export type NpcWeapon = 'uzi' | 'katana' | 'flamethrower' | 'bazooka';
@@ -41,6 +41,7 @@ export interface ArmedNpcState {
   name: string;
   weapon: NpcWeapon;
   mode: NpcCombatMode;
+  maxHealth: number;
   health: number;
   delayedHealth: number;
   delayedHealthRate: number;
@@ -65,15 +66,17 @@ export function createArmedNpcState(
   key: string,
   name: string,
   initialAimYaw: number,
-  weapon: NpcWeapon = 'uzi'
+  weapon: NpcWeapon = 'uzi',
+  maxHealth: number = MAX_NPC_HEALTH
 ): ArmedNpcState {
   return {
     key,
     name,
     weapon,
     mode: 'passive',
-    health: MAX_NPC_HEALTH,
-    delayedHealth: MAX_NPC_HEALTH,
+    maxHealth,
+    health: maxHealth,
+    delayedHealth: maxHealth,
     delayedHealthRate: 0,
     unseenTimer: 0,
     hostileAlertTimer: 0,
@@ -103,7 +106,7 @@ export function applyNpcDamage(npc: ArmedNpcState, damage: number): boolean {
   if (npc.mode === 'dead' || damage <= 0) {
     return false;
   }
-  const nextHealth = Math.max(0, Math.min(MAX_NPC_HEALTH, npc.health - damage));
+  const nextHealth = Math.max(0, Math.min(npc.maxHealth, npc.health - damage));
   npc.health = nextHealth;
   npc.delayedHealthRate = Math.abs(npc.delayedHealth - npc.health);
 

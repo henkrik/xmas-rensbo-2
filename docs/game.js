@@ -756,9 +756,11 @@
   var PLAYER_JUMP_GRAVITY = 8 * PLAYER_JUMP_HEIGHT / (PLAYER_JUMP_DURATION * PLAYER_JUMP_DURATION);
   var PLAYER_JUMP_INITIAL_VELOCITY = 4 * PLAYER_JUMP_HEIGHT / PLAYER_JUMP_DURATION;
   var MAX_PLAYER_HEALTH = 100;
+  var ARMOR_MAX_PLAYER_HEALTH = 200;
   var PUNCH_DURATION_SECONDS = 0.28;
   var UZI_EQUIP_DURATION_SECONDS = 0.5;
   var UZI_DROP_DURATION_SECONDS = 0.45;
+  var PLAYER_UZI_RELOAD_SECONDS = 1.5;
   var UZI_FIRE_INTERVAL_SECONDS = 0.1;
   var UZI_PROJECTILE_SPEED = 24 * TILE_SIZE;
   var MAX_UZI_AMMO = 30;
@@ -789,6 +791,8 @@
       nextFootprintFoot: "left",
       states: /* @__PURE__ */ new Map(),
       health: MAX_PLAYER_HEALTH,
+      maxHealth: MAX_PLAYER_HEALTH,
+      hasBodyArmor: false,
       delayedHealth: MAX_PLAYER_HEALTH,
       delayedHealthRate: 0,
       equippedItem: "empty",
@@ -796,6 +800,7 @@
       uziAmmo: MAX_UZI_AMMO,
       uziDepleted: false,
       uziDropTimer: 0,
+      uziReloadTimer: 0,
       uziCheatRefillTimer: 0,
       unlockedFlamethrower: false,
       flamethrowerAmmo: Infinity,
@@ -812,9 +817,15 @@
     };
   }
   function setPlayerHealth(player, newHealth) {
-    const clamped = Math.max(0, Math.min(MAX_PLAYER_HEALTH, newHealth));
+    const cap = player.maxHealth || MAX_PLAYER_HEALTH;
+    const clamped = Math.max(0, Math.min(cap, newHealth));
     player.health = clamped;
     player.delayedHealthRate = Math.abs(player.delayedHealth - player.health);
+  }
+  function equipPlayerBodyArmor(player) {
+    player.hasBodyArmor = true;
+    player.maxHealth = ARMOR_MAX_PLAYER_HEALTH;
+    setPlayerHealth(player, ARMOR_MAX_PLAYER_HEALTH);
   }
   function applyPlayerDamage(player, amount) {
     setPlayerHealth(player, player.health - amount);
@@ -844,6 +855,12 @@
     }
     if (player.uziDropTimer > 0) {
       player.uziDropTimer = Math.max(0, player.uziDropTimer - dtSeconds);
+    }
+    if (player.uziReloadTimer > 0) {
+      player.uziReloadTimer = Math.max(0, player.uziReloadTimer - dtSeconds);
+      if (player.uziReloadTimer === 0 && player.uziAmmo <= 0) {
+        player.uziAmmo = MAX_UZI_AMMO;
+      }
     }
     if (player.flamethrowerFireCooldown > 0) {
       player.flamethrowerFireCooldown = Math.max(
@@ -1350,8 +1367,8 @@
   };
   var CAT_STOP_FLEE_DISTANCE = 5 * TILE_SIZE;
   var CAT_RETRIGGER_FLEE_DISTANCE = 2 * TILE_SIZE;
-  var MAX_CAT_HEALTH = 100;
-  var CAT_ARMOR_DAMAGE_MULTIPLIER = 0.1;
+  var MAX_CAT_HEALTH = 500;
+  var CAT_ARMOR_DAMAGE_MULTIPLIER = 1;
   var CAT_HOSTILE_JUMP_SPEED = 95;
   var CAT_JUMP_CYCLE_SECONDS = 0.55;
   var CAT_JUMP_PEAK_Z = 13.5;
@@ -1815,16 +1832,17 @@
   var NPC_KATANA_MELEE_RANGE = 24;
   var NPC_FLAMETHROWER_SHOT_INTERVAL_SECONDS = 0.12;
   var NPC_BAZOOKA_SHOT_INTERVAL_SECONDS = 2.4;
-  var NPC_BAZOOKA_ROCKET_SPEED = 75;
+  var NPC_BAZOOKA_ROCKET_SPEED = 150;
   var NPC_DEATH_FALL_DURATION = 0.45;
-  function createArmedNpcState(key, name, initialAimYaw, weapon = "uzi") {
+  function createArmedNpcState(key, name, initialAimYaw, weapon = "uzi", maxHealth = MAX_NPC_HEALTH) {
     return {
       key,
       name,
       weapon,
       mode: "passive",
-      health: MAX_NPC_HEALTH,
-      delayedHealth: MAX_NPC_HEALTH,
+      maxHealth,
+      health: maxHealth,
+      delayedHealth: maxHealth,
       delayedHealthRate: 0,
       unseenTimer: 0,
       hostileAlertTimer: 0,
@@ -1847,7 +1865,7 @@
     if (npc.mode === "dead" || damage <= 0) {
       return false;
     }
-    const nextHealth = Math.max(0, Math.min(MAX_NPC_HEALTH, npc.health - damage));
+    const nextHealth = Math.max(0, Math.min(npc.maxHealth, npc.health - damage));
     npc.health = nextHealth;
     npc.delayedHealthRate = Math.abs(npc.delayedHealth - npc.health);
     if (npc.health <= 0) {
@@ -2345,6 +2363,26 @@
   };
   var C4_TAKEN_STATE_KEY = "upstairsC4Taken";
   var C4_PLACED_STATE_KEY = "upstairsC4Placed";
+  var BODY_ARMOR_TAKEN_KEY = "upstairsBodyArmorTaken";
+  var ANNE_MARIE_HOSTILE_DIALOGUE_KEY = "upstairsAnneMarieHostileDialogueShown";
+  var ANNE_MARIE_MAX_HEALTH = MAX_NPC_HEALTH * 5;
+  var ANNE_MARIE_HOSTILE_DIALOGUE_LINES = [
+    "I was just sharpening my knife.",
+    "You see... my other knife is missing. Where did I leave it?",
+    "Oh I remember.",
+    "And I want you to know, it was me.",
+    "I stabbed Rudolph."
+  ];
+  var UPSTAIRS_KITCHEN_MEDKIT_POS = {
+    x: 12.5 * TILE_SIZE,
+    y: 7.5 * TILE_SIZE
+  };
+  var UPSTAIRS_BODY_ARMOR_BOUNDS = {
+    x: 18 * TILE_SIZE + 2,
+    y: 5 * TILE_SIZE + 2,
+    width: 12,
+    height: 12
+  };
   var UPSTAIRS_C4_BOUNDS = {
     x: 23 * TILE_SIZE + 2,
     y: 15 * TILE_SIZE + 3,
@@ -2545,7 +2583,8 @@
         "upstairs:Anne-Marie",
         "Anne-Marie",
         this.anneMarieAngle,
-        "katana"
+        "katana",
+        ANNE_MARIE_MAX_HEALTH
       );
       this.anneMarieCone = new ConeOfSight(
         { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
@@ -2740,6 +2779,14 @@
           dialogueLines: []
         });
       }
+      if (!player?.states.get(BODY_ARMOR_TAKEN_KEY) && !player?.hasBodyArmor) {
+        list.push({
+          id: "upstairs-body-armor",
+          bounds: { ...UPSTAIRS_BODY_ARMOR_BOUNDS },
+          promptText: "Take Body Armor",
+          dialogueLines: []
+        });
+      }
       if (!player?.states.get(DIANA_PRESENT_TAKEN_KEY)) {
         list.push({
           id: "upstairs-diana-present",
@@ -2782,19 +2829,41 @@
         ]);
         return true;
       }
+      if (interactableId === "upstairs-body-armor") {
+        player.states.set(BODY_ARMOR_TAKEN_KEY, true);
+        equipPlayerBodyArmor(player);
+        ctx.openDialogue([
+          "You put on military-grade body armor! Max HP increased to 200 and restored to full."
+        ]);
+        return true;
+      }
       if (interactableId === "upstairs-diana-present") {
         player.states.set(DIANA_PRESENT_TAKEN_KEY, true);
-        ctx.openDialogue(["You picked up Diana's Present."]);
+        ctx.openDialogue([
+          "I'll open this! Hmm, it's whiskey.",
+          "You drank the whole bottle."
+        ]);
         return true;
       }
       if (interactableId === "upstairs-simon-present") {
         player.states.set(SIMON_PRESENT_TAKEN_KEY, true);
-        ctx.openDialogue(["You picked up Simon's present."]);
+        ctx.openDialogue([
+          "I'll open this! Hmm, it's whiskey.",
+          "You drank the whole bottle."
+        ]);
         return true;
       }
       if (interactableId === "upstairs-xmas-tree") {
         if (!player.states.get(C4_TAKEN_STATE_KEY)) {
           return false;
+        }
+        const remainingNpcs = ctx.getRemainingNaughtyListNames ? ctx.getRemainingNaughtyListNames() : [];
+        if (remainingNpcs.length > 0) {
+          ctx.openDialogue([
+            "I'm not ready... I still have to say good-bye to the people on my naughty list. Which are:",
+            remainingNpcs.join(", ")
+          ]);
+          return true;
         }
         player.states.set(C4_PLACED_STATE_KEY, true);
         if (ctx.detonateHouseC4) {
@@ -3334,6 +3403,10 @@
             propagateHostileAlert(this.getArmedNpcs(), this.anneMarieCombat.key);
           }
         }
+        if ((this.anneMarieCombat.mode === "hostile" || this.anneMarieCombat.mode === "burning") && !player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)) {
+          player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
+          ctx.openDialogue([...ANNE_MARIE_HOSTILE_DIALOGUE_LINES], void 0, "Anne Marie");
+        }
       }
       if (this.rosannaSpawned) {
         updateNpcHealthAndTimers(this.rosannaCombat, dtSeconds);
@@ -3816,7 +3889,13 @@
         targetOffsetY = 1.5;
         targetOffsetZ = (doorZ - pz) * 0.45;
       } else if (rosannaCutscene?.active) {
+        const winX = rosannaCutscene.santaX + 8;
+        const winZ = 4 * TILE_SIZE;
+        targetYaw = Math.atan2(winZ - pz, winX - px);
         elapsed = rosannaCutscene.elapsed;
+        targetOffsetX = (winX - px) * 0.45;
+        targetOffsetY = 2;
+        targetOffsetZ = (winZ - pz) * 0.45;
       }
       const turnBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 6) : 1;
       cam.yaw = lerpAngle2(cam.yaw, targetYaw, turnBlend);
@@ -3892,6 +3971,366 @@
     cam.viewMatrix = mat4LookAt(cam.eye, cam.target, cam.up);
     cam.projMatrix = mat4Perspective(cam.fovY, aspect, cam.near, cam.far);
     cam.viewProjMatrix = mat4Multiply(cam.projMatrix, cam.viewMatrix);
+  }
+
+  // src/entities/dog.ts
+  var DOG_START_X = 26.5 * TILE_SIZE;
+  var DOG_START_Y = 12.5 * TILE_SIZE;
+  var DOG_MAX_SPEED = 37;
+  var DOG_ACCELERATION = 95;
+  var DOG_DECELERATION = 90;
+  var DOG_AGGRO_DISTANCE = 6.5 * TILE_SIZE;
+  var DOG_DEAGGRO_DISTANCE = 10.5 * TILE_SIZE;
+  function createDog(x = DOG_START_X, y = DOG_START_Y) {
+    return {
+      x,
+      y,
+      width: 12,
+      height: 12,
+      vx: 0,
+      vy: 0,
+      maxSpeed: DOG_MAX_SPEED,
+      acceleration: DOG_ACCELERATION,
+      deceleration: DOG_DECELERATION,
+      mode: "waiting",
+      facing: "left",
+      yaw: Math.PI,
+      animTimer: 0,
+      heartSpawnTimer: 0,
+      hearts: []
+    };
+  }
+  function updateDog(dog, player, dtSeconds, map, solidObstacles = [], speedMultiplier = 1) {
+    const dogCenterX = dog.x + dog.width / 2;
+    const dogCenterY = dog.y + dog.height / 2;
+    const playerCenterX = player.x + player.width / 2;
+    const playerCenterY = player.y + player.height / 2;
+    const dx = playerCenterX - dogCenterX;
+    const dy = playerCenterY - dogCenterY;
+    const dist = Math.hypot(dx, dy);
+    if (dog.mode === "waiting" && dist <= DOG_AGGRO_DISTANCE) {
+      dog.mode = "chasing";
+      dog.heartSpawnTimer = 0;
+    } else if (dog.mode === "chasing" && dist >= DOG_DEAGGRO_DISTANCE) {
+      dog.mode = "waiting";
+    }
+    const effectiveMaxSpeed = dog.maxSpeed * speedMultiplier;
+    if (dog.mode === "chasing") {
+      const ux = dist > 1e-3 ? dx / dist : 0;
+      const uy = dist > 1e-3 ? dy / dist : 0;
+      const targetVx = ux * effectiveMaxSpeed;
+      const targetVy = uy * effectiveMaxSpeed;
+      const dvx = targetVx - dog.vx;
+      const dvy = targetVy - dog.vy;
+      const dvLen = Math.hypot(dvx, dvy);
+      const maxDeltaV = dog.acceleration * dtSeconds;
+      if (dvLen <= maxDeltaV || dvLen === 0) {
+        dog.vx = targetVx;
+        dog.vy = targetVy;
+      } else {
+        dog.vx += dvx / dvLen * maxDeltaV;
+        dog.vy += dvy / dvLen * maxDeltaV;
+      }
+      if (Math.abs(dog.vx) > 2) {
+        dog.facing = dog.vx < 0 ? "left" : "right";
+      } else if (Math.abs(dx) > 0.5) {
+        dog.facing = dx < 0 ? "left" : "right";
+      }
+    } else {
+      const speed = Math.hypot(dog.vx, dog.vy);
+      const maxDrop = dog.deceleration * dtSeconds;
+      if (speed <= maxDrop) {
+        dog.vx = 0;
+        dog.vy = 0;
+      } else {
+        dog.vx -= dog.vx / speed * maxDrop;
+        dog.vy -= dog.vy / speed * maxDrop;
+      }
+    }
+    const collidesAt = (testX, testY) => {
+      if (isRectCollidingWithMap(map, testX, testY, dog.width, dog.height)) {
+        return true;
+      }
+      const testRect = {
+        x: testX,
+        y: testY,
+        width: dog.width,
+        height: dog.height
+      };
+      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
+    };
+    if (dog.vx !== 0 || dog.vy !== 0) {
+      if (Math.hypot(dog.vx, dog.vy) > 0.5) {
+        dog.yaw = Math.atan2(dog.vy, dog.vx);
+      }
+      dog.animTimer += dtSeconds;
+      const nextX = dog.x + dog.vx * dtSeconds;
+      if (!collidesAt(nextX, dog.y)) {
+        dog.x = nextX;
+      } else {
+        dog.vx = 0;
+      }
+      const nextY = dog.y + dog.vy * dtSeconds;
+      if (!collidesAt(dog.x, nextY)) {
+        dog.y = nextY;
+      } else {
+        dog.vy = 0;
+      }
+    }
+    for (let i = dog.hearts.length - 1; i >= 0; i--) {
+      const h = dog.hearts[i];
+      h.age += dtSeconds;
+      h.x += h.vx * dtSeconds;
+      h.y += h.vy * dtSeconds;
+      if (h.age >= h.maxAge) {
+        dog.hearts.splice(i, 1);
+      }
+    }
+    if (dog.mode === "chasing") {
+      dog.heartSpawnTimer -= dtSeconds;
+      while (dog.heartSpawnTimer <= 0) {
+        const phase = dog.hearts.length + Math.floor(dog.animTimer * 10);
+        const offsetX = (phase % 3 - 1) * 4;
+        dog.hearts.push({
+          x: dog.x + dog.width / 2 + offsetX,
+          y: dog.y - 2,
+          vx: offsetX * 2.5,
+          vy: -16,
+          age: 0,
+          maxAge: 0.85
+        });
+        dog.heartSpawnTimer += 0.22;
+      }
+    }
+    return rectsIntersect(dog, player);
+  }
+
+  // src/entities/snowball.ts
+  var SNOWBALL_SPEED = 110;
+  var THROW_INTERVAL_SECONDS = 2.4;
+  var HIT_BLINK_DURATION_SECONDS = 2;
+  function createDrivewayThrowers() {
+    const rowY = 16 * TILE_SIZE + 2;
+    const leftX = 12 * TILE_SIZE + 2;
+    const rightX = 18 * TILE_SIZE + 2;
+    return [
+      {
+        id: "thrower-sylvester",
+        name: "Sylvester",
+        x: leftX,
+        y: rowY,
+        width: 12,
+        height: 12,
+        facing: "right",
+        targetX: rightX,
+        throwInterval: THROW_INTERVAL_SECONDS,
+        // Throw shortly after level starts/resets
+        throwTimer: 0.6
+      },
+      {
+        id: "thrower-annelotte",
+        name: "Annelotte",
+        x: rightX,
+        y: rowY,
+        width: 12,
+        height: 12,
+        facing: "left",
+        targetX: leftX,
+        throwInterval: THROW_INTERVAL_SECONDS,
+        // Staggered so they alternate throwing back and forth across the driveway
+        throwTimer: 1.8
+      }
+    ];
+  }
+  function spawnSnowballFromThrower(thrower) {
+    const dir = thrower.facing === "right" ? 1 : -1;
+    return {
+      x: thrower.facing === "right" ? thrower.x + thrower.width : thrower.x - 6,
+      y: thrower.y + 3,
+      width: 6,
+      height: 6,
+      vx: dir * SNOWBALL_SPEED,
+      vy: 0,
+      targetX: thrower.targetX
+    };
+  }
+  function updateSnowballFight(throwers, snowballs, player, dtSeconds) {
+    for (const thrower of throwers) {
+      thrower.throwTimer -= dtSeconds;
+      if (thrower.throwTimer <= 0) {
+        thrower.throwTimer += thrower.throwInterval;
+        snowballs.push(spawnSnowballFromThrower(thrower));
+      }
+    }
+    for (let i = snowballs.length - 1; i >= 0; i--) {
+      const sb = snowballs[i];
+      sb.x += sb.vx * dtSeconds;
+      sb.y += sb.vy * dtSeconds;
+      if (rectsIntersect(sb, player)) {
+        return true;
+      }
+      if (sb.vx > 0 && sb.x >= sb.targetX || sb.vx < 0 && sb.x + sb.width <= sb.targetX + 12) {
+        snowballs.splice(i, 1);
+      }
+    }
+    return false;
+  }
+
+  // src/world/interaction.ts
+  var INTERACTION_MAX_GAP_PX = 6;
+  function rectEdgeDistance(a, b) {
+    const dx = Math.max(0, b.x - (a.x + a.width), a.x - (b.x + b.width));
+    const dy = Math.max(0, b.y - (a.y + a.height), a.y - (b.y + b.height));
+    return Math.hypot(dx, dy);
+  }
+  function buildInteractables(throwers, options = {}) {
+    const {
+      hasLadder = false,
+      ladderPlaced = false,
+      isOnRoof = false,
+      motorcycleStatus = "parked",
+      alexNpc
+    } = options;
+    if (isOnRoof) {
+      return [
+        {
+          id: "roof-ladder",
+          bounds: { ...ROOF_LADDER_BOUNDS },
+          promptText: "Climb down ladder",
+          dialogueLines: []
+        },
+        {
+          id: "roof-chimney",
+          bounds: { ...ROOF_CHIMNEY_BOUNDS },
+          promptText: "Climb down chimney",
+          dialogueLines: []
+        },
+        {
+          id: "roof-rudolph",
+          bounds: { ...ROOF_RUDOLPH_BOUNDS },
+          promptText: "Inspect Rudolph",
+          dialogueLines: []
+        }
+      ];
+    }
+    const list = throwers.map((t) => {
+      if (t.id === "thrower-sylvester") {
+        return {
+          id: t.id,
+          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+          promptText: "Talk to Sylvester",
+          dialogueLines: ["Watch out! Annelotte is crazy!"],
+          speakerPortrait: "Sylvester"
+        };
+      }
+      if (t.id === "thrower-annelotte") {
+        return {
+          id: t.id,
+          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+          promptText: "Talk to Annelotte",
+          dialogueLines: [
+            "It's good to talk about your feelings... how does a snowball in your face feel?"
+          ],
+          speakerPortrait: "Annelotte"
+        };
+      }
+      return {
+        id: t.id,
+        bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+        promptText: "Talk to",
+        dialogueLines: ["Watch out!"]
+      };
+    });
+    list.push({
+      id: "house-double-door",
+      bounds: {
+        x: 9 * TILE_SIZE + 8,
+        y: HOUSE_DOOR_ROW * TILE_SIZE,
+        width: TILE_SIZE * 2,
+        height: TILE_SIZE
+      },
+      promptText: "Open door",
+      dialogueLines: ["It's locked."]
+    });
+    list.push({
+      id: "house-door",
+      bounds: {
+        x: HOUSE_DOOR_COL * TILE_SIZE,
+        y: HOUSE_DOOR_ROW * TILE_SIZE,
+        width: TILE_SIZE,
+        height: TILE_SIZE
+      },
+      promptText: "Open door",
+      dialogueLines: [
+        "It's locked.",
+        "There has to be another way into the house..."
+      ]
+    });
+    if (motorcycleStatus === "parked") {
+      list.push({
+        id: "motorcycle",
+        bounds: {
+          x: MOTORCYCLE_START_X,
+          y: MOTORCYCLE_START_Y,
+          width: TILE_SIZE * 2,
+          height: TILE_SIZE
+        },
+        promptText: "Drive",
+        dialogueLines: []
+      });
+    }
+    if (!hasLadder && !ladderPlaced) {
+      list.push({
+        id: "ground-ladder",
+        bounds: { ...GROUND_LADDER_BOUNDS },
+        promptText: "Pick up",
+        dialogueLines: []
+      });
+      list.push({
+        id: "house-west-inspect",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Inspect",
+        dialogueLines: [
+          "Hmm.. looks like there is a chimney up there, but I can't reach it"
+        ]
+      });
+    } else if (hasLadder && !ladderPlaced) {
+      list.push({
+        id: "house-west-place-ladder",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Place ladder",
+        dialogueLines: []
+      });
+    } else if (ladderPlaced) {
+      list.push({
+        id: "house-west-climb-ladder",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Climb ladder",
+        dialogueLines: []
+      });
+    }
+    if (alexNpc) {
+      list.push({
+        id: "outside-alex",
+        bounds: { ...alexNpc },
+        promptText: "Talk to Alex",
+        dialogueLines: ["Just practicing my swings..."],
+        speakerPortrait: "Alex"
+      });
+    }
+    return list;
+  }
+  function findNearbyInteractable(player, interactables, maxGapPx = INTERACTION_MAX_GAP_PX) {
+    let closest = null;
+    let bestDist = Infinity;
+    for (const item of interactables) {
+      const dist = rectEdgeDistance(player, item.bounds);
+      if (dist <= maxGapPx && dist < bestDist) {
+        bestDist = dist;
+        closest = item;
+      }
+    }
+    return closest;
   }
 
   // src/world/levels/levelBasement.ts
@@ -4225,7 +4664,9 @@
       return hitAny;
     }
     getArmedNpcs() {
-      const isBathroomOpen = !this.doors.some((d) => d.id === "basement-bathroom-door");
+      const isBathroomOpen = !this.doors.some(
+        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
+      );
       return [
         { state: this.arjanCombat, bounds: this.windowNpc, visible: true },
         { state: this.olexaCombat, bounds: this.olexaNpc, visible: true },
@@ -4301,7 +4742,9 @@
       if (this.olexaCombat.mode !== "dead") {
         obs.push(this.olexaNpc);
       }
-      const isBathroomOpen = !this.doors.some((d) => d.id === "basement-bathroom-door");
+      const isBathroomOpen = !this.doors.some(
+        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
+      );
       if (isBathroomOpen && this.hanneloesCombat.mode !== "dead") {
         obs.push(this.toiletNpc);
       }
@@ -4587,7 +5030,9 @@
           propagateHostileAlert(this.getArmedNpcs(), this.olexaCombat.key);
         }
       }
-      const isBathroomOpen = !this.doors.some((d) => d.id === "basement-bathroom-door");
+      const isBathroomOpen = !this.doors.some(
+        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
+      );
       updateNpcHealthAndTimers(this.hanneloesCombat, dtSeconds);
       if (this.hanneloesCombat.mode === "dead") {
         this.hanneloesCone = null;
@@ -4664,6 +5109,2291 @@
       return true;
     }
   };
+
+  // src/world/levels/levelOutside.ts
+  function createMotorcycle() {
+    return {
+      x: MOTORCYCLE_START_X,
+      y: MOTORCYCLE_START_Y,
+      width: TILE_SIZE * 2,
+      height: TILE_SIZE,
+      status: "parked"
+    };
+  }
+  var RUDOLPH_INSPECTED_KEY = "rudolphInspected";
+  var OUTSIDE_ALEX_NPC = {
+    x: 4 * TILE_SIZE + 2,
+    y: 19 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "left"
+  };
+  var LevelOutside = class {
+    constructor(map = STARTER_MAP) {
+      __publicField(this, "id", "level-outside");
+      __publicField(this, "map");
+      __publicField(this, "dog");
+      __publicField(this, "motorcycle");
+      __publicField(this, "throwers");
+      __publicField(this, "snowballs");
+      __publicField(this, "alexNpc", { ...OUTSIDE_ALEX_NPC });
+      __publicField(this, "hasLadder", false);
+      __publicField(this, "ladderPlaced", false);
+      __publicField(this, "isOnRoof", false);
+      __publicField(this, "climbing", null);
+      __publicField(this, "electrocutionTimer", 0);
+      this.map = map;
+      this.dog = createDog();
+      this.motorcycle = createMotorcycle();
+      this.throwers = createDrivewayThrowers();
+      this.snowballs = [];
+    }
+    enter(player) {
+      player.x = PLAYER_START_X;
+      player.y = PLAYER_START_Y;
+      player.facing = "up";
+      player.yaw = -Math.PI / 2;
+      player.renderYaw = -Math.PI / 2;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
+      player.isMoving = false;
+      player.walkTimer = 0;
+    }
+    getSolidObstacles() {
+      return [...this.throwers, this.motorcycle, this.alexNpc];
+    }
+    getInteractables() {
+      return buildInteractables(this.throwers, {
+        hasLadder: this.hasLadder,
+        ladderPlaced: this.ladderPlaced,
+        isOnRoof: this.isOnRoof,
+        motorcycleStatus: this.motorcycle.status,
+        alexNpc: this.alexNpc
+      });
+    }
+    handleInteraction(interactableId, player, ctx) {
+      if (interactableId === "motorcycle") {
+        this.motorcycle.status = "driving";
+        player.x = this.motorcycle.x + 8;
+        player.y = this.motorcycle.y - 2;
+        player.facing = "right";
+        player.yaw = 0;
+        player.renderYaw = 0;
+        player.isMoving = true;
+        return true;
+      }
+      if (interactableId === "ground-ladder") {
+        this.hasLadder = true;
+        return true;
+      }
+      if (interactableId === "house-west-place-ladder") {
+        this.hasLadder = false;
+        this.ladderPlaced = true;
+        return true;
+      }
+      if (interactableId === "house-west-climb-ladder") {
+        this.climbing = { direction: "up", progress: 0 };
+        player.x = LADDER_CLIMB_X;
+        player.y = LADDER_BOTTOM_Y;
+        player.facing = "up";
+        player.yaw = -Math.PI / 2;
+        player.renderYaw = -Math.PI / 2;
+        player.jumpOffset = 0;
+        player.jumpVelocity = 0;
+        return true;
+      }
+      if (interactableId === "roof-ladder") {
+        this.climbing = { direction: "down", progress: 0 };
+        player.x = LADDER_CLIMB_X;
+        player.y = LADDER_BOTTOM_Y;
+        player.facing = "down";
+        player.yaw = Math.PI / 2;
+        player.renderYaw = Math.PI / 2;
+        player.jumpOffset = 0;
+        player.jumpVelocity = 0;
+        return true;
+      }
+      if (interactableId === "roof-rudolph") {
+        player.states.set(RUDOLPH_INSPECTED_KEY, true);
+        ctx.openDialogue(
+          [
+            "RUDOLPH?!! WHO DID THIS?",
+            "...",
+            "This is no longer about saving christmas...",
+            "This is about REVENGE!",
+            "I will find out who did this, if it is the last thing I'll ever do."
+          ],
+          () => {
+            ctx.openDialogue(
+              ["ACHIEVEMENT UNLOCKED: Murder-mystery genre unlocked."],
+              () => {
+                ctx.openDialogue(["I'm dreaming of a RED CHRISTMAS."], () => {
+                  ctx.openDialogue(
+                    [
+                      "ACHIEVEMENT UNLOCKED: Action genre unlocked. Viewer discretion is advised."
+                    ],
+                    () => {
+                      if (!player.unlockedUzi) {
+                        player.unlockedUzi = true;
+                        selectPlayerEquipmentSlot(player, 3);
+                      }
+                    },
+                    void 0,
+                    false,
+                    "achievement"
+                  );
+                });
+              },
+              void 0,
+              false,
+              "achievement"
+            );
+          }
+        );
+        return true;
+      }
+      if (interactableId === "roof-chimney") {
+        if (!player.states.get(RUDOLPH_INSPECTED_KEY) && !player.unlockedUzi) {
+          ctx.openDialogue(["You smell the stench of blood..."]);
+          return true;
+        }
+        ctx.loadLevel("level-basement");
+        if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
+          player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
+          ctx.openDialogue([
+            "Okay... I'm inside the house. And I'm Santa. Needless to say NOBODY MUST SEE ME.",
+            "I have to get to the Christmas tree in time for Christmas."
+          ]);
+        }
+        return true;
+      }
+      return false;
+    }
+  };
+
+  // src/world/levels/levelPeople.ts
+  var V3 = 20 /* VoidBlack */;
+  var W3 = 21 /* InteriorWall */;
+  var F3 = 16 /* WoodFloor */;
+  var PEOPLE_NAMES = [
+    "Albin",
+    "Alex",
+    "Anne-Marie",
+    "Annelotte",
+    "Diana",
+    "Hanneloes",
+    "Henrik",
+    "Olexa",
+    "Simon",
+    "Sylvester",
+    "Tanja"
+  ];
+  var PEOPLE_TILES = Array.from(
+    { length: MAP_ROWS },
+    (_, r) => Array.from({ length: MAP_COLS }, (_2, c) => {
+      if (r < 2 || r > 25 || c < 2 || c > 29) {
+        return V3;
+      }
+      if (r === 2 || r === 25 || c === 2 || c === 29) {
+        return W3;
+      }
+      return F3;
+    })
+  );
+  var PEOPLE_MAP = {
+    cols: MAP_COLS,
+    rows: MAP_ROWS,
+    tileSize: TILE_SIZE,
+    tiles: PEOPLE_TILES
+  };
+  var PEOPLE_PLAYER_SPAWN = {
+    x: 15 * TILE_SIZE + 2,
+    y: 23 * TILE_SIZE + 2,
+    facing: "up"
+  };
+  var PERSON_STYLES = {
+    Albin: { hair: "#7a421c", shirt: "#285890" },
+    Alex: { hair: "#3a2016", shirt: "#9c3832" },
+    "Anne-Marie": { hair: "#c88642", shirt: "#428860" },
+    Annelotte: { hair: "#b06830", shirt: "#804070" },
+    Diana: { hair: "#2a1a14", shirt: "#3a6288" },
+    Hanneloes: { hair: "#8a4822", shirt: "#2d7862" },
+    Henrik: { hair: "#6e4624", shirt: "#324a78" },
+    Olexa: { hair: "#342618", shirt: "#52446a" },
+    Simon: { hair: "#583822", shirt: "#647038" },
+    Sylvester: { hair: "#4a2c1e", shirt: "#b05832" },
+    Tanja: { hair: "#743c20", shirt: "#783858" }
+  };
+  var LevelPeople = class {
+    constructor() {
+      __publicField(this, "id", "level-people");
+      __publicField(this, "map", PEOPLE_MAP);
+      __publicField(this, "npcs", []);
+      const positions = [
+        { col: 5, row: 7 },
+        { col: 9, row: 7 },
+        { col: 13, row: 7 },
+        { col: 17, row: 7 },
+        { col: 21, row: 7 },
+        { col: 25, row: 7 },
+        { col: 7, row: 15 },
+        { col: 11, row: 15 },
+        { col: 15, row: 15 },
+        { col: 19, row: 15 },
+        { col: 23, row: 15 }
+      ];
+      PEOPLE_NAMES.forEach((name, idx) => {
+        const pos = positions[idx];
+        const style = PERSON_STYLES[name];
+        this.npcs.push({
+          name,
+          bounds: {
+            x: pos.col * TILE_SIZE + 2,
+            y: pos.row * TILE_SIZE + 2,
+            width: 12,
+            height: 12
+          },
+          facing: "down",
+          hairColor: style.hair,
+          shirtColor: style.shirt
+        });
+      });
+    }
+    enter(player) {
+      player.x = PEOPLE_PLAYER_SPAWN.x;
+      player.y = PEOPLE_PLAYER_SPAWN.y;
+      player.facing = PEOPLE_PLAYER_SPAWN.facing;
+      player.isMoving = false;
+      player.walkTimer = 0;
+    }
+    getSolidObstacles() {
+      return this.npcs.map((npc) => npc.bounds);
+    }
+    getInteractables() {
+      return this.npcs.map((npc) => ({
+        id: `person-${npc.name.toLowerCase()}`,
+        bounds: { ...npc.bounds },
+        promptText: `Talk to ${npc.name}`,
+        dialogueLines: [`${npc.name} says hello.`],
+        speakerPortrait: npc.name
+      }));
+    }
+    handleInteraction(_interactableId, _player, _ctx) {
+      return false;
+    }
+  };
+
+  // src/world/gameState.ts
+  var BULLET_HOLE_DURATION_SECONDS = 10;
+  var BLOOD_POOL_DURATION_SECONDS = 20;
+  var MEDKIT_HEAL_AMOUNT = 25;
+  var WALL_DESTRUCTION_DURATION_SECONDS = 1;
+  var ROCKET_WALL_BLAST_RADIUS = 1 * TILE_SIZE;
+  function syncOutsideToLevel(state) {
+    const outside = state.levels["level-outside"];
+    outside.dog = state.dog;
+    outside.motorcycle = state.motorcycle;
+    outside.throwers = state.throwers;
+    outside.snowballs = state.snowballs;
+    outside.hasLadder = state.hasLadder;
+    outside.ladderPlaced = state.ladderPlaced;
+    outside.isOnRoof = state.isOnRoof;
+    outside.climbing = state.climbing;
+    outside.electrocutionTimer = state.electrocutionTimer;
+  }
+  function syncLevelToOutside(state) {
+    const outside = state.levels["level-outside"];
+    state.dog = outside.dog;
+    state.motorcycle = outside.motorcycle;
+    state.throwers = outside.throwers;
+    state.snowballs = outside.snowballs;
+    state.hasLadder = outside.hasLadder;
+    state.ladderPlaced = outside.ladderPlaced;
+    state.isOnRoof = outside.isOnRoof;
+    state.climbing = outside.climbing;
+    state.electrocutionTimer = outside.electrocutionTimer;
+  }
+  function getActiveLevel(state) {
+    return state.levels[state.currentLevelId];
+  }
+  function refreshInteractables(state) {
+    if (state.currentLevelId === "level-outside") {
+      syncOutsideToLevel(state);
+    }
+    const activeLevel = getActiveLevel(state);
+    state.interactables = activeLevel.getInteractables(state.player);
+    const isBusyOutside = state.currentLevelId === "level-outside" && (state.climbing !== null || state.motorcycle.status === "driving" || state.electrocutionTimer > 0);
+    const isBusyUpstairs = state.currentLevelId === "level-upstairs" && state.levels["level-upstairs"].rosannaCutscene?.active === true;
+    state.nearbyInteractable = isBusyOutside || isBusyUpstairs ? null : findNearbyInteractable(state.player, state.interactables);
+    if (!state.nearbyInteractable && !isBusyOutside && !isBusyUpstairs && state.player.equippedItem === "uzi" && state.player.unlockedUzi && !state.player.uziDepleted) {
+      for (const floorUzi of state.droppedUzis) {
+        if (!floorUzi.pickupable || floorUzi.levelId !== state.currentLevelId) {
+          continue;
+        }
+        const uziRect = {
+          x: floorUzi.x - 7,
+          y: floorUzi.y - 7,
+          width: 14,
+          height: 14
+        };
+        if (rectsIntersect(state.player, uziRect)) {
+          state.nearbyInteractable = {
+            id: "swap-floor-uzi",
+            bounds: uziRect,
+            promptText: "Swap Uzi",
+            dialogueLines: []
+          };
+          break;
+        }
+      }
+    }
+  }
+  function loadLevel(state, levelId) {
+    if (state.currentLevelId === "level-outside") {
+      state.isOnRoof = false;
+      state.climbing = null;
+      syncOutsideToLevel(state);
+    }
+    state.currentLevelId = levelId;
+    const nextLevel = state.levels[levelId];
+    state.map = nextLevel.map;
+    state.footprints = [];
+    state.projectiles = [];
+    state.nearbyInteractable = null;
+    state.activeDialogue = null;
+    nextLevel.enter(state.player);
+    refreshInteractables(state);
+    debugLog(`Loaded level: ${levelId}`);
+  }
+  function parseLevelQueryParam(searchOrParam) {
+    if (!searchOrParam) {
+      return "level-outside";
+    }
+    let val = searchOrParam.trim();
+    if (val.startsWith("?")) {
+      const params = new URLSearchParams(val);
+      val = params.get("level") ?? "";
+    }
+    const normalized = val.toLowerCase().trim();
+    if (normalized === "basement" || normalized === "level-basement") {
+      return "level-basement";
+    }
+    if (normalized === "upstairs" || normalized === "level-upstairs") {
+      return "level-upstairs";
+    }
+    if (normalized === "people" || normalized === "level-people") {
+      return "level-people";
+    }
+    if (normalized === "outdoors" || normalized === "outside" || normalized === "level-outside") {
+      return "level-outside";
+    }
+    return "level-outside";
+  }
+  function createIntroDialogue(isMobile) {
+    const firstLine = isMobile ? "Use the virtual joystick to move around. To interact with things, move close enough to it and an interaction button will appear. Click anywhere to close this window and start playing." : "Use WASD to move around, the arrow keys to look around, and Space to jump and interact with things. Press Space to close this window and start playing.";
+    return {
+      lines: [firstLine, "Good luck!\nChristmas depends on you..."],
+      currentIndex: 0
+    };
+  }
+  function createGameState(mapOrOptions = STARTER_MAP) {
+    let map = STARTER_MAP;
+    let isMobile = false;
+    let showIntroDialogue = false;
+    let initialLevelId = "level-outside";
+    let levelParamOverride = false;
+    let debugMode = false;
+    let cheatMode = false;
+    let giveUpSorry = false;
+    let secretSantaDB = null;
+    if (mapOrOptions && "cols" in mapOrOptions && "rows" in mapOrOptions) {
+      map = mapOrOptions;
+    } else if (mapOrOptions && typeof mapOrOptions === "object") {
+      const opts = mapOrOptions;
+      if (opts.map) map = opts.map;
+      if (opts.isMobile !== void 0) isMobile = opts.isMobile;
+      if (opts.showIntroDialogue !== void 0) {
+        showIntroDialogue = opts.showIntroDialogue;
+      }
+      if (opts.initialLevelId) {
+        initialLevelId = opts.initialLevelId;
+      }
+      if (opts.levelParamOverride !== void 0) {
+        levelParamOverride = opts.levelParamOverride;
+      }
+      if (opts.debug !== void 0) {
+        debugMode = opts.debug;
+      }
+      if (opts.cheat !== void 0) {
+        cheatMode = opts.cheat;
+      }
+      if (opts.giveUpSorry !== void 0) {
+        giveUpSorry = opts.giveUpSorry;
+      }
+      if (opts.secretSantaDB !== void 0) {
+        secretSantaDB = opts.secretSantaDB;
+      }
+    }
+    ConeOfSight.cheatMode = cheatMode;
+    const player = createPlayer(PLAYER_START_X, PLAYER_START_Y);
+    const levelOutside = new LevelOutside(map);
+    if (cheatMode) {
+      levelOutside.ladderPlaced = true;
+    }
+    const levelBasement = new LevelBasement();
+    const levelUpstairs = new LevelUpstairs();
+    const levelPeople = new LevelPeople();
+    const levels = {
+      "level-outside": levelOutside,
+      "level-basement": levelBasement,
+      "level-upstairs": levelUpstairs,
+      "level-people": levelPeople
+    };
+    const activeLevel = levels[initialLevelId];
+    activeLevel.enter(player);
+    if (levelParamOverride) {
+      player.unlockedUzi = true;
+      player.uziAmmo = MAX_UZI_AMMO;
+      player.uziDepleted = false;
+      player.uziDropTimer = 0;
+      player.equippedItem = "uzi";
+    }
+    let activeDialogue = null;
+    let worldFadedToBlack = false;
+    if (giveUpSorry) {
+      worldFadedToBlack = true;
+      const playerName = secretSantaDB?.playerName;
+      const receiver = playerName && secretSantaDB ? secretSantaDB.getGiftReceiverOf(playerName) : void 0;
+      const finalLine = receiver ?? "Ehm... this is awkward. An error occurred, gift receiver unknown.";
+      activeDialogue = {
+        lines: [
+          "Give up huh? Don't feel bad... Your secret santa gift receiver is...",
+          finalLine
+        ],
+        currentIndex: 0,
+        unclosable: true
+      };
+    } else if (showIntroDialogue) {
+      activeDialogue = createIntroDialogue(isMobile);
+    }
+    const state = {
+      currentLevelId: initialLevelId,
+      levels,
+      map: activeLevel.map,
+      player,
+      footprints: [],
+      dog: levelOutside.dog,
+      motorcycle: levelOutside.motorcycle,
+      throwers: levelOutside.throwers,
+      snowballs: levelOutside.snowballs,
+      projectiles: [],
+      bulletHoles: [],
+      bloodParticles: [],
+      bloodPools: [],
+      droppedUzis: [],
+      droppedFlamethrowers: [],
+      droppedKatanas: [],
+      droppedBazookas: [],
+      medkits: [
+        {
+          id: "basement-spa-medkit",
+          levelId: "level-basement",
+          x: BASEMENT_SPA_MEDKIT_POS.x,
+          y: BASEMENT_SPA_MEDKIT_POS.y,
+          z: 0
+        },
+        {
+          id: "upstairs-kitchen-medkit",
+          levelId: "level-upstairs",
+          x: UPSTAIRS_KITCHEN_MEDKIT_POS.x,
+          y: UPSTAIRS_KITCHEN_MEDKIT_POS.y,
+          z: 0
+        }
+      ],
+      explosions: [],
+      destroyingWalls: [],
+      destroyingDoors: [],
+      blackenedWalls: /* @__PURE__ */ new Set(),
+      mapVersion: 0,
+      burningNpcs: /* @__PURE__ */ new Set(),
+      hasLadder: levelOutside.hasLadder,
+      ladderPlaced: levelOutside.ladderPlaced,
+      isOnRoof: levelOutside.isOnRoof,
+      climbing: levelOutside.climbing,
+      electrocutionTimer: levelOutside.electrocutionTimer,
+      joystickActive: false,
+      interactables: activeLevel.getInteractables(player),
+      nearbyInteractable: null,
+      activeDialogue,
+      gameOver: false,
+      elapsedTime: 0,
+      debugMode,
+      cheatMode,
+      worldFadedToBlack,
+      damageFlashTimer: 0,
+      houseExploding: false,
+      houseExplosionTimer: 0,
+      houseExplosionSpawnAccum: 0,
+      screenFade: null,
+      secretSantaDB
+    };
+    debugLog(`Loaded level: ${initialLevelId}`);
+    return state;
+  }
+  function restartEntireGame(state) {
+    const prevJoystick = state.joystickActive;
+    const fresh = createGameState({
+      initialLevelId: "level-outside",
+      debug: state.debugMode,
+      cheat: state.cheatMode,
+      secretSantaDB: state.secretSantaDB
+    });
+    Object.assign(state, fresh);
+    state.joystickActive = prevJoystick;
+  }
+  function restartFromBasementCheckpoint(state) {
+    const prevJoystick = state.joystickActive;
+    const fresh = createGameState({
+      initialLevelId: "level-basement",
+      showIntroDialogue: false,
+      debug: state.debugMode,
+      cheat: state.cheatMode,
+      secretSantaDB: state.secretSantaDB
+    });
+    fresh.player.unlockedUzi = true;
+    fresh.player.uziAmmo = MAX_UZI_AMMO;
+    fresh.player.uziDepleted = false;
+    fresh.player.uziDropTimer = 0;
+    fresh.player.uziReloadTimer = 0;
+    fresh.player.equippedItem = "uzi";
+    fresh.player.facing = "down";
+    fresh.player.yaw = Math.PI / 2;
+    fresh.player.renderYaw = Math.PI / 2;
+    Object.assign(state, fresh);
+    state.joystickActive = prevJoystick;
+  }
+  var DAMAGE_FLASH_DURATION_SECONDS = 0.3;
+  var BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 20;
+  function damagePlayer(state, amount) {
+    applyPlayerDamage(state.player, amount);
+    if (amount > 0) {
+      state.damageFlashTimer = DAMAGE_FLASH_DURATION_SECONDS;
+    }
+    if (state.player.health <= 0 && !state.cheatMode) {
+      const insideHouse = state.currentLevelId === "level-basement" || state.currentLevelId === "level-upstairs";
+      state.gameOver = true;
+      state.nearbyInteractable = null;
+      state.activeDialogue = {
+        lines: ["Try again?"],
+        currentIndex: 0,
+        variant: "gameover",
+        onClose: () => {
+          if (insideHouse) {
+            restartFromBasementCheckpoint(state);
+          } else {
+            restartEntireGame(state);
+          }
+        }
+      };
+    }
+  }
+  function resetAfterSnowballHit(state) {
+    state.player.x = PLAYER_START_X;
+    state.player.y = PLAYER_START_Y;
+    state.player.facing = "up";
+    state.player.yaw = -Math.PI / 2;
+    state.player.renderYaw = -Math.PI / 2;
+    state.player.jumpOffset = 0;
+    state.player.jumpVelocity = 0;
+    state.player.isMoving = false;
+    state.player.walkTimer = 0;
+    state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
+    state.player.footprintSpawnTimer = 0;
+    state.player.nextFootprintFoot = "left";
+    const wasLadderPlaced = state.ladderPlaced;
+    state.footprints = [];
+    state.dog = createDog();
+    state.motorcycle = createMotorcycle();
+    state.throwers = createDrivewayThrowers();
+    state.snowballs = [];
+    state.projectiles = [];
+    state.hasLadder = false;
+    state.ladderPlaced = wasLadderPlaced;
+    state.isOnRoof = false;
+    state.climbing = null;
+    state.electrocutionTimer = 0;
+    state.activeDialogue = null;
+    syncOutsideToLevel(state);
+    refreshInteractables(state);
+    damagePlayer(state, 30);
+  }
+  function isMainHouseTile(col, row) {
+    return col >= 4 && col <= 16 && row >= 3 && row <= 9;
+  }
+  function updateRoofMovement(state, input, dtSeconds) {
+    const player = state.player;
+    const prevCenterX = player.x + player.width * 0.5;
+    const prevCenterZ = player.y + player.height * 0.5;
+    const prevRoofElevation = getMainHouseRoofElevation(prevCenterX, prevCenterZ);
+    const chimneyCore = {
+      x: ROOF_CHIMNEY_BOUNDS.x + 3,
+      y: ROOF_CHIMNEY_BOUNDS.y + 3,
+      width: Math.max(4, ROOF_CHIMNEY_BOUNDS.width - 6),
+      height: Math.max(4, ROOF_CHIMNEY_BOUNDS.height - 6)
+    };
+    updatePlayer(
+      player,
+      input,
+      dtSeconds,
+      state.map,
+      [chimneyCore],
+      isMainHouseTile
+    );
+    const cx = player.x + player.width * 0.5;
+    const cz = player.y + player.height * 0.5;
+    const minX = MAIN_HOUSE_ROOF_BOUNDS.x;
+    const maxX = MAIN_HOUSE_ROOF_BOUNDS.x + MAIN_HOUSE_ROOF_BOUNDS.width;
+    const minZ = MAIN_HOUSE_ROOF_BOUNDS.y;
+    const maxZ = MAIN_HOUSE_ROOF_BOUNDS.y + MAIN_HOUSE_ROOF_BOUNDS.height;
+    if (cx < minX || cx > maxX || cz < minZ || cz > maxZ) {
+      state.isOnRoof = false;
+      if (cx < minX) {
+        player.x = minX - player.width - 1;
+      } else if (cx > maxX) {
+        player.x = maxX + 1;
+      }
+      if (cz < minZ) {
+        player.y = minZ - player.height - 1;
+      } else if (cz > maxZ) {
+        player.y = maxZ + 1;
+      }
+      const landingGroundY = getTerrainHeight(
+        player.x + player.width * 0.5,
+        player.y + player.height * 0.5,
+        "level-outside"
+      );
+      player.jumpOffset = Math.max(1e-3, prevRoofElevation - landingGroundY);
+      player.jumpVelocity = 0;
+    }
+  }
+  function updateOutsideLevel(state, input, dtSeconds) {
+    if (state.electrocutionTimer > 0) {
+      state.player.isMoving = false;
+      state.player.walkTimer = 0;
+      state.electrocutionTimer = Math.max(
+        0,
+        state.electrocutionTimer - dtSeconds
+      );
+      if (state.electrocutionTimer <= 0) {
+        resetAfterSnowballHit(state);
+      }
+      return true;
+    }
+    if (state.motorcycle.status === "driving") {
+      state.motorcycle.x = Math.min(
+        MOTORCYCLE_CRASH_X,
+        state.motorcycle.x + MOTORCYCLE_SPEED * dtSeconds
+      );
+      state.player.x = state.motorcycle.x + 8;
+      state.player.y = state.motorcycle.y - 2;
+      state.player.facing = "right";
+      state.player.yaw = 0;
+      state.player.renderYaw = 0;
+      state.player.isMoving = true;
+      state.player.walkTimer += dtSeconds;
+      if (state.motorcycle.x >= MOTORCYCLE_CRASH_X) {
+        state.motorcycle.x = MOTORCYCLE_CRASH_X;
+        state.motorcycle.status = "crashed";
+        state.player.x = MOTORCYCLE_CRASH_X - state.player.width - 4;
+        state.player.y = MOTORCYCLE_START_Y + 2;
+        state.player.isMoving = false;
+        state.player.walkTimer = 0;
+        state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
+        damagePlayer(state, 10);
+      }
+      refreshInteractables(state);
+      return true;
+    }
+    if (state.climbing) {
+      state.climbing.progress = Math.min(
+        1,
+        state.climbing.progress + dtSeconds / CLIMB_DURATION_SECONDS
+      );
+      state.player.x = LADDER_CLIMB_X;
+      state.player.isMoving = true;
+      state.player.walkTimer += dtSeconds;
+      if (state.climbing.direction === "up") {
+        state.player.facing = "up";
+        state.player.yaw = -Math.PI / 2;
+        state.player.renderYaw = -Math.PI / 2;
+        state.player.y = LADDER_BOTTOM_Y;
+        if (state.climbing.progress >= 1) {
+          state.player.y = ROOF_WALK_Y;
+          state.player.isMoving = false;
+          state.isOnRoof = true;
+          state.climbing = null;
+        }
+      } else {
+        state.player.facing = "down";
+        state.player.yaw = Math.PI / 2;
+        state.player.renderYaw = Math.PI / 2;
+        state.player.y = LADDER_BOTTOM_Y;
+        if (state.climbing.progress >= 1) {
+          state.player.y = LADDER_BOTTOM_Y;
+          state.player.isMoving = false;
+          state.isOnRoof = false;
+          state.climbing = null;
+        }
+      }
+      refreshInteractables(state);
+      return true;
+    }
+    if (state.isOnRoof) {
+      updateRoofMovement(state, input, dtSeconds);
+      for (let i = state.footprints.length - 1; i >= 0; i--) {
+        state.footprints[i].age += dtSeconds;
+        if (state.footprints[i].age >= state.footprints[i].maxAge) {
+          state.footprints.splice(i, 1);
+        }
+      }
+      syncOutsideToLevel(state);
+      return false;
+    }
+    const solidObstacles = [...state.throwers, state.motorcycle];
+    updatePlayer(state.player, input, dtSeconds, state.map, solidObstacles);
+    updateFootprints(state.footprints, state.player, state.map, dtSeconds);
+    if (rectsIntersect(state.player, DAMAGED_WIRE_HAZARD)) {
+      state.electrocutionTimer = ELECTROCUTION_DURATION_SECONDS;
+      state.player.isMoving = false;
+      state.player.walkTimer = 0;
+      state.nearbyInteractable = null;
+      state.activeDialogue = null;
+      return true;
+    }
+    const caughtByDog = updateDog(
+      state.dog,
+      state.player,
+      dtSeconds,
+      state.map,
+      solidObstacles
+    );
+    if (caughtByDog) {
+      resetAfterSnowballHit(state);
+      return true;
+    }
+    const hitBySnowball = updateSnowballFight(
+      state.throwers,
+      state.snowballs,
+      state.player,
+      dtSeconds
+    );
+    if (hitBySnowball) {
+      resetAfterSnowballHit(state);
+      return true;
+    }
+    return false;
+  }
+  function getLevelNpcTargets(state) {
+    const targets = [];
+    const addTarget = (key, rect) => {
+      const cx = rect.x + rect.width * 0.5;
+      const cy = rect.y + rect.height * 0.5;
+      targets.push({
+        key,
+        rect,
+        groundZ: getTerrainHeight(cx, cy, state.currentLevelId)
+      });
+    };
+    if (state.currentLevelId === "level-outside") {
+      if (state.throwers[0]) addTarget("outside:Sylvester", state.throwers[0]);
+      if (state.throwers[1]) addTarget("outside:Annelotte", state.throwers[1]);
+      addTarget("outside:Alex", state.levels["level-outside"].alexNpc);
+    } else if (state.currentLevelId === "level-basement") {
+      const basement = state.levels["level-basement"];
+      if (basement.arjanCombat.mode !== "dead") {
+        addTarget("basement:Arjan", basement.windowNpc);
+      }
+      if (basement.olexaCombat.mode !== "dead") {
+        addTarget("basement:Olexa", basement.olexaNpc);
+      }
+      if (basement.hanneloesCombat.mode !== "dead") {
+        addTarget("basement:Hanneloes", basement.toiletNpc);
+      }
+    } else if (state.currentLevelId === "level-upstairs") {
+      const upstairs = state.levels["level-upstairs"];
+      if (upstairs.albinCombat.mode !== "dead") {
+        addTarget("upstairs:Albin", {
+          x: upstairs.albinX,
+          y: upstairs.albinY,
+          width: 12,
+          height: 12
+        });
+      }
+      if (upstairs.henrikCombat.mode !== "dead") addTarget("upstairs:Henrik", upstairs.henrikNpc);
+      if (upstairs.tanjaCombat.mode !== "dead") addTarget("upstairs:Tanja", upstairs.tanjaNpc);
+      if (upstairs.dianaCombat.mode !== "dead") addTarget("upstairs:Diana", upstairs.dianaNpc);
+      if (upstairs.simonCombat.mode !== "dead") addTarget("upstairs:Simon", upstairs.simonNpc);
+      if (upstairs.anneMarieCombat.mode !== "dead") {
+        addTarget("upstairs:Anne-Marie", upstairs.anneMarieNpc);
+      }
+      if (upstairs.rosannaSpawned && upstairs.rosannaCombat.mode !== "dead") {
+        addTarget("upstairs:Rosanna", upstairs.rosannaNpc);
+      }
+    } else if (state.currentLevelId === "level-people") {
+      for (const npc of state.levels["level-people"].npcs) {
+        addTarget(`people:${npc.name}`, npc.bounds);
+      }
+    }
+    return targets;
+  }
+  function spawnNpcBlood(state, x, y, groundZ) {
+    const count = 8;
+    for (let i = 0; i < count; i++) {
+      const angle = i / count * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+      const speed = 16 + Math.random() * 24;
+      state.bloodParticles.push({
+        levelId: state.currentLevelId,
+        x,
+        y,
+        z: groundZ + 7 + Math.random() * 3,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        vz: -4 + Math.random() * 20,
+        groundZ,
+        age: 0,
+        spawnsPool: i < 3
+      });
+    }
+  }
+  function getArmedNpcByKey(state, key) {
+    if (state.currentLevelId === "level-basement") {
+      return state.levels["level-basement"].getArmedNpcByKey(key);
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      return state.levels["level-upstairs"].getArmedNpcByKey(key);
+    }
+    return void 0;
+  }
+  var ROSANNA_DAMAGE_MULTIPLIER = 0.2;
+  function damageArmedNpc(state, key, damage, hitX, hitY, groundZ) {
+    const npc = getArmedNpcByKey(state, key);
+    if (!npc) return;
+    const wasPassive = npc.mode === "passive";
+    const effectiveDamage = key === "upstairs:Rosanna" ? damage * ROSANNA_DAMAGE_MULTIPLIER : damage;
+    const died = applyNpcDamage(npc, effectiveDamage);
+    if (wasPassive && npc.mode === "hostile") {
+      if (state.currentLevelId === "level-basement") {
+        propagateHostileAlert(state.levels["level-basement"].getArmedNpcs(), key);
+      } else if (state.currentLevelId === "level-upstairs") {
+        propagateHostileAlert(state.levels["level-upstairs"].getArmedNpcs(), key);
+      }
+    }
+    if (died) {
+      state.burningNpcs.delete(key);
+      spawnNpcBlood(state, hitX, hitY, groundZ);
+      state.bloodPools.push({
+        levelId: state.currentLevelId,
+        x: hitX,
+        y: hitY,
+        z: groundZ,
+        age: 0,
+        maxAge: 999999
+      });
+      const rightAngle = npc.aimYaw + Math.PI / 2;
+      if (npc.weapon === "katana") {
+        state.droppedKatanas.push({
+          levelId: state.currentLevelId,
+          x: hitX + Math.cos(rightAngle) * 5.2,
+          y: hitY + Math.sin(rightAngle) * 5.2,
+          z: groundZ,
+          yaw: npc.aimYaw + 0.4
+        });
+      } else if (npc.weapon === "flamethrower") {
+        state.droppedFlamethrowers.push({
+          levelId: state.currentLevelId,
+          x: hitX + Math.cos(rightAngle) * 5.2,
+          y: hitY + Math.sin(rightAngle) * 5.2,
+          z: groundZ,
+          yaw: npc.aimYaw + 0.4,
+          ammo: DROPPED_FLAMETHROWER_AMMO
+        });
+      } else if (npc.weapon === "bazooka") {
+        state.droppedBazookas.push({
+          levelId: state.currentLevelId,
+          x: hitX + Math.cos(rightAngle) * 5.2,
+          y: hitY + Math.sin(rightAngle) * 5.2,
+          z: groundZ,
+          yaw: npc.aimYaw + 0.4
+        });
+      } else if (npc.weapon === "uzi") {
+        state.droppedUzis.push({
+          levelId: state.currentLevelId,
+          x: hitX + Math.cos(rightAngle) * 5.2,
+          y: hitY + Math.sin(rightAngle) * 5.2,
+          z: groundZ,
+          yaw: npc.aimYaw + 0.4,
+          pickupable: true,
+          ammo: MAX_UZI_AMMO
+        });
+      }
+      if (key === "basement:Olexa") {
+        state.medkits.push({
+          id: "olexa-drop-medkit",
+          levelId: state.currentLevelId,
+          x: hitX - Math.cos(rightAngle) * 5.5,
+          y: hitY - Math.sin(rightAngle) * 5.5,
+          z: groundZ
+        });
+      }
+    }
+  }
+  function fireNpcUziProjectile(state, npc, originX, originY, aimYaw) {
+    const rightAngle = aimYaw + Math.PI / 2;
+    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180);
+    const shotYaw = aimYaw + yawSpread;
+    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180);
+    const spawnX = originX + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
+    const spawnY = originY + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
+    const spawnZ = groundZ + 10;
+    state.projectiles.push({
+      kind: "bullet",
+      owner: "npc",
+      sourceNpcKey: npc.key,
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(shotYaw) * UZI_PROJECTILE_SPEED,
+      vy: Math.sin(shotYaw) * UZI_PROJECTILE_SPEED,
+      vz: UZI_PROJECTILE_SPEED * Math.tan(pitchSpread),
+      yaw: shotYaw,
+      distanceTraveled: 0,
+      fromRoof: false
+    });
+  }
+  function fireNpcFlamethrowerProjectile(state, npc, originX, originY, aimYaw) {
+    const rightAngle = aimYaw + Math.PI / 2;
+    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+    const spawnX = originX + Math.cos(aimYaw) * 8.5 + Math.cos(rightAngle) * 3.5;
+    const spawnY = originY + Math.sin(aimYaw) * 8.5 + Math.sin(rightAngle) * 3.5;
+    const spawnZ = groundZ + 9.5;
+    state.projectiles.push({
+      kind: "fireball",
+      owner: "npc",
+      sourceNpcKey: npc.key,
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+      vy: Math.sin(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+      vz: 0,
+      yaw: aimYaw,
+      distanceTraveled: 0,
+      maxDistance: FLAMETHROWER_MAX_DISTANCE,
+      fromRoof: false
+    });
+  }
+  function fireNpcBazookaProjectile(state, originX, originY, aimYaw, sourceNpcKey, cutsceneShot = false) {
+    const rightAngle = aimYaw + Math.PI / 2;
+    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
+    const spawnX = originX + Math.cos(aimYaw) * 9 + Math.cos(rightAngle) * 3;
+    const spawnY = originY + Math.sin(aimYaw) * 9 + Math.sin(rightAngle) * 3;
+    const spawnZ = groundZ + 11.5;
+    state.projectiles.push({
+      kind: "rocket",
+      owner: "npc",
+      sourceNpcKey,
+      cutsceneShot,
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+      vy: Math.sin(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+      vz: 0,
+      yaw: aimYaw,
+      distanceTraveled: 0,
+      maxDistance: 320,
+      fromRoof: false
+    });
+  }
+  function isOuterBorderWallTile(levelId, map, col, row) {
+    if (levelId === "level-basement" && row === 7 && col >= 6 && col <= 12) {
+      return true;
+    }
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = row + dr;
+        const nc = col + dc;
+        if (nr < 0 || nc < 0 || nr >= map.rows || nc >= map.cols) {
+          return true;
+        }
+        if (map.tiles[nr][nc] === 20 /* VoidBlack */) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  function getDestroyedWallReplacementTile(map, col, row) {
+    const floorCandidates = [
+      18 /* BathroomTileFloor */,
+      17 /* StoneTileFloor */,
+      16 /* WoodFloor */,
+      19 /* StairsFloor */
+    ];
+    for (const [dc, dr] of [
+      [0, 1],
+      [0, -1],
+      [-1, 0],
+      [1, 0]
+    ]) {
+      const t = map.tiles[row + dr]?.[col + dc];
+      if (t !== void 0 && floorCandidates.includes(t)) {
+        return t;
+      }
+    }
+    return 16 /* WoodFloor */;
+  }
+  function distancePointToRect(x, y, r) {
+    const dx = Math.max(r.x - x, 0, x - (r.x + r.width));
+    const dy = Math.max(r.y - y, 0, y - (r.y + r.height));
+    return Math.hypot(dx, dy);
+  }
+  function applyRocketExplosionToWallsAndDoors(state, x, y) {
+    const levelId = state.currentLevelId;
+    if (levelId !== "level-basement" && levelId !== "level-upstairs") {
+      return;
+    }
+    const map = state.map;
+    const ts = map.tileSize;
+    const minCol = Math.max(0, Math.floor((x - ROCKET_WALL_BLAST_RADIUS) / ts));
+    const maxCol = Math.min(
+      map.cols - 1,
+      Math.floor((x + ROCKET_WALL_BLAST_RADIUS) / ts)
+    );
+    const minRow = Math.max(0, Math.floor((y - ROCKET_WALL_BLAST_RADIUS) / ts));
+    const maxRow = Math.min(
+      map.rows - 1,
+      Math.floor((y + ROCKET_WALL_BLAST_RADIUS) / ts)
+    );
+    let changed = false;
+    const activeLevel = getActiveLevel(state);
+    const levelDoors = levelId === "level-basement" ? state.levels["level-basement"].doors : state.levels["level-upstairs"].doors;
+    const activateNpcForRevealedDoor = (doorId) => {
+      if (levelId === "level-upstairs" && doorId === "upstairs-bedroom-door") {
+        const upstairs = state.levels["level-upstairs"];
+        if (upstairs.anneMarieCombat.mode === "passive") {
+          enterHostileMode(upstairs.anneMarieCombat);
+          propagateHostileAlert(upstairs.getArmedNpcs(), upstairs.anneMarieCombat.key);
+        }
+      } else if (levelId === "level-basement" && doorId === "basement-bathroom-door") {
+        const basement = state.levels["level-basement"];
+        if (basement.toiletNpc.x >= 21 * TILE_SIZE) {
+          basement.toiletNpc.x = 20 * TILE_SIZE + 2;
+        }
+        if (basement.hanneloesCombat.mode === "passive") {
+          enterHostileMode(basement.hanneloesCombat);
+          propagateHostileAlert(basement.getArmedNpcs(), basement.hanneloesCombat.key);
+        }
+      }
+    };
+    const revealRoomsTouchingRect = (rect) => {
+      const expanded = {
+        x: rect.x - ts - 2,
+        y: rect.y - ts - 2,
+        width: rect.width + ts * 2 + 4,
+        height: rect.height + ts * 2 + 4
+      };
+      for (const d of levelDoors) {
+        if (d.hiddenRegions.some((hr) => rectsIntersect(expanded, hr))) {
+          d.hiddenRegions = [];
+          activateNpcForRevealedDoor(d.id);
+          changed = true;
+        }
+      }
+      if (levelId === "level-basement" && !state.levels["level-basement"].spaFogCleared && rectsIntersect(expanded, BASEMENT_SPA_HIDDEN_MASK)) {
+        state.levels["level-basement"].spaFogCleared = true;
+        changed = true;
+      }
+    };
+    for (let row = minRow; row <= maxRow; row++) {
+      for (let col = minCol; col <= maxCol; col++) {
+        if (map.tiles[row]?.[col] !== 21 /* InteriorWall */) continue;
+        const tileRect = {
+          x: col * ts,
+          y: row * ts,
+          width: ts,
+          height: ts
+        };
+        if (distancePointToRect(x, y, tileRect) > ROCKET_WALL_BLAST_RADIUS) {
+          continue;
+        }
+        if (isOuterBorderWallTile(levelId, map, col, row)) {
+          const key = `${levelId}:${col},${row}`;
+          if (!state.blackenedWalls.has(key)) {
+            state.blackenedWalls.add(key);
+            changed = true;
+          }
+        } else {
+          const alreadyDestroying = state.destroyingWalls.some(
+            (w) => w.levelId === levelId && w.col === col && w.row === row
+          );
+          if (!alreadyDestroying) {
+            state.destroyingWalls.push({
+              levelId,
+              col,
+              row,
+              elapsed: 0,
+              duration: WALL_DESTRUCTION_DURATION_SECONDS,
+              replacementTile: getDestroyedWallReplacementTile(map, col, row)
+            });
+            changed = true;
+          }
+          revealRoomsTouchingRect(tileRect);
+        }
+      }
+    }
+    for (const door of levelDoors) {
+      if (distancePointToRect(x, y, door.bounds) <= ROCKET_WALL_BLAST_RADIUS) {
+        if (!state.destroyingDoors.some(
+          (d) => d.levelId === levelId && d.doorId === door.id
+        )) {
+          state.destroyingDoors.push({
+            levelId,
+            doorId: door.id,
+            bounds: { ...door.bounds },
+            elapsed: 0,
+            duration: WALL_DESTRUCTION_DURATION_SECONDS
+          });
+          door.hiddenRegions = [];
+          activateNpcForRevealedDoor(door.id);
+          changed = true;
+        }
+      }
+    }
+    if (levelId === "level-basement") {
+      const basement = state.levels["level-basement"];
+      if (basement.spaDoorClosed && distancePointToRect(x, y, BASEMENT_HALL_NORTH_DOOR_BOUNDS) <= ROCKET_WALL_BLAST_RADIUS && !state.destroyingDoors.some(
+        (d) => d.levelId === "level-basement" && d.doorId === "basement-hall-north-door"
+      )) {
+        state.destroyingDoors.push({
+          levelId: "level-basement",
+          doorId: "basement-hall-north-door",
+          bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
+          elapsed: 0,
+          duration: WALL_DESTRUCTION_DURATION_SECONDS
+        });
+        basement.spaFogCleared = true;
+        changed = true;
+      }
+      if (distancePointToRect(x, y, BASEMENT_FRONT_DOOR_BOUNDS) <= ROCKET_WALL_BLAST_RADIUS) {
+        for (const fc of [15, 16]) {
+          const key = `level-basement:${fc},20`;
+          if (!state.blackenedWalls.has(key)) {
+            state.blackenedWalls.add(key);
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed) {
+      state.mapVersion += 1;
+    }
+  }
+  function damageUpstairsCat(state, rawDamage) {
+    if (state.currentLevelId !== "level-upstairs") return;
+    const cat = state.levels["level-upstairs"].cat;
+    if (!applyCatDamage(cat, rawDamage)) return;
+    const ccx = cat.x + cat.width * 0.5;
+    const ccy = cat.y + cat.height * 0.5;
+    const groundZ = getTerrainHeight(ccx, ccy, state.currentLevelId);
+    spawnNpcBlood(state, ccx, ccy, groundZ + cat.jumpZ);
+  }
+  var UPSTAIRS_HOUSE_EXPLOSION_SPOTS = [
+    [3, 15],
+    [6, 13],
+    [4, 7],
+    [11, 7],
+    [14, 11],
+    [18, 7],
+    [24, 7],
+    [22, 15],
+    [26, 15],
+    [11, 18]
+  ];
+  function spawnHouseExplosionWave(state, jitter) {
+    const ts = state.map.tileSize;
+    for (const [col, row] of UPSTAIRS_HOUSE_EXPLOSION_SPOTS) {
+      const jx = jitter ? (Math.random() - 0.5) * ts * 1.4 : 0;
+      const jy = jitter ? (Math.random() - 0.5) * ts * 1.4 : 0;
+      const jz = jitter ? Math.random() * 10 : 0;
+      state.explosions.push({
+        levelId: "level-upstairs",
+        x: (col + 0.5) * ts + jx,
+        y: (row + 0.5) * ts + jy,
+        z: jz,
+        timer: 0.65,
+        maxTimer: 0.65
+      });
+    }
+  }
+  function triggerUpstairsHouseExplosion(state) {
+    state.houseExploding = true;
+    state.houseExplosionTimer = 2;
+    state.houseExplosionSpawnAccum = 0;
+    spawnHouseExplosionWave(state, false);
+    const upstairs = state.levels["level-upstairs"];
+    const map = upstairs.map;
+    let changed = false;
+    for (let row = 0; row < map.rows; row++) {
+      for (let col = 0; col < map.cols; col++) {
+        if (map.tiles[row]?.[col] !== 21 /* InteriorWall */) continue;
+        if (isOuterBorderWallTile("level-upstairs", map, col, row)) {
+          const key = `level-upstairs:${col},${row}`;
+          if (!state.blackenedWalls.has(key)) {
+            state.blackenedWalls.add(key);
+            changed = true;
+          }
+        } else {
+          const alreadyDestroying = state.destroyingWalls.some(
+            (w) => w.levelId === "level-upstairs" && w.col === col && w.row === row
+          );
+          if (!alreadyDestroying) {
+            state.destroyingWalls.push({
+              levelId: "level-upstairs",
+              col,
+              row,
+              elapsed: 0,
+              duration: WALL_DESTRUCTION_DURATION_SECONDS,
+              replacementTile: getDestroyedWallReplacementTile(map, col, row)
+            });
+            changed = true;
+          }
+        }
+      }
+    }
+    for (const door of upstairs.doors) {
+      door.hiddenRegions = [];
+      if (!state.destroyingDoors.some(
+        (d) => d.levelId === "level-upstairs" && d.doorId === door.id
+      )) {
+        state.destroyingDoors.push({
+          levelId: "level-upstairs",
+          doorId: door.id,
+          bounds: { ...door.bounds },
+          elapsed: 0,
+          duration: WALL_DESTRUCTION_DURATION_SECONDS
+        });
+        changed = true;
+      }
+    }
+    if (changed) {
+      state.mapVersion += 1;
+    }
+  }
+  function detonateRocket(state, x, y, cutsceneShot = false, sourceNpcKey, owner = "npc") {
+    const groundZ = getTerrainHeight(x, y, state.currentLevelId);
+    state.explosions.push({
+      levelId: state.currentLevelId,
+      x,
+      y,
+      z: groundZ,
+      timer: 0.65,
+      maxTimer: 0.65
+    });
+    applyRocketExplosionToWallsAndDoors(state, x, y);
+    if (!cutsceneShot) {
+      if (owner === "npc") {
+        const playerCx = state.player.x + state.player.width * 0.5;
+        const playerCy = state.player.y + state.player.height * 0.5;
+        if (Math.hypot(playerCx - x, playerCy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+          damagePlayer(state, BAZOOKA_PLAYER_EXPLOSION_DAMAGE);
+        }
+      }
+      if (owner === "player" && state.currentLevelId === "level-upstairs") {
+        const cat = state.levels["level-upstairs"].cat;
+        if (cat.mode !== "dead") {
+          const ccx = cat.x + cat.width * 0.5;
+          const ccy = cat.y + cat.height * 0.5;
+          if (Math.hypot(ccx - x, ccy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+            damageUpstairsCat(state, BASEMENT_MINE_EXPLOSION_DAMAGE);
+          }
+        }
+      }
+      for (const target of getLevelNpcTargets(state)) {
+        if (target.key === sourceNpcKey) continue;
+        const ncx = target.rect.x + target.rect.width * 0.5;
+        const ncy = target.rect.y + target.rect.height * 0.5;
+        if (Math.hypot(ncx - x, ncy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+          damageArmedNpc(
+            state,
+            target.key,
+            BASEMENT_MINE_EXPLOSION_DAMAGE,
+            ncx,
+            ncy,
+            target.groundZ
+          );
+        }
+      }
+    }
+  }
+  function checkKatanaNpcHit(state) {
+    const player = state.player;
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const cx = player.x + player.width * 0.5 + Math.cos(aimYaw) * 10;
+    const cy = player.y + player.height * 0.5 + Math.sin(aimYaw) * 10;
+    const slashRect = {
+      x: cx - 15,
+      y: cy - 15,
+      width: 30,
+      height: 30
+    };
+    for (const target of getLevelNpcTargets(state)) {
+      if (rectsIntersect(slashRect, target.rect)) {
+        const ncx = target.rect.x + target.rect.width * 0.5;
+        const ncy = target.rect.y + target.rect.height * 0.5;
+        spawnNpcBlood(state, ncx, ncy, target.groundZ);
+        damageArmedNpc(state, target.key, PLAYER_KATANA_NPC_DAMAGE, ncx, ncy, target.groundZ);
+      }
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      const cat = state.levels["level-upstairs"].cat;
+      if (cat.mode !== "dead" && rectsIntersect(slashRect, cat)) {
+        damageUpstairsCat(state, PLAYER_KATANA_NPC_DAMAGE);
+      }
+    }
+  }
+  function checkPunchNpcHit(state) {
+    const player = state.player;
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const cx = player.x + player.width * 0.5 + Math.cos(aimYaw) * 6;
+    const cy = player.y + player.height * 0.5 + Math.sin(aimYaw) * 6;
+    const punchRect = {
+      x: cx - 12,
+      y: cy - 12,
+      width: 24,
+      height: 24
+    };
+    for (const target of getLevelNpcTargets(state)) {
+      if (rectsIntersect(punchRect, target.rect)) {
+        const ncx = target.rect.x + target.rect.width * 0.5;
+        const ncy = target.rect.y + target.rect.height * 0.5;
+        spawnNpcBlood(state, ncx, ncy, target.groundZ);
+        damageArmedNpc(state, target.key, PLAYER_PUNCH_NPC_DAMAGE, ncx, ncy, target.groundZ);
+      }
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      const cat = state.levels["level-upstairs"].cat;
+      if (cat.mode !== "dead" && rectsIntersect(punchRect, cat)) {
+        damageUpstairsCat(state, PLAYER_PUNCH_NPC_DAMAGE);
+      }
+    }
+  }
+  function updateEffectTimers(state, dtSeconds) {
+    if (dtSeconds <= 0) return;
+    for (let i = state.bulletHoles.length - 1; i >= 0; i--) {
+      state.bulletHoles[i].age += dtSeconds;
+      if (state.bulletHoles[i].age >= state.bulletHoles[i].maxAge) {
+        state.bulletHoles.splice(i, 1);
+      }
+    }
+    for (let i = state.bloodPools.length - 1; i >= 0; i--) {
+      state.bloodPools[i].age += dtSeconds;
+      if (state.bloodPools[i].age >= state.bloodPools[i].maxAge) {
+        state.bloodPools.splice(i, 1);
+      }
+    }
+    for (let i = state.droppedUzis.length - 1; i >= 0; i--) {
+      const drop = state.droppedUzis[i];
+      if (typeof drop.maxAge === "number") {
+        drop.age = (drop.age ?? 0) + dtSeconds;
+        if (drop.age >= drop.maxAge) {
+          state.droppedUzis.splice(i, 1);
+        }
+      }
+    }
+    for (let i = state.explosions.length - 1; i >= 0; i--) {
+      state.explosions[i].timer -= dtSeconds;
+      if (state.explosions[i].timer <= 0) {
+        state.explosions.splice(i, 1);
+      }
+    }
+    for (let i = state.destroyingWalls.length - 1; i >= 0; i--) {
+      const wall = state.destroyingWalls[i];
+      wall.elapsed += dtSeconds;
+      if (wall.elapsed >= wall.duration) {
+        const lvl = state.levels[wall.levelId];
+        lvl.map.tiles[wall.row][wall.col] = wall.replacementTile;
+        if (state.currentLevelId === wall.levelId) {
+          state.map.tiles[wall.row][wall.col] = wall.replacementTile;
+        }
+        state.destroyingWalls.splice(i, 1);
+        state.mapVersion += 1;
+      }
+    }
+    for (let i = state.destroyingDoors.length - 1; i >= 0; i--) {
+      const d = state.destroyingDoors[i];
+      d.elapsed += dtSeconds;
+      if (d.elapsed >= d.duration) {
+        if (d.levelId === "level-basement") {
+          const basement = state.levels["level-basement"];
+          if (d.doorId === "basement-hall-north-door") {
+            basement.spaDoorClosed = false;
+          } else {
+            basement.doors = basement.doors.filter((dr) => dr.id !== d.doorId);
+          }
+        } else if (d.levelId === "level-upstairs") {
+          const upstairs = state.levels["level-upstairs"];
+          upstairs.doors = upstairs.doors.filter((dr) => dr.id !== d.doorId);
+        }
+        state.destroyingDoors.splice(i, 1);
+        state.mapVersion += 1;
+      }
+    }
+    if (state.burningNpcs.size > 0) {
+      const npcTargets = getLevelNpcTargets(state);
+      for (const key of Array.from(state.burningNpcs)) {
+        const target = npcTargets.find((t) => t.key === key);
+        if (target) {
+          damageArmedNpc(
+            state,
+            key,
+            NPC_BURN_DAMAGE_PER_SECOND * dtSeconds,
+            target.rect.x + target.rect.width * 0.5,
+            target.rect.y + target.rect.height * 0.5,
+            target.groundZ
+          );
+        }
+      }
+    }
+    for (let i = state.bloodParticles.length - 1; i >= 0; i--) {
+      const pt = state.bloodParticles[i];
+      pt.age += dtSeconds;
+      pt.x += pt.vx * dtSeconds;
+      pt.y += pt.vy * dtSeconds;
+      pt.z += pt.vz * dtSeconds;
+      pt.vz -= 130 * dtSeconds;
+      if (pt.z <= pt.groundZ) {
+        if (pt.spawnsPool) {
+          state.bloodPools.push({
+            levelId: pt.levelId,
+            x: pt.x,
+            y: pt.y,
+            z: pt.groundZ,
+            age: 0,
+            maxAge: BLOOD_POOL_DURATION_SECONDS
+          });
+        }
+        state.bloodParticles.splice(i, 1);
+      }
+    }
+  }
+  function updateProjectiles(state, dtSeconds) {
+    if (state.projectiles.length === 0 || dtSeconds <= 0) {
+      return;
+    }
+    const mapWidth = state.map.cols * state.map.tileSize;
+    const mapHeight = state.map.rows * state.map.tileSize;
+    const activeLevel = getActiveLevel(state);
+    const obstacles = activeLevel.getSolidObstacles();
+    const npcTargets = getLevelNpcTargets(state);
+    for (let i = state.projectiles.length - 1; i >= 0; i--) {
+      const p = state.projectiles[i];
+      const stepSpeed = Math.hypot(p.vx, p.vy);
+      const totalStepDist = stepSpeed * dtSeconds;
+      const subSteps = Math.max(1, Math.ceil(totalStepDist / 4));
+      const subDt = dtSeconds / subSteps;
+      let removed = false;
+      for (let s = 0; s < subSteps; s++) {
+        p.x += p.vx * subDt;
+        p.y += p.vy * subDt;
+        p.z += (p.vz ?? 0) * subDt;
+        p.distanceTraveled = (p.distanceTraveled ?? 0) + stepSpeed * subDt;
+        if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
+          if (p.kind === "rocket") {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              p.cutsceneShot,
+              p.sourceNpcKey,
+              p.owner ?? "npc"
+            );
+          }
+          removed = true;
+          break;
+        }
+        if (typeof p.maxDistance === "number" && p.distanceTraveled >= p.maxDistance) {
+          if (p.kind === "rocket") {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              p.cutsceneShot,
+              p.sourceNpcKey,
+              p.owner ?? "npc"
+            );
+          }
+          removed = true;
+          break;
+        }
+        const isFireball = p.kind === "fireball";
+        const isRocket = p.kind === "rocket";
+        const projRect = isFireball || isRocket ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 } : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
+        if (isFireball && state.currentLevelId === "level-basement") {
+          const basement = state.levels["level-basement"];
+          if (basement.igniteStairsWoodAt(projRect)) {
+            removed = true;
+            break;
+          }
+        }
+        if (p.owner === "npc" && !p.cutsceneShot) {
+          if (rectsIntersect(projRect, state.player)) {
+            if (isRocket) {
+              detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, "npc");
+            } else {
+              damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
+            }
+            removed = true;
+            break;
+          }
+        }
+        const hitNpc = npcTargets.find(
+          (t) => t.key !== p.sourceNpcKey && rectsIntersect(projRect, t.rect)
+        );
+        if (hitNpc && !p.cutsceneShot) {
+          if (isRocket) {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              false,
+              p.sourceNpcKey,
+              p.owner ?? "npc"
+            );
+          } else if (isFireball) {
+            state.burningNpcs.add(hitNpc.key);
+            const armed = getArmedNpcByKey(state, hitNpc.key);
+            if (armed) {
+              igniteNpc(armed);
+            }
+            damageArmedNpc(
+              state,
+              hitNpc.key,
+              PLAYER_FIREBALL_NPC_DAMAGE,
+              p.x,
+              p.y,
+              hitNpc.groundZ
+            );
+          } else {
+            spawnNpcBlood(state, p.x, p.y, hitNpc.groundZ);
+            if (p.owner !== "npc") {
+              damageArmedNpc(
+                state,
+                hitNpc.key,
+                PLAYER_UZI_NPC_DAMAGE,
+                p.x,
+                p.y,
+                hitNpc.groundZ
+              );
+            }
+          }
+          removed = true;
+          break;
+        }
+        if (p.owner !== "npc" && !p.cutsceneShot && state.currentLevelId === "level-upstairs") {
+          const cat = state.levels["level-upstairs"].cat;
+          if (cat.mode !== "dead" && rectsIntersect(projRect, cat)) {
+            if (isRocket) {
+              detonateRocket(
+                state,
+                p.x,
+                p.y,
+                false,
+                p.sourceNpcKey,
+                p.owner ?? "player"
+              );
+            } else if (isFireball) {
+              damageUpstairsCat(state, PLAYER_FIREBALL_NPC_DAMAGE);
+            } else {
+              damageUpstairsCat(state, PLAYER_UZI_NPC_DAMAGE);
+            }
+            removed = true;
+            break;
+          }
+        }
+        if (p.fromRoof) {
+          const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
+          const hitTallTreeOrEdge = isRectCollidingWithMap(
+            state.map,
+            projRect.x,
+            projRect.y,
+            projRect.width,
+            projRect.height,
+            true,
+            (c, r) => c >= 0 && r >= 0 && c < state.map.cols && r < state.map.rows && state.map.tiles[r][c] !== 1 /* Tree */
+          );
+          if (hitChimney || hitTallTreeOrEdge) {
+            if (!isFireball && !isRocket) {
+              state.bulletHoles.push({
+                levelId: state.currentLevelId,
+                x: p.x,
+                y: p.y,
+                z: Math.max(2, p.z),
+                age: 0,
+                maxAge: BULLET_HOLE_DURATION_SECONDS
+              });
+            } else if (isRocket) {
+              detonateRocket(
+                state,
+                p.x,
+                p.y,
+                p.cutsceneShot,
+                p.sourceNpcKey,
+                p.owner ?? "npc"
+              );
+            }
+            removed = true;
+            break;
+          }
+          continue;
+        }
+        const hitMap = isRectCollidingWithMap(
+          state.map,
+          projRect.x,
+          projRect.y,
+          projRect.width,
+          projRect.height,
+          true,
+          p.cutsceneShot ? (c, r) => {
+            const tile = state.map.tiles[r]?.[c];
+            if (r < 5) return true;
+            if (tile === 22 /* FurnitureSolid */) return true;
+            return false;
+          } : void 0
+        );
+        const sourceNpcTarget = p.sourceNpcKey ? npcTargets.find((t) => t.key === p.sourceNpcKey) : void 0;
+        const hitObstacle = p.cutsceneShot ? false : obstacles.some((obs) => {
+          if (sourceNpcTarget && obs.x === sourceNpcTarget.rect.x && obs.y === sourceNpcTarget.rect.y && obs.width === sourceNpcTarget.rect.width && obs.height === sourceNpcTarget.rect.height) {
+            return false;
+          }
+          return rectsIntersect(projRect, obs);
+        });
+        const hitOutsideDynamic = state.currentLevelId === "level-outside" && (rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle));
+        if (hitMap || hitObstacle || hitOutsideDynamic) {
+          if (isRocket) {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              p.cutsceneShot,
+              p.sourceNpcKey,
+              p.owner ?? "npc"
+            );
+          } else if (!isFireball && (hitMap || hitObstacle)) {
+            state.bulletHoles.push({
+              levelId: state.currentLevelId,
+              x: p.x,
+              y: p.y,
+              z: Math.max(2, p.z),
+              age: 0,
+              maxAge: BULLET_HOLE_DURATION_SECONDS
+            });
+          }
+          removed = true;
+          break;
+        }
+      }
+      if (removed) {
+        state.projectiles.splice(i, 1);
+      }
+    }
+  }
+  function fireUziProjectile(state) {
+    const player = state.player;
+    if (player.uziAmmo <= 0 || player.uziReloadTimer > 0 || player.uziDepleted) {
+      return;
+    }
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const rightAngle = aimYaw + Math.PI / 2;
+    const cx = player.x + player.width * 0.5;
+    const cy = player.y + player.height * 0.5;
+    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
+    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
+    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180);
+    const shotYaw = aimYaw + yawSpread;
+    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180);
+    const spawnX = cx + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
+    const spawnY = cy + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
+    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 10;
+    state.projectiles.push({
+      kind: "bullet",
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(shotYaw) * UZI_PROJECTILE_SPEED,
+      vy: Math.sin(shotYaw) * UZI_PROJECTILE_SPEED,
+      vz: UZI_PROJECTILE_SPEED * Math.tan(pitchSpread),
+      yaw: shotYaw,
+      distanceTraveled: 0,
+      fromRoof: onRoof
+    });
+    player.weaponVibrationTimer = Math.max(
+      player.weaponVibrationTimer,
+      UZI_FIRE_INTERVAL_SECONDS + 0.05
+    );
+    player.uziAmmo = Math.max(0, player.uziAmmo - 1);
+    if (player.uziAmmo <= 0) {
+      player.uziReloadTimer = PLAYER_UZI_RELOAD_SECONDS;
+      debugLog("Reloading Uzi...");
+    }
+  }
+  function fireFlamethrowerProjectile(state) {
+    const player = state.player;
+    if (player.flamethrowerAmmo <= 0) {
+      return;
+    }
+    if (Number.isFinite(player.flamethrowerAmmo)) {
+      player.flamethrowerAmmo = Math.max(0, player.flamethrowerAmmo - 1);
+    }
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const rightAngle = aimYaw + Math.PI / 2;
+    const cx = player.x + player.width * 0.5;
+    const cy = player.y + player.height * 0.5;
+    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
+    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
+    const spawnX = cx + Math.cos(aimYaw) * 8.5 + Math.cos(rightAngle) * 3.5;
+    const spawnY = cy + Math.sin(aimYaw) * 8.5 + Math.sin(rightAngle) * 3.5;
+    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 9.5;
+    state.projectiles.push({
+      kind: "fireball",
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+      vy: Math.sin(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
+      vz: 0,
+      yaw: aimYaw,
+      distanceTraveled: 0,
+      maxDistance: FLAMETHROWER_MAX_DISTANCE,
+      fromRoof: onRoof
+    });
+    player.weaponVibrationTimer = Math.max(
+      player.weaponVibrationTimer,
+      FLAMETHROWER_FIRE_INTERVAL_SECONDS + 0.05
+    );
+  }
+  function firePlayerBazookaProjectile(state) {
+    const player = state.player;
+    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+    const rightAngle = aimYaw + Math.PI / 2;
+    const cx = player.x + player.width * 0.5;
+    const cy = player.y + player.height * 0.5;
+    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
+    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
+    const spawnX = cx + Math.cos(aimYaw) * 9 + Math.cos(rightAngle) * 3;
+    const spawnY = cy + Math.sin(aimYaw) * 9 + Math.sin(rightAngle) * 3;
+    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 11.5;
+    state.projectiles.push({
+      kind: "rocket",
+      owner: "player",
+      x: spawnX,
+      y: spawnY,
+      z: spawnZ,
+      vx: Math.cos(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+      vy: Math.sin(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
+      vz: 0,
+      yaw: aimYaw,
+      distanceTraveled: 0,
+      maxDistance: 320,
+      fromRoof: onRoof
+    });
+    player.weaponVibrationTimer = Math.max(player.weaponVibrationTimer, 0.25);
+  }
+  function updateGameState(state, input, dtSeconds) {
+    const safeDt = Math.max(0, dtSeconds);
+    state.elapsedTime += safeDt;
+    dtSeconds = safeDt;
+    const prevUziCooldown = state.player.uziFireCooldown;
+    const prevFlameCooldown = state.player.flamethrowerFireCooldown;
+    updatePlayerHealthAndTimers(state.player, dtSeconds);
+    if (state.damageFlashTimer > 0) {
+      state.damageFlashTimer = Math.max(0, state.damageFlashTimer - dtSeconds);
+    }
+    if (state.cheatMode && state.player.uziDepleted && state.player.uziCheatRefillTimer > 0) {
+      state.player.uziCheatRefillTimer = Math.max(
+        0,
+        state.player.uziCheatRefillTimer - dtSeconds
+      );
+      if (state.player.uziCheatRefillTimer === 0) {
+        state.player.unlockedUzi = true;
+        state.player.uziDepleted = false;
+        state.player.uziAmmo = MAX_UZI_AMMO;
+        state.player.equippedItem = "uzi";
+        state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+        debugLog("Cheat refill: new Uzi obtained with 30 rounds");
+      }
+    }
+    const uziCooldownRemainder = prevUziCooldown > 0 ? Math.max(0, dtSeconds - prevUziCooldown) : 0;
+    const flameCooldownRemainder = prevFlameCooldown > 0 ? Math.max(0, dtSeconds - prevFlameCooldown) : 0;
+    const actionPressed = consumeActionPress(input);
+    const attackPressed = consumeAttackPress(input);
+    const slotPressed = consumeSlotPress(input);
+    if (input.pointerClick) {
+      input.pointerClick = null;
+    }
+    if (state.screenFade) {
+      state.screenFade.timer += dtSeconds;
+      if (state.screenFade.phase === "out") {
+        if (state.screenFade.timer >= state.screenFade.duration) {
+          const onMidpoint = state.screenFade.onMidpoint;
+          state.screenFade.onMidpoint = void 0;
+          state.screenFade.phase = "in";
+          state.screenFade.timer = 0;
+          if (onMidpoint) {
+            onMidpoint();
+          }
+          if (typeof input.cameraYaw === "number") {
+            input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
+          }
+        }
+        state.player.isMoving = false;
+        state.nearbyInteractable = null;
+        return;
+      } else if (state.screenFade.timer >= state.screenFade.duration) {
+        const onComplete = state.screenFade.onComplete;
+        state.screenFade = null;
+        if (onComplete) {
+          onComplete();
+        }
+      }
+    }
+    if (state.houseExploding) {
+      updateEffectTimers(state, dtSeconds);
+      if (state.houseExplosionTimer > 0) {
+        state.houseExplosionTimer = Math.max(0, state.houseExplosionTimer - dtSeconds);
+        state.houseExplosionSpawnAccum += dtSeconds;
+        while (state.houseExplosionSpawnAccum >= 0.12) {
+          state.houseExplosionSpawnAccum -= 0.12;
+          spawnHouseExplosionWave(state, true);
+        }
+        if (state.houseExplosionTimer <= 0) {
+          state.worldFadedToBlack = true;
+        }
+      }
+    }
+    if (state.activeDialogue) {
+      state.player.isMoving = false;
+      if (actionPressed) {
+        if (state.activeDialogue.unclosable && state.activeDialogue.currentIndex >= state.activeDialogue.lines.length - 1) {
+          return;
+        }
+        state.activeDialogue.currentIndex += 1;
+        if (state.houseExploding && state.activeDialogue.currentIndex >= 1) {
+          state.worldFadedToBlack = true;
+        }
+        if (state.activeDialogue.currentIndex >= state.activeDialogue.lines.length) {
+          const wasGameOver = state.gameOver;
+          const onClose = state.activeDialogue.onClose;
+          const prevLevel = state.currentLevelId;
+          state.activeDialogue = null;
+          if (onClose) {
+            onClose();
+          }
+          if ((state.currentLevelId !== prevLevel || wasGameOver) && typeof input.cameraYaw === "number") {
+            input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
+          }
+        }
+      }
+      return;
+    }
+    if (slotPressed !== null) {
+      selectPlayerEquipmentSlot(state.player, slotPressed);
+    }
+    updatePlayerJump(state.player, dtSeconds);
+    updateProjectiles(state, dtSeconds);
+    if (!state.player.unlockedUzi || state.player.uziDepleted) {
+      for (let i = state.droppedUzis.length - 1; i >= 0; i--) {
+        const uzi = state.droppedUzis[i];
+        if (!uzi.pickupable || uzi.levelId !== state.currentLevelId) continue;
+        const uziRect = {
+          x: uzi.x - 6,
+          y: uzi.y - 6,
+          width: 12,
+          height: 12
+        };
+        if (rectsIntersect(state.player, uziRect)) {
+          const pickedAmmo = uzi.ammo ?? MAX_UZI_AMMO;
+          state.droppedUzis.splice(i, 1);
+          state.player.unlockedUzi = true;
+          state.player.uziDepleted = pickedAmmo <= 0;
+          state.player.uziAmmo = pickedAmmo;
+          state.player.uziDropTimer = 0;
+          state.player.uziCheatRefillTimer = 0;
+          state.player.equippedItem = pickedAmmo > 0 ? "uzi" : "empty";
+          state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+          debugLog(`Picked up Uzi from fallen NPC (${pickedAmmo} rounds)`);
+          break;
+        }
+      }
+    }
+    for (let i = state.droppedFlamethrowers.length - 1; i >= 0; i--) {
+      const flameDrop = state.droppedFlamethrowers[i];
+      if (flameDrop.levelId !== state.currentLevelId) continue;
+      const flameRect = {
+        x: flameDrop.x - 7,
+        y: flameDrop.y - 7,
+        width: 14,
+        height: 14
+      };
+      if (rectsIntersect(state.player, flameRect)) {
+        state.droppedFlamethrowers.splice(i, 1);
+        state.player.unlockedFlamethrower = true;
+        if (Number.isFinite(state.player.flamethrowerAmmo)) {
+          state.player.flamethrowerAmmo += flameDrop.ammo;
+        } else {
+          state.player.flamethrowerAmmo = flameDrop.ammo;
+        }
+        if (state.player.equippedItem === "empty") {
+          selectPlayerEquipmentSlot(state.player, 4);
+        }
+        debugLog(`Picked up Flamethrower (+${flameDrop.ammo} flames)`);
+        break;
+      }
+    }
+    for (let i = state.droppedKatanas.length - 1; i >= 0; i--) {
+      const katana = state.droppedKatanas[i];
+      if (katana.levelId !== state.currentLevelId) continue;
+      const katanaRect = {
+        x: katana.x - 7,
+        y: katana.y - 7,
+        width: 14,
+        height: 14
+      };
+      if (rectsIntersect(state.player, katanaRect)) {
+        state.droppedKatanas.splice(i, 1);
+        state.player.unlockedKatana = true;
+        selectPlayerEquipmentSlot(state.player, 5);
+        debugLog("Picked up Katana!");
+        break;
+      }
+    }
+    for (let i = state.droppedBazookas.length - 1; i >= 0; i--) {
+      const bazooka = state.droppedBazookas[i];
+      if (bazooka.levelId !== state.currentLevelId) continue;
+      const bazookaRect = {
+        x: bazooka.x - 7,
+        y: bazooka.y - 7,
+        width: 14,
+        height: 14
+      };
+      if (rectsIntersect(state.player, bazookaRect)) {
+        state.droppedBazookas.splice(i, 1);
+        state.player.unlockedBazooka = true;
+        selectPlayerEquipmentSlot(state.player, 6);
+        debugLog("Picked up Bazooka!");
+        break;
+      }
+    }
+    for (let i = state.medkits.length - 1; i >= 0; i--) {
+      const medkit = state.medkits[i];
+      if (medkit.levelId !== state.currentLevelId) continue;
+      if (medkit.id === "basement-spa-medkit" && state.levels["level-basement"].spaDoorClosed) {
+        continue;
+      }
+      if (state.player.health >= state.player.maxHealth) continue;
+      const medkitRect = {
+        x: medkit.x - 7,
+        y: medkit.y - 7,
+        width: 14,
+        height: 14
+      };
+      if (rectsIntersect(state.player, medkitRect)) {
+        state.medkits.splice(i, 1);
+        setPlayerHealth(state.player, state.player.health + MEDKIT_HEAL_AMOUNT);
+        debugLog(`Picked up Medkit (+${MEDKIT_HEAL_AMOUNT} HP)`);
+        break;
+      }
+    }
+    updateEffectTimers(state, dtSeconds);
+    for (const door of state.levels["level-basement"].openedDoors) {
+      door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
+    }
+    for (const door of state.levels["level-upstairs"].openedDoors) {
+      door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
+    }
+    const transitionCtx = {
+      loadLevel: (nextId) => {
+        loadLevel(state, nextId);
+        if (typeof input.cameraYaw === "number") {
+          input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
+        }
+      },
+      openDialogue: (lines, onClose, speakerPortrait, unclosable, variant) => {
+        state.activeDialogue = {
+          lines,
+          currentIndex: 0,
+          onClose,
+          speakerPortrait,
+          unclosable,
+          variant
+        };
+      },
+      damagePlayer: (amount) => damagePlayer(state, amount),
+      fireNpcUzi: (npc, originX, originY, aimYaw) => fireNpcUziProjectile(state, npc, originX, originY, aimYaw),
+      fireNpcFlamethrower: (npc, originX, originY, aimYaw) => fireNpcFlamethrowerProjectile(state, npc, originX, originY, aimYaw),
+      fireNpcBazooka: (npc, originX, originY, aimYaw) => fireNpcBazookaProjectile(state, originX, originY, aimYaw, npc.key, false),
+      fireRosannaCutsceneRocket: (originX, originY, aimYaw) => fireNpcBazookaProjectile(
+        state,
+        originX,
+        originY,
+        aimYaw,
+        "upstairs:Rosanna",
+        true
+      ),
+      getSecretSantaReceiver: () => {
+        if (!state.secretSantaDB) return void 0;
+        const playerName = state.secretSantaDB.playerName;
+        if (!playerName) return void 0;
+        return state.secretSantaDB.getGiftReceiverOf(playerName);
+      },
+      fadeWorldToBlack: () => {
+        state.worldFadedToBlack = true;
+      },
+      detonateHouseC4: () => {
+        triggerUpstairsHouseExplosion(state);
+      },
+      getRemainingNaughtyListNames: () => {
+        const basement = state.levels["level-basement"];
+        const upstairs = state.levels["level-upstairs"];
+        const allNpcs = [
+          basement.arjanCombat,
+          basement.olexaCombat,
+          basement.hanneloesCombat,
+          upstairs.albinCombat,
+          upstairs.henrikCombat,
+          upstairs.tanjaCombat,
+          upstairs.dianaCombat,
+          upstairs.simonCombat,
+          upstairs.anneMarieCombat,
+          upstairs.rosannaCombat
+        ];
+        return allNpcs.filter((npc) => npc.mode !== "dead").map((npc) => npc.name);
+      }
+    };
+    if (state.currentLevelId === "level-outside") {
+      const handledEarly = updateOutsideLevel(state, input, dtSeconds);
+      if (handledEarly) {
+        return;
+      }
+    } else if (state.currentLevelId === "level-basement") {
+      const basement = state.levels["level-basement"];
+      const movementLocked = basement.updateCutscene(
+        dtSeconds,
+        state.player,
+        transitionCtx
+      );
+      if (movementLocked) {
+        refreshInteractables(state);
+        return;
+      }
+      updatePlayer(
+        state.player,
+        input,
+        dtSeconds,
+        basement.map,
+        basement.getSolidObstacles(state.player)
+      );
+      if (!isPlayerOnBasementStairs(state.player)) {
+        if (rectsIntersect(state.player, BASEMENT_STAIRS_SIDE_NORTH_BOUNDS)) {
+          state.player.y = BASEMENT_STAIRS_SIDE_NORTH_BOUNDS.y - state.player.height;
+        } else if (rectsIntersect(state.player, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS)) {
+          state.player.y = BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.y + BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.height;
+        }
+      }
+      basement.updateHazardsAndItems(dtSeconds, state.player, transitionCtx);
+      basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
+      if (state.activeDialogue) {
+        refreshInteractables(state);
+        return;
+      }
+      if (!state.screenFade && isPlayerOnBasementStairs(state.player) && rectEdgeDistance(state.player, BASEMENT_STAIRS_TRIGGER_BOUNDS) <= INTERACTION_MAX_GAP_PX) {
+        state.player.isMoving = false;
+        state.nearbyInteractable = null;
+        state.screenFade = {
+          phase: "out",
+          timer: 0,
+          duration: 0.5,
+          onMidpoint: () => {
+            state.player.states.set(USED_STAIRS_STATE_KEY, true);
+            transitionCtx.loadLevel("level-upstairs");
+          },
+          onComplete: () => {
+            if (!state.player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
+              state.player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
+              transitionCtx.openDialogue([
+                "Hmm... so I believe the Christmas tree is to the left, but I must not be seen!"
+              ]);
+            }
+          }
+        };
+        return;
+      }
+    } else if (state.currentLevelId === "level-upstairs") {
+      const upstairs = state.levels["level-upstairs"];
+      const movementLocked = upstairs.updateCutscene(
+        dtSeconds,
+        state.player,
+        transitionCtx
+      );
+      if (movementLocked) {
+        refreshInteractables(state);
+        return;
+      }
+      updatePlayer(
+        state.player,
+        input,
+        dtSeconds,
+        upstairs.map,
+        upstairs.getSolidObstacles()
+      );
+      updateCat(
+        upstairs.cat,
+        state.player,
+        dtSeconds,
+        upstairs.map,
+        upstairs.getSolidObstacles(),
+        (damage) => damagePlayer(state, damage)
+      );
+      if (upstairs.updateCutscene(0, state.player, transitionCtx)) {
+        refreshInteractables(state);
+        return;
+      }
+      upstairs.updateTableRoomAmbush(dtSeconds, state.player);
+      upstairs.updateNpcSight(dtSeconds, state.player, transitionCtx);
+      if (state.activeDialogue) {
+        refreshInteractables(state);
+        return;
+      }
+      if (!state.screenFade && rectEdgeDistance(state.player, UPSTAIRS_STAIRS_TRIGGER_BOUNDS) <= INTERACTION_MAX_GAP_PX) {
+        state.player.isMoving = false;
+        state.nearbyInteractable = null;
+        state.screenFade = {
+          phase: "out",
+          timer: 0,
+          duration: 0.5,
+          onMidpoint: () => {
+            transitionCtx.loadLevel("level-basement");
+          }
+        };
+        return;
+      }
+    } else if (state.currentLevelId === "level-people") {
+      const peopleLevel = state.levels["level-people"];
+      updatePlayer(
+        state.player,
+        input,
+        dtSeconds,
+        peopleLevel.map,
+        peopleLevel.getSolidObstacles()
+      );
+    }
+    refreshInteractables(state);
+    if (actionPressed && state.player.equippedItem === "uzi" && state.player.unlockedUzi && !state.player.uziDepleted) {
+      for (const floorUzi of state.droppedUzis) {
+        if (!floorUzi.pickupable || floorUzi.levelId !== state.currentLevelId) continue;
+        const uziRect = {
+          x: floorUzi.x - 7,
+          y: floorUzi.y - 7,
+          width: 14,
+          height: 14
+        };
+        if (rectsIntersect(state.player, uziRect)) {
+          const prevPlayerAmmo = state.player.uziAmmo;
+          const floorAmmo = floorUzi.ammo ?? MAX_UZI_AMMO;
+          state.player.uziAmmo = floorAmmo;
+          floorUzi.ammo = prevPlayerAmmo;
+          state.player.uziDepleted = floorAmmo <= 0;
+          state.player.equippedItem = state.player.uziDepleted ? "empty" : "uzi";
+          state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
+          state.player.uziFireCooldown = 0;
+          state.player.punchTimer = 0;
+          debugLog(
+            `Swapped Uzi on floor (${prevPlayerAmmo} <-> ${floorAmmo} rounds)`
+          );
+          return;
+        }
+      }
+    }
+    if (actionPressed && state.nearbyInteractable) {
+      const target = state.nearbyInteractable;
+      if (state.currentLevelId === "level-outside") {
+        syncOutsideToLevel(state);
+      }
+      const activeLevel = getActiveLevel(state);
+      const prevLevelId = state.currentLevelId;
+      const handledByLevel = activeLevel.handleInteraction(
+        target.id,
+        state.player,
+        transitionCtx
+      );
+      if (handledByLevel) {
+        if (prevLevelId === "level-outside" && state.currentLevelId === "level-outside") {
+          syncLevelToOutside(state);
+        }
+        refreshInteractables(state);
+      } else if (target.dialogueLines.length > 0) {
+        state.activeDialogue = {
+          lines: target.dialogueLines,
+          currentIndex: 0,
+          speakerPortrait: target.speakerPortrait
+        };
+      }
+      return;
+    }
+    if (state.player.equippedItem === "empty") {
+      if (actionPressed && !state.nearbyInteractable) {
+        triggerPlayerJump(state.player);
+      }
+    } else if (state.player.equippedItem === "unarmed") {
+      if (attackPressed || !state.nearbyInteractable && actionPressed) {
+        if (triggerPlayerPunch(state.player)) {
+          checkPunchNpcHit(state);
+        }
+      }
+    } else if (state.player.equippedItem === "katana") {
+      if (attackPressed || !state.nearbyInteractable && actionPressed) {
+        if (triggerPlayerKatanaSwing(state.player)) {
+          checkKatanaNpcHit(state);
+        }
+      }
+    } else if (state.player.equippedItem === "uzi") {
+      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
+      if (wantsToFire && state.player.uziFireCooldown <= 1e-6) {
+        state.player.uziFireCooldown = Math.max(
+          0.01,
+          UZI_FIRE_INTERVAL_SECONDS - uziCooldownRemainder
+        );
+        fireUziProjectile(state);
+      }
+    } else if (state.player.equippedItem === "flamethrower") {
+      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
+      if (wantsToFire && state.player.flamethrowerFireCooldown <= 1e-6 && state.player.flamethrowerAmmo > 0) {
+        state.player.flamethrowerFireCooldown = Math.max(
+          0.01,
+          FLAMETHROWER_FIRE_INTERVAL_SECONDS - flameCooldownRemainder
+        );
+        fireFlamethrowerProjectile(state);
+      }
+    } else if (state.player.equippedItem === "bazooka") {
+      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
+      if (wantsToFire && state.player.bazookaFireCooldown <= 1e-6) {
+        state.player.bazookaFireCooldown = BAZOOKA_FIRE_INTERVAL_SECONDS;
+        firePlayerBazookaProjectile(state);
+      }
+    }
+  }
 
   // src/rendering/pixelFont.ts
   function g(top, rows) {
@@ -7222,7 +9952,8 @@
     const isHoldingFlamethrower = equippedItem === "flamethrower";
     const isHoldingKatana = equippedItem === "katana";
     const isReloadingUzi = isHoldingUzi && (style.uziReloadTimer ?? 0) > 0;
-    const reloadProgress = isReloadingUzi ? 1 - Math.max(0, Math.min(1, (style.uziReloadTimer ?? 0) / NPC_UZI_RELOAD_SECONDS)) : 0;
+    const reloadDuration = style.uziReloadDuration ?? NPC_UZI_RELOAD_SECONDS;
+    const reloadProgress = isReloadingUzi ? 1 - Math.max(0, Math.min(1, (style.uziReloadTimer ?? 0) / reloadDuration)) : 0;
     const isDroppingUzi = (style.uziDropTimer ?? 0) > 0 && !isHoldingUzi && !isHoldingFlamethrower;
     const vibeActive = (isHoldingUzi || isHoldingFlamethrower) && (style.weaponVibrationTimer ?? 0) > 0;
     const vibeTime = style.elapsedTime ?? walkPhase;
@@ -7694,6 +10425,19 @@
       translucentMb.addCone(cx, heartY - 2.4, cz, 2.25, 2.6, 10, rgb(248, 48, 82, 0.94), TexId.SOLID, 0.45);
     }
   }
+  function addBodyArmor3D(opaque, translucent, cx, cz, elapsedTime) {
+    const pulse = 0.5 + 0.5 * Math.sin(elapsedTime * 5);
+    translucent.addShadowDisc(cx, 0.03, cz, 6.2 + pulse * 0.5, 6.2 + pulse * 0.5, 0.35);
+    opaque.addTorus(cx, 0.25, cz, 5.4, 0.32, 16, 6, "y", rgb(30, 58, 138), TexId.SOLID, 0.2);
+    const bob = Math.sin(elapsedTime * 3.2) * 0.55;
+    const navyMain = rgb(24, 48, 112);
+    const navyPlate = rgb(38, 72, 152);
+    const strapDark = rgb(26, 30, 38);
+    opaque.addBox(cx - 2.9, 1.4 + bob, cz - 1.5, 5.8, 5.4, 3, navyMain, TexId.FABRIC, 0.6);
+    opaque.addBox(cx - 2.1, 2.2 + bob, cz - 1.8, 4.2, 3.6, 3.6, navyPlate, TexId.SOLID, 0.5);
+    opaque.addBox(cx - 2.6, 6.8 + bob, cz - 1.2, 1.3, 1.5, 2.4, strapDark, TexId.SOLID, 0.4);
+    opaque.addBox(cx + 1.3, 6.8 + bob, cz - 1.2, 1.3, 1.5, 2.4, strapDark, TexId.SOLID, 0.4);
+  }
   function addC4Explosive3D(opaque, translucent, cx, cz, elapsedTime, fastBlink) {
     translucent.addShadowDisc(cx, 0.02, cz, 4.6, 3.8, 0.34);
     const c4Olive = rgb(94, 108, 74);
@@ -8009,6 +10753,8 @@
         punchHand: state.player.punchHand,
         uziEquipTimer: state.player.uziEquipTimer,
         uziDropTimer: state.player.uziDropTimer,
+        uziReloadTimer: state.player.uziReloadTimer,
+        uziReloadDuration: PLAYER_UZI_RELOAD_SECONDS,
         katanaSwingTimer: state.player.katanaSwingTimer,
         weaponVibrationTimer: state.player.weaponVibrationTimer,
         elapsedTime: t
@@ -8283,7 +11029,9 @@
       if (basement.olexaCombat.mode === "hostile" && basement.olexaCombat.hostileAlertTimer > 0 && Math.floor(basement.olexaCombat.hostileAlertTimer * 10) % 2 === 0) {
         addExclamationBadge3D(opaque, olexaX, 0, olexaZ);
       }
-      const isBathroomClosed = basement.doors.some((d) => d.id === "basement-bathroom-door");
+      const isBathroomClosed = basement.doors.some(
+        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
+      );
       if (!isBathroomClosed) {
         const tx = basement.toiletNpc.x + basement.toiletNpc.width * 0.5;
         const tz = basement.toiletNpc.y + basement.toiletNpc.height * 0.5;
@@ -8580,6 +11328,9 @@
           addExclamationBadge3D(opaque, px, py, pz);
         }
       }
+      const isShowerDoorOpen = !upstairs.doors.some(
+        (d) => d.id === "upstairs-shower-door" && d.hiddenRegions.length > 0
+      );
       const isTableRoomDoorOpen = !upstairs.doors.some(
         (d) => d.id === "upstairs-table-room-door" && d.hiddenRegions.length > 0
       );
@@ -8589,6 +11340,10 @@
       const isOfficeDoorOpen = !upstairs.doors.some(
         (d) => d.id === "upstairs-office-door" && d.hiddenRegions.length > 0
       );
+      if (isShowerDoorOpen && !state.player.hasBodyArmor && !state.player.states.get(BODY_ARMOR_TAKEN_KEY)) {
+        const ar = UPSTAIRS_BODY_ARMOR_BOUNDS;
+        addBodyArmor3D(opaque, translucent, ar.x + ar.width * 0.5, ar.y + ar.height * 0.5, t);
+      }
       if (isBedroomDoorOpen && !state.player.states.get(DIANA_PRESENT_TAKEN_KEY)) {
         const pr = UPSTAIRS_DIANA_PRESENT_BOUNDS;
         const gx = pr.x + pr.width * 0.5;
@@ -9656,10 +12411,11 @@
       ctx.strokeRect(bx + 0.5, by + 0.5, barOuterW - 1, barOuterH - 1);
       const innerX = bx + 1;
       const innerY = by + 1;
-      const healthRatio = Math.max(0, Math.min(1, npc.health / MAX_NPC_HEALTH));
+      const npcMaxHp = npc.maxHealth || MAX_NPC_HEALTH;
+      const healthRatio = Math.max(0, Math.min(1, npc.health / npcMaxHp));
       const delayedRatio = Math.max(
         0,
-        Math.min(1, npc.delayedHealth / MAX_NPC_HEALTH)
+        Math.min(1, npc.delayedHealth / npcMaxHp)
       );
       const healthPx = npc.health > 0 ? Math.max(1, Math.round(barInnerW * healthRatio)) : 0;
       const delayedPx = npc.delayedHealth > 0 ? Math.max(1, Math.round(barInnerW * delayedRatio)) : 0;
@@ -9740,20 +12496,19 @@
     ctx.strokeRect(x + 0.5, y + 0.5, outerW - 1, outerH - 1);
     const bx = x + 2;
     const by = y + 2;
-    const healthRatio = Math.max(0, Math.min(1, player.health / MAX_PLAYER_HEALTH));
-    const delayedRatio = Math.max(
-      0,
-      Math.min(1, player.delayedHealth / MAX_PLAYER_HEALTH)
-    );
-    const healthPx = player.health > 0 ? Math.max(1, Math.round(innerW * healthRatio)) : 0;
-    const delayedPx = player.delayedHealth > 0 ? Math.max(1, Math.round(innerW * delayedRatio)) : 0;
+    const baseHealth = Math.max(0, Math.min(MAX_PLAYER_HEALTH, player.health));
+    const baseDelayed = Math.max(0, Math.min(MAX_PLAYER_HEALTH, player.delayedHealth));
+    const healthRatio = baseHealth / MAX_PLAYER_HEALTH;
+    const delayedRatio = baseDelayed / MAX_PLAYER_HEALTH;
+    const healthPx = baseHealth > 0 ? Math.max(1, Math.round(innerW * healthRatio)) : 0;
+    const delayedPx = baseDelayed > 0 ? Math.max(1, Math.round(innerW * delayedRatio)) : 0;
     if (healthPx > 0) {
       ctx.fillStyle = "#ef233c";
       ctx.fillRect(bx, by, healthPx, innerH);
       ctx.fillStyle = "#ff6b6b";
       ctx.fillRect(bx, by, healthPx, 2);
     }
-    if (player.delayedHealth !== player.health) {
+    if (baseDelayed !== baseHealth) {
       const startPx = Math.min(healthPx, delayedPx);
       const endPx = Math.max(healthPx, delayedPx);
       const deltaW = Math.max(1, endPx - startPx);
@@ -9761,6 +12516,38 @@
       ctx.fillRect(bx + startPx, by, deltaW, innerH);
       ctx.fillStyle = "#a41623";
       ctx.fillRect(bx + startPx, by, deltaW, 2);
+    }
+    if (player.hasBodyArmor) {
+      const ay = y + outerH + 3;
+      ctx.fillStyle = "rgba(8, 12, 20, 0.7)";
+      ctx.fillRect(x + 1, ay + 1, outerW, outerH);
+      ctx.fillStyle = "#090e1c";
+      ctx.fillRect(x, ay, outerW, outerH);
+      ctx.strokeStyle = "#e8f0ff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, ay + 0.5, outerW - 1, outerH - 1);
+      const armorHealth = Math.max(0, Math.min(MAX_PLAYER_HEALTH, player.health - MAX_PLAYER_HEALTH));
+      const armorDelayed = Math.max(
+        0,
+        Math.min(MAX_PLAYER_HEALTH, player.delayedHealth - MAX_PLAYER_HEALTH)
+      );
+      const armorPx = armorHealth > 0 ? Math.max(1, Math.round(innerW * (armorHealth / MAX_PLAYER_HEALTH))) : 0;
+      const armorDelayedPx = armorDelayed > 0 ? Math.max(1, Math.round(innerW * (armorDelayed / MAX_PLAYER_HEALTH))) : 0;
+      if (armorPx > 0) {
+        ctx.fillStyle = "#1e3a8a";
+        ctx.fillRect(bx, ay + 2, armorPx, innerH);
+        ctx.fillStyle = "#3b5998";
+        ctx.fillRect(bx, ay + 2, armorPx, 2);
+      }
+      if (armorDelayed !== armorHealth) {
+        const startPx = Math.min(armorPx, armorDelayedPx);
+        const endPx = Math.max(armorPx, armorDelayedPx);
+        const deltaW = Math.max(1, endPx - startPx);
+        ctx.fillStyle = "#0f1d45";
+        ctx.fillRect(bx + startPx, ay + 2, deltaW, innerH);
+        ctx.fillStyle = "#172554";
+        ctx.fillRect(bx + startPx, ay + 2, deltaW, 2);
+      }
     }
     ctx.restore();
   }
@@ -9831,7 +12618,7 @@
     ctx.fillRect(0, 1, 3, 4);
     ctx.restore();
   }
-  function drawEquippedItemHud(ctx, player) {
+  function drawEquippedItemHud(ctx, player, elapsedTime = 0) {
     const boxW = 50;
     const boxH = 34;
     const boxX = ctx.canvas.width - boxW - 8;
@@ -9989,6 +12776,40 @@
       }
       drawPixelText(ctx, slot.key, sx + 3, slotsY + 2, "#ffd166", "#0c101a");
     });
+    const isUziReloading = player.equippedItem === "uzi" && player.uziReloadTimer > 0;
+    const isFlamethrowerEmpty = player.equippedItem === "flamethrower" && Number.isFinite(player.flamethrowerAmmo) && player.flamethrowerAmmo <= 0;
+    if ((isUziReloading || isFlamethrowerEmpty) && Math.floor(elapsedTime * 6) % 2 === 0) {
+      const statusText = isUziReloading ? "RELOADING" : "NO AMMO";
+      const statusColor = isUziReloading ? "#ffd166" : "#f87171";
+      const tw = measurePixelText(statusText);
+      const pillW = tw + 10;
+      const pillH = 14;
+      const pillX = boxX + boxW - pillW;
+      const pillY = slotsY + slotSize + 4;
+      drawSnesFrame(ctx, pillX, pillY, pillW, pillH);
+      drawPixelText(
+        ctx,
+        statusText,
+        pillX + 5,
+        pillY + 4,
+        statusColor,
+        "#0c101a"
+      );
+    }
+    ctx.restore();
+  }
+  function drawDamageFlashOverlay(ctx, state) {
+    if (state.damageFlashTimer <= 0) {
+      return;
+    }
+    const ratio = Math.max(
+      0,
+      Math.min(1, state.damageFlashTimer / DAMAGE_FLASH_DURATION_SECONDS)
+    );
+    const alpha = ratio * 0.45;
+    ctx.save();
+    ctx.fillStyle = `rgba(220, 24, 24, ${alpha.toFixed(4)})`;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
     ctx.restore();
   }
   function drawScreenFadeOverlay(ctx, state) {
@@ -10756,8 +13577,9 @@
       if (!state.worldFadedToBlack) {
         drawNpcBillboards3D(ctx, state, cam, assets);
         drawHealthBar(ctx, player);
-        drawEquippedItemHud(ctx, player);
+        drawEquippedItemHud(ctx, player, state.elapsedTime);
       }
+      drawDamageFlashOverlay(ctx, state);
       drawDialogueOverlay(ctx, state, assets);
       drawScreenFadeOverlay(ctx, state);
       return;
@@ -11044,6 +13866,18 @@
           // bright gold ribbon
         );
       }
+      if (!state.player.hasBodyArmor && !state.player.states.get(BODY_ARMOR_TAKEN_KEY)) {
+        const ax = Math.round(UPSTAIRS_BODY_ARMOR_BOUNDS.x + 1);
+        const ay = Math.round(UPSTAIRS_BODY_ARMOR_BOUNDS.y + 1);
+        ctx.save();
+        ctx.fillStyle = "#090e1c";
+        ctx.fillRect(ax - 1, ay - 1, 12, 12);
+        ctx.fillStyle = "#1e3a8a";
+        ctx.fillRect(ax, ay + 1, 10, 9);
+        ctx.fillStyle = "#3b5998";
+        ctx.fillRect(ax + 2, ay + 3, 6, 5);
+        ctx.restore();
+      }
       if (!state.player.states.get(C4_TAKEN_STATE_KEY)) {
         drawC4Explosive(
           ctx,
@@ -11317,8 +14151,9 @@
     }
     if (!state.worldFadedToBlack) {
       drawHealthBar(ctx, player);
-      drawEquippedItemHud(ctx, player);
+      drawEquippedItemHud(ctx, player, elapsedTime);
     }
+    drawDamageFlashOverlay(ctx, state);
     drawDialogueOverlay(ctx, state, assets);
     drawScreenFadeOverlay(ctx, state);
   }
@@ -12632,2581 +15467,6 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       return viewProj;
     }
   };
-
-  // src/entities/dog.ts
-  var DOG_START_X = 26.5 * TILE_SIZE;
-  var DOG_START_Y = 12.5 * TILE_SIZE;
-  var DOG_MAX_SPEED = 37;
-  var DOG_ACCELERATION = 95;
-  var DOG_DECELERATION = 90;
-  var DOG_AGGRO_DISTANCE = 6.5 * TILE_SIZE;
-  var DOG_DEAGGRO_DISTANCE = 10.5 * TILE_SIZE;
-  function createDog(x = DOG_START_X, y = DOG_START_Y) {
-    return {
-      x,
-      y,
-      width: 12,
-      height: 12,
-      vx: 0,
-      vy: 0,
-      maxSpeed: DOG_MAX_SPEED,
-      acceleration: DOG_ACCELERATION,
-      deceleration: DOG_DECELERATION,
-      mode: "waiting",
-      facing: "left",
-      yaw: Math.PI,
-      animTimer: 0,
-      heartSpawnTimer: 0,
-      hearts: []
-    };
-  }
-  function updateDog(dog, player, dtSeconds, map, solidObstacles = [], speedMultiplier = 1) {
-    const dogCenterX = dog.x + dog.width / 2;
-    const dogCenterY = dog.y + dog.height / 2;
-    const playerCenterX = player.x + player.width / 2;
-    const playerCenterY = player.y + player.height / 2;
-    const dx = playerCenterX - dogCenterX;
-    const dy = playerCenterY - dogCenterY;
-    const dist = Math.hypot(dx, dy);
-    if (dog.mode === "waiting" && dist <= DOG_AGGRO_DISTANCE) {
-      dog.mode = "chasing";
-      dog.heartSpawnTimer = 0;
-    } else if (dog.mode === "chasing" && dist >= DOG_DEAGGRO_DISTANCE) {
-      dog.mode = "waiting";
-    }
-    const effectiveMaxSpeed = dog.maxSpeed * speedMultiplier;
-    if (dog.mode === "chasing") {
-      const ux = dist > 1e-3 ? dx / dist : 0;
-      const uy = dist > 1e-3 ? dy / dist : 0;
-      const targetVx = ux * effectiveMaxSpeed;
-      const targetVy = uy * effectiveMaxSpeed;
-      const dvx = targetVx - dog.vx;
-      const dvy = targetVy - dog.vy;
-      const dvLen = Math.hypot(dvx, dvy);
-      const maxDeltaV = dog.acceleration * dtSeconds;
-      if (dvLen <= maxDeltaV || dvLen === 0) {
-        dog.vx = targetVx;
-        dog.vy = targetVy;
-      } else {
-        dog.vx += dvx / dvLen * maxDeltaV;
-        dog.vy += dvy / dvLen * maxDeltaV;
-      }
-      if (Math.abs(dog.vx) > 2) {
-        dog.facing = dog.vx < 0 ? "left" : "right";
-      } else if (Math.abs(dx) > 0.5) {
-        dog.facing = dx < 0 ? "left" : "right";
-      }
-    } else {
-      const speed = Math.hypot(dog.vx, dog.vy);
-      const maxDrop = dog.deceleration * dtSeconds;
-      if (speed <= maxDrop) {
-        dog.vx = 0;
-        dog.vy = 0;
-      } else {
-        dog.vx -= dog.vx / speed * maxDrop;
-        dog.vy -= dog.vy / speed * maxDrop;
-      }
-    }
-    const collidesAt = (testX, testY) => {
-      if (isRectCollidingWithMap(map, testX, testY, dog.width, dog.height)) {
-        return true;
-      }
-      const testRect = {
-        x: testX,
-        y: testY,
-        width: dog.width,
-        height: dog.height
-      };
-      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
-    };
-    if (dog.vx !== 0 || dog.vy !== 0) {
-      if (Math.hypot(dog.vx, dog.vy) > 0.5) {
-        dog.yaw = Math.atan2(dog.vy, dog.vx);
-      }
-      dog.animTimer += dtSeconds;
-      const nextX = dog.x + dog.vx * dtSeconds;
-      if (!collidesAt(nextX, dog.y)) {
-        dog.x = nextX;
-      } else {
-        dog.vx = 0;
-      }
-      const nextY = dog.y + dog.vy * dtSeconds;
-      if (!collidesAt(dog.x, nextY)) {
-        dog.y = nextY;
-      } else {
-        dog.vy = 0;
-      }
-    }
-    for (let i = dog.hearts.length - 1; i >= 0; i--) {
-      const h = dog.hearts[i];
-      h.age += dtSeconds;
-      h.x += h.vx * dtSeconds;
-      h.y += h.vy * dtSeconds;
-      if (h.age >= h.maxAge) {
-        dog.hearts.splice(i, 1);
-      }
-    }
-    if (dog.mode === "chasing") {
-      dog.heartSpawnTimer -= dtSeconds;
-      while (dog.heartSpawnTimer <= 0) {
-        const phase = dog.hearts.length + Math.floor(dog.animTimer * 10);
-        const offsetX = (phase % 3 - 1) * 4;
-        dog.hearts.push({
-          x: dog.x + dog.width / 2 + offsetX,
-          y: dog.y - 2,
-          vx: offsetX * 2.5,
-          vy: -16,
-          age: 0,
-          maxAge: 0.85
-        });
-        dog.heartSpawnTimer += 0.22;
-      }
-    }
-    return rectsIntersect(dog, player);
-  }
-
-  // src/entities/snowball.ts
-  var SNOWBALL_SPEED = 110;
-  var THROW_INTERVAL_SECONDS = 2.4;
-  var HIT_BLINK_DURATION_SECONDS = 2;
-  function createDrivewayThrowers() {
-    const rowY = 16 * TILE_SIZE + 2;
-    const leftX = 12 * TILE_SIZE + 2;
-    const rightX = 18 * TILE_SIZE + 2;
-    return [
-      {
-        id: "thrower-sylvester",
-        name: "Sylvester",
-        x: leftX,
-        y: rowY,
-        width: 12,
-        height: 12,
-        facing: "right",
-        targetX: rightX,
-        throwInterval: THROW_INTERVAL_SECONDS,
-        // Throw shortly after level starts/resets
-        throwTimer: 0.6
-      },
-      {
-        id: "thrower-annelotte",
-        name: "Annelotte",
-        x: rightX,
-        y: rowY,
-        width: 12,
-        height: 12,
-        facing: "left",
-        targetX: leftX,
-        throwInterval: THROW_INTERVAL_SECONDS,
-        // Staggered so they alternate throwing back and forth across the driveway
-        throwTimer: 1.8
-      }
-    ];
-  }
-  function spawnSnowballFromThrower(thrower) {
-    const dir = thrower.facing === "right" ? 1 : -1;
-    return {
-      x: thrower.facing === "right" ? thrower.x + thrower.width : thrower.x - 6,
-      y: thrower.y + 3,
-      width: 6,
-      height: 6,
-      vx: dir * SNOWBALL_SPEED,
-      vy: 0,
-      targetX: thrower.targetX
-    };
-  }
-  function updateSnowballFight(throwers, snowballs, player, dtSeconds) {
-    for (const thrower of throwers) {
-      thrower.throwTimer -= dtSeconds;
-      if (thrower.throwTimer <= 0) {
-        thrower.throwTimer += thrower.throwInterval;
-        snowballs.push(spawnSnowballFromThrower(thrower));
-      }
-    }
-    for (let i = snowballs.length - 1; i >= 0; i--) {
-      const sb = snowballs[i];
-      sb.x += sb.vx * dtSeconds;
-      sb.y += sb.vy * dtSeconds;
-      if (rectsIntersect(sb, player)) {
-        return true;
-      }
-      if (sb.vx > 0 && sb.x >= sb.targetX || sb.vx < 0 && sb.x + sb.width <= sb.targetX + 12) {
-        snowballs.splice(i, 1);
-      }
-    }
-    return false;
-  }
-
-  // src/world/interaction.ts
-  var INTERACTION_MAX_GAP_PX = 6;
-  function rectEdgeDistance(a, b) {
-    const dx = Math.max(0, b.x - (a.x + a.width), a.x - (b.x + b.width));
-    const dy = Math.max(0, b.y - (a.y + a.height), a.y - (b.y + b.height));
-    return Math.hypot(dx, dy);
-  }
-  function buildInteractables(throwers, options = {}) {
-    const {
-      hasLadder = false,
-      ladderPlaced = false,
-      isOnRoof = false,
-      motorcycleStatus = "parked",
-      alexNpc
-    } = options;
-    if (isOnRoof) {
-      return [
-        {
-          id: "roof-ladder",
-          bounds: { ...ROOF_LADDER_BOUNDS },
-          promptText: "Climb down ladder",
-          dialogueLines: []
-        },
-        {
-          id: "roof-chimney",
-          bounds: { ...ROOF_CHIMNEY_BOUNDS },
-          promptText: "Climb down chimney",
-          dialogueLines: []
-        },
-        {
-          id: "roof-rudolph",
-          bounds: { ...ROOF_RUDOLPH_BOUNDS },
-          promptText: "Inspect Rudolph",
-          dialogueLines: []
-        }
-      ];
-    }
-    const list = throwers.map((t) => {
-      if (t.id === "thrower-sylvester") {
-        return {
-          id: t.id,
-          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-          promptText: "Talk to Sylvester",
-          dialogueLines: ["Watch out! Annelotte is crazy!"],
-          speakerPortrait: "Sylvester"
-        };
-      }
-      if (t.id === "thrower-annelotte") {
-        return {
-          id: t.id,
-          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-          promptText: "Talk to Annelotte",
-          dialogueLines: [
-            "It's good to talk about your feelings... how does a snowball in your face feel?"
-          ],
-          speakerPortrait: "Annelotte"
-        };
-      }
-      return {
-        id: t.id,
-        bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-        promptText: "Talk to",
-        dialogueLines: ["Watch out!"]
-      };
-    });
-    list.push({
-      id: "house-double-door",
-      bounds: {
-        x: 9 * TILE_SIZE + 8,
-        y: HOUSE_DOOR_ROW * TILE_SIZE,
-        width: TILE_SIZE * 2,
-        height: TILE_SIZE
-      },
-      promptText: "Open door",
-      dialogueLines: ["It's locked."]
-    });
-    list.push({
-      id: "house-door",
-      bounds: {
-        x: HOUSE_DOOR_COL * TILE_SIZE,
-        y: HOUSE_DOOR_ROW * TILE_SIZE,
-        width: TILE_SIZE,
-        height: TILE_SIZE
-      },
-      promptText: "Open door",
-      dialogueLines: [
-        "It's locked.",
-        "There has to be another way into the house..."
-      ]
-    });
-    if (motorcycleStatus === "parked") {
-      list.push({
-        id: "motorcycle",
-        bounds: {
-          x: MOTORCYCLE_START_X,
-          y: MOTORCYCLE_START_Y,
-          width: TILE_SIZE * 2,
-          height: TILE_SIZE
-        },
-        promptText: "Drive",
-        dialogueLines: []
-      });
-    }
-    if (!hasLadder && !ladderPlaced) {
-      list.push({
-        id: "ground-ladder",
-        bounds: { ...GROUND_LADDER_BOUNDS },
-        promptText: "Pick up",
-        dialogueLines: []
-      });
-      list.push({
-        id: "house-west-inspect",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Inspect",
-        dialogueLines: [
-          "Hmm.. looks like there is a chimney up there, but I can't reach it"
-        ]
-      });
-    } else if (hasLadder && !ladderPlaced) {
-      list.push({
-        id: "house-west-place-ladder",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Place ladder",
-        dialogueLines: []
-      });
-    } else if (ladderPlaced) {
-      list.push({
-        id: "house-west-climb-ladder",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Climb ladder",
-        dialogueLines: []
-      });
-    }
-    if (alexNpc) {
-      list.push({
-        id: "outside-alex",
-        bounds: { ...alexNpc },
-        promptText: "Talk to Alex",
-        dialogueLines: ["Just practicing my swings..."],
-        speakerPortrait: "Alex"
-      });
-    }
-    return list;
-  }
-  function findNearbyInteractable(player, interactables, maxGapPx = INTERACTION_MAX_GAP_PX) {
-    let closest = null;
-    let bestDist = Infinity;
-    for (const item of interactables) {
-      const dist = rectEdgeDistance(player, item.bounds);
-      if (dist <= maxGapPx && dist < bestDist) {
-        bestDist = dist;
-        closest = item;
-      }
-    }
-    return closest;
-  }
-
-  // src/world/levels/levelOutside.ts
-  function createMotorcycle() {
-    return {
-      x: MOTORCYCLE_START_X,
-      y: MOTORCYCLE_START_Y,
-      width: TILE_SIZE * 2,
-      height: TILE_SIZE,
-      status: "parked"
-    };
-  }
-  var RUDOLPH_INSPECTED_KEY = "rudolphInspected";
-  var OUTSIDE_ALEX_NPC = {
-    x: 4 * TILE_SIZE + 2,
-    y: 19 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "left"
-  };
-  var LevelOutside = class {
-    constructor(map = STARTER_MAP) {
-      __publicField(this, "id", "level-outside");
-      __publicField(this, "map");
-      __publicField(this, "dog");
-      __publicField(this, "motorcycle");
-      __publicField(this, "throwers");
-      __publicField(this, "snowballs");
-      __publicField(this, "alexNpc", { ...OUTSIDE_ALEX_NPC });
-      __publicField(this, "hasLadder", false);
-      __publicField(this, "ladderPlaced", false);
-      __publicField(this, "isOnRoof", false);
-      __publicField(this, "climbing", null);
-      __publicField(this, "electrocutionTimer", 0);
-      this.map = map;
-      this.dog = createDog();
-      this.motorcycle = createMotorcycle();
-      this.throwers = createDrivewayThrowers();
-      this.snowballs = [];
-    }
-    enter(player) {
-      player.x = PLAYER_START_X;
-      player.y = PLAYER_START_Y;
-      player.facing = "up";
-      player.yaw = -Math.PI / 2;
-      player.renderYaw = -Math.PI / 2;
-      player.jumpOffset = 0;
-      player.jumpVelocity = 0;
-      player.isMoving = false;
-      player.walkTimer = 0;
-    }
-    getSolidObstacles() {
-      return [...this.throwers, this.motorcycle, this.alexNpc];
-    }
-    getInteractables() {
-      return buildInteractables(this.throwers, {
-        hasLadder: this.hasLadder,
-        ladderPlaced: this.ladderPlaced,
-        isOnRoof: this.isOnRoof,
-        motorcycleStatus: this.motorcycle.status,
-        alexNpc: this.alexNpc
-      });
-    }
-    handleInteraction(interactableId, player, ctx) {
-      if (interactableId === "motorcycle") {
-        this.motorcycle.status = "driving";
-        player.x = this.motorcycle.x + 8;
-        player.y = this.motorcycle.y - 2;
-        player.facing = "right";
-        player.yaw = 0;
-        player.renderYaw = 0;
-        player.isMoving = true;
-        return true;
-      }
-      if (interactableId === "ground-ladder") {
-        this.hasLadder = true;
-        return true;
-      }
-      if (interactableId === "house-west-place-ladder") {
-        this.hasLadder = false;
-        this.ladderPlaced = true;
-        return true;
-      }
-      if (interactableId === "house-west-climb-ladder") {
-        this.climbing = { direction: "up", progress: 0 };
-        player.x = LADDER_CLIMB_X;
-        player.y = LADDER_BOTTOM_Y;
-        player.facing = "up";
-        player.yaw = -Math.PI / 2;
-        player.renderYaw = -Math.PI / 2;
-        player.jumpOffset = 0;
-        player.jumpVelocity = 0;
-        return true;
-      }
-      if (interactableId === "roof-ladder") {
-        this.climbing = { direction: "down", progress: 0 };
-        player.x = LADDER_CLIMB_X;
-        player.y = LADDER_BOTTOM_Y;
-        player.facing = "down";
-        player.yaw = Math.PI / 2;
-        player.renderYaw = Math.PI / 2;
-        player.jumpOffset = 0;
-        player.jumpVelocity = 0;
-        return true;
-      }
-      if (interactableId === "roof-rudolph") {
-        player.states.set(RUDOLPH_INSPECTED_KEY, true);
-        ctx.openDialogue(
-          [
-            "RUDOLPH?!! WHO DID THIS?",
-            "...",
-            "This is no longer about saving christmas...",
-            "This is about REVENGE!",
-            "I will find out who did this, if it is the last thing I'll ever do."
-          ],
-          () => {
-            ctx.openDialogue(
-              ["ACHIEVEMENT UNLOCKED: Murder-mystery genre unlocked."],
-              () => {
-                ctx.openDialogue(["I'm dreaming of a RED CHRISTMAS."], () => {
-                  ctx.openDialogue(
-                    [
-                      "ACHIEVEMENT UNLOCKED: Action genre unlocked. Viewer discretion is advised."
-                    ],
-                    () => {
-                      if (!player.unlockedUzi) {
-                        player.unlockedUzi = true;
-                        selectPlayerEquipmentSlot(player, 3);
-                      }
-                    },
-                    void 0,
-                    false,
-                    "achievement"
-                  );
-                });
-              },
-              void 0,
-              false,
-              "achievement"
-            );
-          }
-        );
-        return true;
-      }
-      if (interactableId === "roof-chimney") {
-        if (!player.states.get(RUDOLPH_INSPECTED_KEY) && !player.unlockedUzi) {
-          ctx.openDialogue(["You smell the stench of blood..."]);
-          return true;
-        }
-        ctx.loadLevel("level-basement");
-        if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
-          player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
-          ctx.openDialogue([
-            "Okay... I'm inside the house. And I'm Santa. Needless to say NOBODY MUST SEE ME.",
-            "I have to get to the Christmas tree in time for Christmas."
-          ]);
-        }
-        return true;
-      }
-      return false;
-    }
-  };
-
-  // src/world/levels/levelPeople.ts
-  var V3 = 20 /* VoidBlack */;
-  var W3 = 21 /* InteriorWall */;
-  var F3 = 16 /* WoodFloor */;
-  var PEOPLE_NAMES = [
-    "Albin",
-    "Alex",
-    "Anne-Marie",
-    "Annelotte",
-    "Diana",
-    "Hanneloes",
-    "Henrik",
-    "Olexa",
-    "Simon",
-    "Sylvester",
-    "Tanja"
-  ];
-  var PEOPLE_TILES = Array.from(
-    { length: MAP_ROWS },
-    (_, r) => Array.from({ length: MAP_COLS }, (_2, c) => {
-      if (r < 2 || r > 25 || c < 2 || c > 29) {
-        return V3;
-      }
-      if (r === 2 || r === 25 || c === 2 || c === 29) {
-        return W3;
-      }
-      return F3;
-    })
-  );
-  var PEOPLE_MAP = {
-    cols: MAP_COLS,
-    rows: MAP_ROWS,
-    tileSize: TILE_SIZE,
-    tiles: PEOPLE_TILES
-  };
-  var PEOPLE_PLAYER_SPAWN = {
-    x: 15 * TILE_SIZE + 2,
-    y: 23 * TILE_SIZE + 2,
-    facing: "up"
-  };
-  var PERSON_STYLES = {
-    Albin: { hair: "#7a421c", shirt: "#285890" },
-    Alex: { hair: "#3a2016", shirt: "#9c3832" },
-    "Anne-Marie": { hair: "#c88642", shirt: "#428860" },
-    Annelotte: { hair: "#b06830", shirt: "#804070" },
-    Diana: { hair: "#2a1a14", shirt: "#3a6288" },
-    Hanneloes: { hair: "#8a4822", shirt: "#2d7862" },
-    Henrik: { hair: "#6e4624", shirt: "#324a78" },
-    Olexa: { hair: "#342618", shirt: "#52446a" },
-    Simon: { hair: "#583822", shirt: "#647038" },
-    Sylvester: { hair: "#4a2c1e", shirt: "#b05832" },
-    Tanja: { hair: "#743c20", shirt: "#783858" }
-  };
-  var LevelPeople = class {
-    constructor() {
-      __publicField(this, "id", "level-people");
-      __publicField(this, "map", PEOPLE_MAP);
-      __publicField(this, "npcs", []);
-      const positions = [
-        { col: 5, row: 7 },
-        { col: 9, row: 7 },
-        { col: 13, row: 7 },
-        { col: 17, row: 7 },
-        { col: 21, row: 7 },
-        { col: 25, row: 7 },
-        { col: 7, row: 15 },
-        { col: 11, row: 15 },
-        { col: 15, row: 15 },
-        { col: 19, row: 15 },
-        { col: 23, row: 15 }
-      ];
-      PEOPLE_NAMES.forEach((name, idx) => {
-        const pos = positions[idx];
-        const style = PERSON_STYLES[name];
-        this.npcs.push({
-          name,
-          bounds: {
-            x: pos.col * TILE_SIZE + 2,
-            y: pos.row * TILE_SIZE + 2,
-            width: 12,
-            height: 12
-          },
-          facing: "down",
-          hairColor: style.hair,
-          shirtColor: style.shirt
-        });
-      });
-    }
-    enter(player) {
-      player.x = PEOPLE_PLAYER_SPAWN.x;
-      player.y = PEOPLE_PLAYER_SPAWN.y;
-      player.facing = PEOPLE_PLAYER_SPAWN.facing;
-      player.isMoving = false;
-      player.walkTimer = 0;
-    }
-    getSolidObstacles() {
-      return this.npcs.map((npc) => npc.bounds);
-    }
-    getInteractables() {
-      return this.npcs.map((npc) => ({
-        id: `person-${npc.name.toLowerCase()}`,
-        bounds: { ...npc.bounds },
-        promptText: `Talk to ${npc.name}`,
-        dialogueLines: [`${npc.name} says hello.`],
-        speakerPortrait: npc.name
-      }));
-    }
-    handleInteraction(_interactableId, _player, _ctx) {
-      return false;
-    }
-  };
-
-  // src/world/gameState.ts
-  var BULLET_HOLE_DURATION_SECONDS = 10;
-  var BLOOD_POOL_DURATION_SECONDS = 20;
-  var PLAYER_DROPPED_UZI_DURATION_SECONDS = 3;
-  var MEDKIT_HEAL_AMOUNT = 25;
-  var WALL_DESTRUCTION_DURATION_SECONDS = 1;
-  var ROCKET_WALL_BLAST_RADIUS = 1 * TILE_SIZE;
-  function syncOutsideToLevel(state) {
-    const outside = state.levels["level-outside"];
-    outside.dog = state.dog;
-    outside.motorcycle = state.motorcycle;
-    outside.throwers = state.throwers;
-    outside.snowballs = state.snowballs;
-    outside.hasLadder = state.hasLadder;
-    outside.ladderPlaced = state.ladderPlaced;
-    outside.isOnRoof = state.isOnRoof;
-    outside.climbing = state.climbing;
-    outside.electrocutionTimer = state.electrocutionTimer;
-  }
-  function syncLevelToOutside(state) {
-    const outside = state.levels["level-outside"];
-    state.dog = outside.dog;
-    state.motorcycle = outside.motorcycle;
-    state.throwers = outside.throwers;
-    state.snowballs = outside.snowballs;
-    state.hasLadder = outside.hasLadder;
-    state.ladderPlaced = outside.ladderPlaced;
-    state.isOnRoof = outside.isOnRoof;
-    state.climbing = outside.climbing;
-    state.electrocutionTimer = outside.electrocutionTimer;
-  }
-  function getActiveLevel(state) {
-    return state.levels[state.currentLevelId];
-  }
-  function refreshInteractables(state) {
-    if (state.currentLevelId === "level-outside") {
-      syncOutsideToLevel(state);
-    }
-    const activeLevel = getActiveLevel(state);
-    state.interactables = activeLevel.getInteractables(state.player);
-    const isBusyOutside = state.currentLevelId === "level-outside" && (state.climbing !== null || state.motorcycle.status === "driving" || state.electrocutionTimer > 0);
-    const isBusyUpstairs = state.currentLevelId === "level-upstairs" && state.levels["level-upstairs"].rosannaCutscene?.active === true;
-    state.nearbyInteractable = isBusyOutside || isBusyUpstairs ? null : findNearbyInteractable(state.player, state.interactables);
-    if (!state.nearbyInteractable && !isBusyOutside && !isBusyUpstairs && state.player.equippedItem === "uzi" && state.player.unlockedUzi && !state.player.uziDepleted) {
-      for (const floorUzi of state.droppedUzis) {
-        if (!floorUzi.pickupable || floorUzi.levelId !== state.currentLevelId) {
-          continue;
-        }
-        const uziRect = {
-          x: floorUzi.x - 7,
-          y: floorUzi.y - 7,
-          width: 14,
-          height: 14
-        };
-        if (rectsIntersect(state.player, uziRect)) {
-          state.nearbyInteractable = {
-            id: "swap-floor-uzi",
-            bounds: uziRect,
-            promptText: "Swap Uzi",
-            dialogueLines: []
-          };
-          break;
-        }
-      }
-    }
-  }
-  function loadLevel(state, levelId) {
-    if (state.currentLevelId === "level-outside") {
-      state.isOnRoof = false;
-      state.climbing = null;
-      syncOutsideToLevel(state);
-    }
-    state.currentLevelId = levelId;
-    const nextLevel = state.levels[levelId];
-    state.map = nextLevel.map;
-    state.footprints = [];
-    state.projectiles = [];
-    state.nearbyInteractable = null;
-    state.activeDialogue = null;
-    nextLevel.enter(state.player);
-    refreshInteractables(state);
-    debugLog(`Loaded level: ${levelId}`);
-  }
-  function parseLevelQueryParam(searchOrParam) {
-    if (!searchOrParam) {
-      return "level-outside";
-    }
-    let val = searchOrParam.trim();
-    if (val.startsWith("?")) {
-      const params = new URLSearchParams(val);
-      val = params.get("level") ?? "";
-    }
-    const normalized = val.toLowerCase().trim();
-    if (normalized === "basement" || normalized === "level-basement") {
-      return "level-basement";
-    }
-    if (normalized === "upstairs" || normalized === "level-upstairs") {
-      return "level-upstairs";
-    }
-    if (normalized === "people" || normalized === "level-people") {
-      return "level-people";
-    }
-    if (normalized === "outdoors" || normalized === "outside" || normalized === "level-outside") {
-      return "level-outside";
-    }
-    return "level-outside";
-  }
-  function createIntroDialogue(isMobile) {
-    const firstLine = isMobile ? "Use the virtual joystick to move around. To interact with things, move close enough to it and an interaction button will appear. Click anywhere to close this window and start playing." : "Use WASD to move around, the arrow keys to look around, and Space to jump and interact with things. Press Space to close this window and start playing.";
-    return {
-      lines: [firstLine, "Good luck!\nChristmas depends on you..."],
-      currentIndex: 0
-    };
-  }
-  function createGameState(mapOrOptions = STARTER_MAP) {
-    let map = STARTER_MAP;
-    let isMobile = false;
-    let showIntroDialogue = false;
-    let initialLevelId = "level-outside";
-    let levelParamOverride = false;
-    let debugMode = false;
-    let cheatMode = false;
-    let giveUpSorry = false;
-    let secretSantaDB = null;
-    if (mapOrOptions && "cols" in mapOrOptions && "rows" in mapOrOptions) {
-      map = mapOrOptions;
-    } else if (mapOrOptions && typeof mapOrOptions === "object") {
-      const opts = mapOrOptions;
-      if (opts.map) map = opts.map;
-      if (opts.isMobile !== void 0) isMobile = opts.isMobile;
-      if (opts.showIntroDialogue !== void 0) {
-        showIntroDialogue = opts.showIntroDialogue;
-      }
-      if (opts.initialLevelId) {
-        initialLevelId = opts.initialLevelId;
-      }
-      if (opts.levelParamOverride !== void 0) {
-        levelParamOverride = opts.levelParamOverride;
-      }
-      if (opts.debug !== void 0) {
-        debugMode = opts.debug;
-      }
-      if (opts.cheat !== void 0) {
-        cheatMode = opts.cheat;
-      }
-      if (opts.giveUpSorry !== void 0) {
-        giveUpSorry = opts.giveUpSorry;
-      }
-      if (opts.secretSantaDB !== void 0) {
-        secretSantaDB = opts.secretSantaDB;
-      }
-    }
-    ConeOfSight.cheatMode = cheatMode;
-    const player = createPlayer(PLAYER_START_X, PLAYER_START_Y);
-    const levelOutside = new LevelOutside(map);
-    if (cheatMode) {
-      levelOutside.ladderPlaced = true;
-    }
-    const levelBasement = new LevelBasement();
-    const levelUpstairs = new LevelUpstairs();
-    const levelPeople = new LevelPeople();
-    const levels = {
-      "level-outside": levelOutside,
-      "level-basement": levelBasement,
-      "level-upstairs": levelUpstairs,
-      "level-people": levelPeople
-    };
-    const activeLevel = levels[initialLevelId];
-    activeLevel.enter(player);
-    if (levelParamOverride) {
-      player.unlockedUzi = true;
-      player.uziAmmo = MAX_UZI_AMMO;
-      player.uziDepleted = false;
-      player.uziDropTimer = 0;
-      player.equippedItem = "uzi";
-    }
-    let activeDialogue = null;
-    let worldFadedToBlack = false;
-    if (giveUpSorry) {
-      worldFadedToBlack = true;
-      const playerName = secretSantaDB?.playerName;
-      const receiver = playerName && secretSantaDB ? secretSantaDB.getGiftReceiverOf(playerName) : void 0;
-      const finalLine = receiver ?? "Ehm... this is awkward. An error occurred, gift receiver unknown.";
-      activeDialogue = {
-        lines: [
-          "Give up huh? Don't feel bad... Your secret santa gift receiver is...",
-          finalLine
-        ],
-        currentIndex: 0,
-        unclosable: true
-      };
-    } else if (showIntroDialogue) {
-      activeDialogue = createIntroDialogue(isMobile);
-    }
-    const state = {
-      currentLevelId: initialLevelId,
-      levels,
-      map: activeLevel.map,
-      player,
-      footprints: [],
-      dog: levelOutside.dog,
-      motorcycle: levelOutside.motorcycle,
-      throwers: levelOutside.throwers,
-      snowballs: levelOutside.snowballs,
-      projectiles: [],
-      bulletHoles: [],
-      bloodParticles: [],
-      bloodPools: [],
-      droppedUzis: [],
-      droppedFlamethrowers: [],
-      droppedKatanas: [],
-      droppedBazookas: [],
-      medkits: [
-        {
-          id: "basement-spa-medkit",
-          levelId: "level-basement",
-          x: BASEMENT_SPA_MEDKIT_POS.x,
-          y: BASEMENT_SPA_MEDKIT_POS.y,
-          z: 0
-        }
-      ],
-      explosions: [],
-      destroyingWalls: [],
-      destroyingDoors: [],
-      blackenedWalls: /* @__PURE__ */ new Set(),
-      mapVersion: 0,
-      burningNpcs: /* @__PURE__ */ new Set(),
-      hasLadder: levelOutside.hasLadder,
-      ladderPlaced: levelOutside.ladderPlaced,
-      isOnRoof: levelOutside.isOnRoof,
-      climbing: levelOutside.climbing,
-      electrocutionTimer: levelOutside.electrocutionTimer,
-      joystickActive: false,
-      interactables: activeLevel.getInteractables(player),
-      nearbyInteractable: null,
-      activeDialogue,
-      gameOver: false,
-      elapsedTime: 0,
-      debugMode,
-      cheatMode,
-      worldFadedToBlack,
-      houseExploding: false,
-      houseExplosionTimer: 0,
-      houseExplosionSpawnAccum: 0,
-      screenFade: null,
-      secretSantaDB
-    };
-    debugLog(`Loaded level: ${initialLevelId}`);
-    return state;
-  }
-  function restartEntireGame(state) {
-    const prevJoystick = state.joystickActive;
-    const fresh = createGameState({
-      initialLevelId: "level-outside",
-      debug: state.debugMode,
-      cheat: state.cheatMode,
-      secretSantaDB: state.secretSantaDB
-    });
-    Object.assign(state, fresh);
-    state.joystickActive = prevJoystick;
-  }
-  function damagePlayer(state, amount) {
-    applyPlayerDamage(state.player, amount);
-    if (state.player.health <= 0 && !state.cheatMode) {
-      state.gameOver = true;
-      state.nearbyInteractable = null;
-      state.activeDialogue = {
-        lines: ["Try again?"],
-        currentIndex: 0,
-        variant: "gameover",
-        onClose: () => {
-          restartEntireGame(state);
-        }
-      };
-    }
-  }
-  function resetAfterSnowballHit(state) {
-    state.player.x = PLAYER_START_X;
-    state.player.y = PLAYER_START_Y;
-    state.player.facing = "up";
-    state.player.yaw = -Math.PI / 2;
-    state.player.renderYaw = -Math.PI / 2;
-    state.player.jumpOffset = 0;
-    state.player.jumpVelocity = 0;
-    state.player.isMoving = false;
-    state.player.walkTimer = 0;
-    state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
-    state.player.footprintSpawnTimer = 0;
-    state.player.nextFootprintFoot = "left";
-    const wasLadderPlaced = state.ladderPlaced;
-    state.footprints = [];
-    state.dog = createDog();
-    state.motorcycle = createMotorcycle();
-    state.throwers = createDrivewayThrowers();
-    state.snowballs = [];
-    state.projectiles = [];
-    state.hasLadder = false;
-    state.ladderPlaced = wasLadderPlaced;
-    state.isOnRoof = false;
-    state.climbing = null;
-    state.electrocutionTimer = 0;
-    state.activeDialogue = null;
-    syncOutsideToLevel(state);
-    refreshInteractables(state);
-    damagePlayer(state, 30);
-  }
-  function isMainHouseTile(col, row) {
-    return col >= 4 && col <= 16 && row >= 3 && row <= 9;
-  }
-  function updateRoofMovement(state, input, dtSeconds) {
-    const player = state.player;
-    const prevCenterX = player.x + player.width * 0.5;
-    const prevCenterZ = player.y + player.height * 0.5;
-    const prevRoofElevation = getMainHouseRoofElevation(prevCenterX, prevCenterZ);
-    const chimneyCore = {
-      x: ROOF_CHIMNEY_BOUNDS.x + 3,
-      y: ROOF_CHIMNEY_BOUNDS.y + 3,
-      width: Math.max(4, ROOF_CHIMNEY_BOUNDS.width - 6),
-      height: Math.max(4, ROOF_CHIMNEY_BOUNDS.height - 6)
-    };
-    updatePlayer(
-      player,
-      input,
-      dtSeconds,
-      state.map,
-      [chimneyCore],
-      isMainHouseTile
-    );
-    const cx = player.x + player.width * 0.5;
-    const cz = player.y + player.height * 0.5;
-    const minX = MAIN_HOUSE_ROOF_BOUNDS.x;
-    const maxX = MAIN_HOUSE_ROOF_BOUNDS.x + MAIN_HOUSE_ROOF_BOUNDS.width;
-    const minZ = MAIN_HOUSE_ROOF_BOUNDS.y;
-    const maxZ = MAIN_HOUSE_ROOF_BOUNDS.y + MAIN_HOUSE_ROOF_BOUNDS.height;
-    if (cx < minX || cx > maxX || cz < minZ || cz > maxZ) {
-      state.isOnRoof = false;
-      if (cx < minX) {
-        player.x = minX - player.width - 1;
-      } else if (cx > maxX) {
-        player.x = maxX + 1;
-      }
-      if (cz < minZ) {
-        player.y = minZ - player.height - 1;
-      } else if (cz > maxZ) {
-        player.y = maxZ + 1;
-      }
-      const landingGroundY = getTerrainHeight(
-        player.x + player.width * 0.5,
-        player.y + player.height * 0.5,
-        "level-outside"
-      );
-      player.jumpOffset = Math.max(1e-3, prevRoofElevation - landingGroundY);
-      player.jumpVelocity = 0;
-    }
-  }
-  function updateOutsideLevel(state, input, dtSeconds) {
-    if (state.electrocutionTimer > 0) {
-      state.player.isMoving = false;
-      state.player.walkTimer = 0;
-      state.electrocutionTimer = Math.max(
-        0,
-        state.electrocutionTimer - dtSeconds
-      );
-      if (state.electrocutionTimer <= 0) {
-        resetAfterSnowballHit(state);
-      }
-      return true;
-    }
-    if (state.motorcycle.status === "driving") {
-      state.motorcycle.x = Math.min(
-        MOTORCYCLE_CRASH_X,
-        state.motorcycle.x + MOTORCYCLE_SPEED * dtSeconds
-      );
-      state.player.x = state.motorcycle.x + 8;
-      state.player.y = state.motorcycle.y - 2;
-      state.player.facing = "right";
-      state.player.yaw = 0;
-      state.player.renderYaw = 0;
-      state.player.isMoving = true;
-      state.player.walkTimer += dtSeconds;
-      if (state.motorcycle.x >= MOTORCYCLE_CRASH_X) {
-        state.motorcycle.x = MOTORCYCLE_CRASH_X;
-        state.motorcycle.status = "crashed";
-        state.player.x = MOTORCYCLE_CRASH_X - state.player.width - 4;
-        state.player.y = MOTORCYCLE_START_Y + 2;
-        state.player.isMoving = false;
-        state.player.walkTimer = 0;
-        state.player.blinkTimer = HIT_BLINK_DURATION_SECONDS;
-        damagePlayer(state, 10);
-      }
-      refreshInteractables(state);
-      return true;
-    }
-    if (state.climbing) {
-      state.climbing.progress = Math.min(
-        1,
-        state.climbing.progress + dtSeconds / CLIMB_DURATION_SECONDS
-      );
-      state.player.x = LADDER_CLIMB_X;
-      state.player.isMoving = true;
-      state.player.walkTimer += dtSeconds;
-      if (state.climbing.direction === "up") {
-        state.player.facing = "up";
-        state.player.yaw = -Math.PI / 2;
-        state.player.renderYaw = -Math.PI / 2;
-        state.player.y = LADDER_BOTTOM_Y;
-        if (state.climbing.progress >= 1) {
-          state.player.y = ROOF_WALK_Y;
-          state.player.isMoving = false;
-          state.isOnRoof = true;
-          state.climbing = null;
-        }
-      } else {
-        state.player.facing = "down";
-        state.player.yaw = Math.PI / 2;
-        state.player.renderYaw = Math.PI / 2;
-        state.player.y = LADDER_BOTTOM_Y;
-        if (state.climbing.progress >= 1) {
-          state.player.y = LADDER_BOTTOM_Y;
-          state.player.isMoving = false;
-          state.isOnRoof = false;
-          state.climbing = null;
-        }
-      }
-      refreshInteractables(state);
-      return true;
-    }
-    if (state.isOnRoof) {
-      updateRoofMovement(state, input, dtSeconds);
-      for (let i = state.footprints.length - 1; i >= 0; i--) {
-        state.footprints[i].age += dtSeconds;
-        if (state.footprints[i].age >= state.footprints[i].maxAge) {
-          state.footprints.splice(i, 1);
-        }
-      }
-      syncOutsideToLevel(state);
-      return false;
-    }
-    const solidObstacles = [...state.throwers, state.motorcycle];
-    updatePlayer(state.player, input, dtSeconds, state.map, solidObstacles);
-    updateFootprints(state.footprints, state.player, state.map, dtSeconds);
-    if (rectsIntersect(state.player, DAMAGED_WIRE_HAZARD)) {
-      state.electrocutionTimer = ELECTROCUTION_DURATION_SECONDS;
-      state.player.isMoving = false;
-      state.player.walkTimer = 0;
-      state.nearbyInteractable = null;
-      state.activeDialogue = null;
-      return true;
-    }
-    const caughtByDog = updateDog(
-      state.dog,
-      state.player,
-      dtSeconds,
-      state.map,
-      solidObstacles
-    );
-    if (caughtByDog) {
-      resetAfterSnowballHit(state);
-      return true;
-    }
-    const hitBySnowball = updateSnowballFight(
-      state.throwers,
-      state.snowballs,
-      state.player,
-      dtSeconds
-    );
-    if (hitBySnowball) {
-      resetAfterSnowballHit(state);
-      return true;
-    }
-    return false;
-  }
-  function getLevelNpcTargets(state) {
-    const targets = [];
-    const addTarget = (key, rect) => {
-      const cx = rect.x + rect.width * 0.5;
-      const cy = rect.y + rect.height * 0.5;
-      targets.push({
-        key,
-        rect,
-        groundZ: getTerrainHeight(cx, cy, state.currentLevelId)
-      });
-    };
-    if (state.currentLevelId === "level-outside") {
-      if (state.throwers[0]) addTarget("outside:Sylvester", state.throwers[0]);
-      if (state.throwers[1]) addTarget("outside:Annelotte", state.throwers[1]);
-      addTarget("outside:Alex", state.levels["level-outside"].alexNpc);
-    } else if (state.currentLevelId === "level-basement") {
-      const basement = state.levels["level-basement"];
-      if (basement.arjanCombat.mode !== "dead") {
-        addTarget("basement:Arjan", basement.windowNpc);
-      }
-      if (basement.olexaCombat.mode !== "dead") {
-        addTarget("basement:Olexa", basement.olexaNpc);
-      }
-      if (basement.hanneloesCombat.mode !== "dead") {
-        addTarget("basement:Hanneloes", basement.toiletNpc);
-      }
-    } else if (state.currentLevelId === "level-upstairs") {
-      const upstairs = state.levels["level-upstairs"];
-      if (upstairs.albinCombat.mode !== "dead") {
-        addTarget("upstairs:Albin", {
-          x: upstairs.albinX,
-          y: upstairs.albinY,
-          width: 12,
-          height: 12
-        });
-      }
-      if (upstairs.henrikCombat.mode !== "dead") addTarget("upstairs:Henrik", upstairs.henrikNpc);
-      if (upstairs.tanjaCombat.mode !== "dead") addTarget("upstairs:Tanja", upstairs.tanjaNpc);
-      if (upstairs.dianaCombat.mode !== "dead") addTarget("upstairs:Diana", upstairs.dianaNpc);
-      if (upstairs.simonCombat.mode !== "dead") addTarget("upstairs:Simon", upstairs.simonNpc);
-      if (upstairs.anneMarieCombat.mode !== "dead") {
-        addTarget("upstairs:Anne-Marie", upstairs.anneMarieNpc);
-      }
-      if (upstairs.rosannaSpawned && upstairs.rosannaCombat.mode !== "dead") {
-        addTarget("upstairs:Rosanna", upstairs.rosannaNpc);
-      }
-    } else if (state.currentLevelId === "level-people") {
-      for (const npc of state.levels["level-people"].npcs) {
-        addTarget(`people:${npc.name}`, npc.bounds);
-      }
-    }
-    return targets;
-  }
-  function spawnNpcBlood(state, x, y, groundZ) {
-    const count = 8;
-    for (let i = 0; i < count; i++) {
-      const angle = i / count * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
-      const speed = 16 + Math.random() * 24;
-      state.bloodParticles.push({
-        levelId: state.currentLevelId,
-        x,
-        y,
-        z: groundZ + 7 + Math.random() * 3,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        vz: -4 + Math.random() * 20,
-        groundZ,
-        age: 0,
-        spawnsPool: i < 3
-      });
-    }
-  }
-  function getArmedNpcByKey(state, key) {
-    if (state.currentLevelId === "level-basement") {
-      return state.levels["level-basement"].getArmedNpcByKey(key);
-    }
-    if (state.currentLevelId === "level-upstairs") {
-      return state.levels["level-upstairs"].getArmedNpcByKey(key);
-    }
-    return void 0;
-  }
-  function damageArmedNpc(state, key, damage, hitX, hitY, groundZ) {
-    const npc = getArmedNpcByKey(state, key);
-    if (!npc) return;
-    const wasPassive = npc.mode === "passive";
-    const died = applyNpcDamage(npc, damage);
-    if (wasPassive && npc.mode === "hostile") {
-      if (state.currentLevelId === "level-basement") {
-        propagateHostileAlert(state.levels["level-basement"].getArmedNpcs(), key);
-      } else if (state.currentLevelId === "level-upstairs") {
-        propagateHostileAlert(state.levels["level-upstairs"].getArmedNpcs(), key);
-      }
-    }
-    if (died) {
-      state.burningNpcs.delete(key);
-      spawnNpcBlood(state, hitX, hitY, groundZ);
-      state.bloodPools.push({
-        levelId: state.currentLevelId,
-        x: hitX,
-        y: hitY,
-        z: groundZ,
-        age: 0,
-        maxAge: 999999
-      });
-      const rightAngle = npc.aimYaw + Math.PI / 2;
-      if (npc.weapon === "katana") {
-        state.droppedKatanas.push({
-          levelId: state.currentLevelId,
-          x: hitX + Math.cos(rightAngle) * 5.2,
-          y: hitY + Math.sin(rightAngle) * 5.2,
-          z: groundZ,
-          yaw: npc.aimYaw + 0.4
-        });
-      } else if (npc.weapon === "flamethrower") {
-        state.droppedFlamethrowers.push({
-          levelId: state.currentLevelId,
-          x: hitX + Math.cos(rightAngle) * 5.2,
-          y: hitY + Math.sin(rightAngle) * 5.2,
-          z: groundZ,
-          yaw: npc.aimYaw + 0.4,
-          ammo: DROPPED_FLAMETHROWER_AMMO
-        });
-      } else if (npc.weapon === "bazooka") {
-        state.droppedBazookas.push({
-          levelId: state.currentLevelId,
-          x: hitX + Math.cos(rightAngle) * 5.2,
-          y: hitY + Math.sin(rightAngle) * 5.2,
-          z: groundZ,
-          yaw: npc.aimYaw + 0.4
-        });
-      } else if (npc.weapon === "uzi") {
-        state.droppedUzis.push({
-          levelId: state.currentLevelId,
-          x: hitX + Math.cos(rightAngle) * 5.2,
-          y: hitY + Math.sin(rightAngle) * 5.2,
-          z: groundZ,
-          yaw: npc.aimYaw + 0.4,
-          pickupable: true,
-          ammo: MAX_UZI_AMMO
-        });
-      }
-      if (key === "basement:Olexa") {
-        state.medkits.push({
-          id: "olexa-drop-medkit",
-          levelId: state.currentLevelId,
-          x: hitX - Math.cos(rightAngle) * 5.5,
-          y: hitY - Math.sin(rightAngle) * 5.5,
-          z: groundZ
-        });
-      }
-    }
-  }
-  function fireNpcUziProjectile(state, npc, originX, originY, aimYaw) {
-    const rightAngle = aimYaw + Math.PI / 2;
-    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
-    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180);
-    const shotYaw = aimYaw + yawSpread;
-    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180);
-    const spawnX = originX + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
-    const spawnY = originY + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
-    const spawnZ = groundZ + 10;
-    state.projectiles.push({
-      kind: "bullet",
-      owner: "npc",
-      sourceNpcKey: npc.key,
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      vx: Math.cos(shotYaw) * UZI_PROJECTILE_SPEED,
-      vy: Math.sin(shotYaw) * UZI_PROJECTILE_SPEED,
-      vz: UZI_PROJECTILE_SPEED * Math.tan(pitchSpread),
-      yaw: shotYaw,
-      distanceTraveled: 0,
-      fromRoof: false
-    });
-  }
-  function fireNpcFlamethrowerProjectile(state, npc, originX, originY, aimYaw) {
-    const rightAngle = aimYaw + Math.PI / 2;
-    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
-    const spawnX = originX + Math.cos(aimYaw) * 8.5 + Math.cos(rightAngle) * 3.5;
-    const spawnY = originY + Math.sin(aimYaw) * 8.5 + Math.sin(rightAngle) * 3.5;
-    const spawnZ = groundZ + 9.5;
-    state.projectiles.push({
-      kind: "fireball",
-      owner: "npc",
-      sourceNpcKey: npc.key,
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      vx: Math.cos(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
-      vy: Math.sin(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
-      vz: 0,
-      yaw: aimYaw,
-      distanceTraveled: 0,
-      maxDistance: FLAMETHROWER_MAX_DISTANCE,
-      fromRoof: false
-    });
-  }
-  function fireNpcBazookaProjectile(state, originX, originY, aimYaw, sourceNpcKey, cutsceneShot = false) {
-    const rightAngle = aimYaw + Math.PI / 2;
-    const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
-    const spawnX = originX + Math.cos(aimYaw) * 9 + Math.cos(rightAngle) * 3;
-    const spawnY = originY + Math.sin(aimYaw) * 9 + Math.sin(rightAngle) * 3;
-    const spawnZ = groundZ + 11.5;
-    state.projectiles.push({
-      kind: "rocket",
-      owner: "npc",
-      sourceNpcKey,
-      cutsceneShot,
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      vx: Math.cos(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
-      vy: Math.sin(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
-      vz: 0,
-      yaw: aimYaw,
-      distanceTraveled: 0,
-      maxDistance: 320,
-      fromRoof: false
-    });
-  }
-  function isOuterBorderWallTile(levelId, map, col, row) {
-    if (levelId === "level-basement" && row === 7 && col >= 6 && col <= 12) {
-      return true;
-    }
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (dr === 0 && dc === 0) continue;
-        const nr = row + dr;
-        const nc = col + dc;
-        if (nr < 0 || nc < 0 || nr >= map.rows || nc >= map.cols) {
-          return true;
-        }
-        if (map.tiles[nr][nc] === 20 /* VoidBlack */) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-  function getDestroyedWallReplacementTile(map, col, row) {
-    const floorCandidates = [
-      18 /* BathroomTileFloor */,
-      17 /* StoneTileFloor */,
-      16 /* WoodFloor */,
-      19 /* StairsFloor */
-    ];
-    for (const [dc, dr] of [
-      [0, 1],
-      [0, -1],
-      [-1, 0],
-      [1, 0]
-    ]) {
-      const t = map.tiles[row + dr]?.[col + dc];
-      if (t !== void 0 && floorCandidates.includes(t)) {
-        return t;
-      }
-    }
-    return 16 /* WoodFloor */;
-  }
-  function distancePointToRect(x, y, r) {
-    const dx = Math.max(r.x - x, 0, x - (r.x + r.width));
-    const dy = Math.max(r.y - y, 0, y - (r.y + r.height));
-    return Math.hypot(dx, dy);
-  }
-  function applyRocketExplosionToWallsAndDoors(state, x, y) {
-    const levelId = state.currentLevelId;
-    if (levelId !== "level-basement" && levelId !== "level-upstairs") {
-      return;
-    }
-    const map = state.map;
-    const ts = map.tileSize;
-    const minCol = Math.max(0, Math.floor((x - ROCKET_WALL_BLAST_RADIUS) / ts));
-    const maxCol = Math.min(
-      map.cols - 1,
-      Math.floor((x + ROCKET_WALL_BLAST_RADIUS) / ts)
-    );
-    const minRow = Math.max(0, Math.floor((y - ROCKET_WALL_BLAST_RADIUS) / ts));
-    const maxRow = Math.min(
-      map.rows - 1,
-      Math.floor((y + ROCKET_WALL_BLAST_RADIUS) / ts)
-    );
-    let changed = false;
-    const activeLevel = getActiveLevel(state);
-    const levelDoors = levelId === "level-basement" ? state.levels["level-basement"].doors : state.levels["level-upstairs"].doors;
-    const revealRoomsTouchingRect = (rect) => {
-      const expanded = {
-        x: rect.x - ts - 2,
-        y: rect.y - ts - 2,
-        width: rect.width + ts * 2 + 4,
-        height: rect.height + ts * 2 + 4
-      };
-      for (const d of levelDoors) {
-        if (d.hiddenRegions.some((hr) => rectsIntersect(expanded, hr))) {
-          d.hiddenRegions = [];
-          changed = true;
-        }
-      }
-      if (levelId === "level-basement" && !state.levels["level-basement"].spaFogCleared && rectsIntersect(expanded, BASEMENT_SPA_HIDDEN_MASK)) {
-        state.levels["level-basement"].spaFogCleared = true;
-        changed = true;
-      }
-    };
-    for (let row = minRow; row <= maxRow; row++) {
-      for (let col = minCol; col <= maxCol; col++) {
-        if (map.tiles[row]?.[col] !== 21 /* InteriorWall */) continue;
-        const tileRect = {
-          x: col * ts,
-          y: row * ts,
-          width: ts,
-          height: ts
-        };
-        if (distancePointToRect(x, y, tileRect) > ROCKET_WALL_BLAST_RADIUS) {
-          continue;
-        }
-        if (isOuterBorderWallTile(levelId, map, col, row)) {
-          const key = `${levelId}:${col},${row}`;
-          if (!state.blackenedWalls.has(key)) {
-            state.blackenedWalls.add(key);
-            changed = true;
-          }
-        } else {
-          const alreadyDestroying = state.destroyingWalls.some(
-            (w) => w.levelId === levelId && w.col === col && w.row === row
-          );
-          if (!alreadyDestroying) {
-            state.destroyingWalls.push({
-              levelId,
-              col,
-              row,
-              elapsed: 0,
-              duration: WALL_DESTRUCTION_DURATION_SECONDS,
-              replacementTile: getDestroyedWallReplacementTile(map, col, row)
-            });
-            changed = true;
-          }
-          revealRoomsTouchingRect(tileRect);
-        }
-      }
-    }
-    for (const door of levelDoors) {
-      if (distancePointToRect(x, y, door.bounds) <= ROCKET_WALL_BLAST_RADIUS) {
-        if (!state.destroyingDoors.some(
-          (d) => d.levelId === levelId && d.doorId === door.id
-        )) {
-          state.destroyingDoors.push({
-            levelId,
-            doorId: door.id,
-            bounds: { ...door.bounds },
-            elapsed: 0,
-            duration: WALL_DESTRUCTION_DURATION_SECONDS
-          });
-          door.hiddenRegions = [];
-          changed = true;
-        }
-      }
-    }
-    if (levelId === "level-basement") {
-      const basement = state.levels["level-basement"];
-      if (basement.spaDoorClosed && distancePointToRect(x, y, BASEMENT_HALL_NORTH_DOOR_BOUNDS) <= ROCKET_WALL_BLAST_RADIUS && !state.destroyingDoors.some(
-        (d) => d.levelId === "level-basement" && d.doorId === "basement-hall-north-door"
-      )) {
-        state.destroyingDoors.push({
-          levelId: "level-basement",
-          doorId: "basement-hall-north-door",
-          bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
-          elapsed: 0,
-          duration: WALL_DESTRUCTION_DURATION_SECONDS
-        });
-        basement.spaFogCleared = true;
-        changed = true;
-      }
-      if (distancePointToRect(x, y, BASEMENT_FRONT_DOOR_BOUNDS) <= ROCKET_WALL_BLAST_RADIUS) {
-        for (const fc of [15, 16]) {
-          const key = `level-basement:${fc},20`;
-          if (!state.blackenedWalls.has(key)) {
-            state.blackenedWalls.add(key);
-            changed = true;
-          }
-        }
-      }
-    }
-    if (changed) {
-      state.mapVersion += 1;
-    }
-  }
-  function damageUpstairsCat(state, rawDamage) {
-    if (state.currentLevelId !== "level-upstairs") return;
-    const cat = state.levels["level-upstairs"].cat;
-    if (!applyCatDamage(cat, rawDamage)) return;
-    const ccx = cat.x + cat.width * 0.5;
-    const ccy = cat.y + cat.height * 0.5;
-    const groundZ = getTerrainHeight(ccx, ccy, state.currentLevelId);
-    spawnNpcBlood(state, ccx, ccy, groundZ + cat.jumpZ);
-  }
-  var UPSTAIRS_HOUSE_EXPLOSION_SPOTS = [
-    [3, 15],
-    [6, 13],
-    [4, 7],
-    [11, 7],
-    [14, 11],
-    [18, 7],
-    [24, 7],
-    [22, 15],
-    [26, 15],
-    [11, 18]
-  ];
-  function spawnHouseExplosionWave(state, jitter) {
-    const ts = state.map.tileSize;
-    for (const [col, row] of UPSTAIRS_HOUSE_EXPLOSION_SPOTS) {
-      const jx = jitter ? (Math.random() - 0.5) * ts * 1.4 : 0;
-      const jy = jitter ? (Math.random() - 0.5) * ts * 1.4 : 0;
-      const jz = jitter ? Math.random() * 10 : 0;
-      state.explosions.push({
-        levelId: "level-upstairs",
-        x: (col + 0.5) * ts + jx,
-        y: (row + 0.5) * ts + jy,
-        z: jz,
-        timer: 0.65,
-        maxTimer: 0.65
-      });
-    }
-  }
-  function triggerUpstairsHouseExplosion(state) {
-    state.houseExploding = true;
-    state.houseExplosionTimer = 2;
-    state.houseExplosionSpawnAccum = 0;
-    spawnHouseExplosionWave(state, false);
-    const upstairs = state.levels["level-upstairs"];
-    const map = upstairs.map;
-    let changed = false;
-    for (let row = 0; row < map.rows; row++) {
-      for (let col = 0; col < map.cols; col++) {
-        if (map.tiles[row]?.[col] !== 21 /* InteriorWall */) continue;
-        if (isOuterBorderWallTile("level-upstairs", map, col, row)) {
-          const key = `level-upstairs:${col},${row}`;
-          if (!state.blackenedWalls.has(key)) {
-            state.blackenedWalls.add(key);
-            changed = true;
-          }
-        } else {
-          const alreadyDestroying = state.destroyingWalls.some(
-            (w) => w.levelId === "level-upstairs" && w.col === col && w.row === row
-          );
-          if (!alreadyDestroying) {
-            state.destroyingWalls.push({
-              levelId: "level-upstairs",
-              col,
-              row,
-              elapsed: 0,
-              duration: WALL_DESTRUCTION_DURATION_SECONDS,
-              replacementTile: getDestroyedWallReplacementTile(map, col, row)
-            });
-            changed = true;
-          }
-        }
-      }
-    }
-    for (const door of upstairs.doors) {
-      door.hiddenRegions = [];
-      if (!state.destroyingDoors.some(
-        (d) => d.levelId === "level-upstairs" && d.doorId === door.id
-      )) {
-        state.destroyingDoors.push({
-          levelId: "level-upstairs",
-          doorId: door.id,
-          bounds: { ...door.bounds },
-          elapsed: 0,
-          duration: WALL_DESTRUCTION_DURATION_SECONDS
-        });
-        changed = true;
-      }
-    }
-    if (changed) {
-      state.mapVersion += 1;
-    }
-  }
-  function detonateRocket(state, x, y, cutsceneShot = false, sourceNpcKey, owner = "npc") {
-    const groundZ = getTerrainHeight(x, y, state.currentLevelId);
-    state.explosions.push({
-      levelId: state.currentLevelId,
-      x,
-      y,
-      z: groundZ,
-      timer: 0.65,
-      maxTimer: 0.65
-    });
-    applyRocketExplosionToWallsAndDoors(state, x, y);
-    if (!cutsceneShot) {
-      if (owner === "npc") {
-        const playerCx = state.player.x + state.player.width * 0.5;
-        const playerCy = state.player.y + state.player.height * 0.5;
-        if (Math.hypot(playerCx - x, playerCy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
-          damagePlayer(state, BASEMENT_MINE_EXPLOSION_DAMAGE);
-        }
-      }
-      if (owner === "player" && state.currentLevelId === "level-upstairs") {
-        const cat = state.levels["level-upstairs"].cat;
-        if (cat.mode !== "dead") {
-          const ccx = cat.x + cat.width * 0.5;
-          const ccy = cat.y + cat.height * 0.5;
-          if (Math.hypot(ccx - x, ccy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
-            damageUpstairsCat(state, BASEMENT_MINE_EXPLOSION_DAMAGE);
-          }
-        }
-      }
-      for (const target of getLevelNpcTargets(state)) {
-        if (target.key === sourceNpcKey) continue;
-        const ncx = target.rect.x + target.rect.width * 0.5;
-        const ncy = target.rect.y + target.rect.height * 0.5;
-        if (Math.hypot(ncx - x, ncy - y) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
-          damageArmedNpc(
-            state,
-            target.key,
-            BASEMENT_MINE_EXPLOSION_DAMAGE,
-            ncx,
-            ncy,
-            target.groundZ
-          );
-        }
-      }
-    }
-  }
-  function checkKatanaNpcHit(state) {
-    const player = state.player;
-    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
-    const cx = player.x + player.width * 0.5 + Math.cos(aimYaw) * 10;
-    const cy = player.y + player.height * 0.5 + Math.sin(aimYaw) * 10;
-    const slashRect = {
-      x: cx - 15,
-      y: cy - 15,
-      width: 30,
-      height: 30
-    };
-    for (const target of getLevelNpcTargets(state)) {
-      if (rectsIntersect(slashRect, target.rect)) {
-        const ncx = target.rect.x + target.rect.width * 0.5;
-        const ncy = target.rect.y + target.rect.height * 0.5;
-        spawnNpcBlood(state, ncx, ncy, target.groundZ);
-        damageArmedNpc(state, target.key, PLAYER_KATANA_NPC_DAMAGE, ncx, ncy, target.groundZ);
-      }
-    }
-    if (state.currentLevelId === "level-upstairs") {
-      const cat = state.levels["level-upstairs"].cat;
-      if (cat.mode !== "dead" && rectsIntersect(slashRect, cat)) {
-        damageUpstairsCat(state, PLAYER_KATANA_NPC_DAMAGE);
-      }
-    }
-  }
-  function checkPunchNpcHit(state) {
-    const player = state.player;
-    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
-    const cx = player.x + player.width * 0.5 + Math.cos(aimYaw) * 6;
-    const cy = player.y + player.height * 0.5 + Math.sin(aimYaw) * 6;
-    const punchRect = {
-      x: cx - 12,
-      y: cy - 12,
-      width: 24,
-      height: 24
-    };
-    for (const target of getLevelNpcTargets(state)) {
-      if (rectsIntersect(punchRect, target.rect)) {
-        const ncx = target.rect.x + target.rect.width * 0.5;
-        const ncy = target.rect.y + target.rect.height * 0.5;
-        spawnNpcBlood(state, ncx, ncy, target.groundZ);
-        damageArmedNpc(state, target.key, PLAYER_PUNCH_NPC_DAMAGE, ncx, ncy, target.groundZ);
-      }
-    }
-    if (state.currentLevelId === "level-upstairs") {
-      const cat = state.levels["level-upstairs"].cat;
-      if (cat.mode !== "dead" && rectsIntersect(punchRect, cat)) {
-        damageUpstairsCat(state, PLAYER_PUNCH_NPC_DAMAGE);
-      }
-    }
-  }
-  function updateEffectTimers(state, dtSeconds) {
-    if (dtSeconds <= 0) return;
-    for (let i = state.bulletHoles.length - 1; i >= 0; i--) {
-      state.bulletHoles[i].age += dtSeconds;
-      if (state.bulletHoles[i].age >= state.bulletHoles[i].maxAge) {
-        state.bulletHoles.splice(i, 1);
-      }
-    }
-    for (let i = state.bloodPools.length - 1; i >= 0; i--) {
-      state.bloodPools[i].age += dtSeconds;
-      if (state.bloodPools[i].age >= state.bloodPools[i].maxAge) {
-        state.bloodPools.splice(i, 1);
-      }
-    }
-    for (let i = state.droppedUzis.length - 1; i >= 0; i--) {
-      const drop = state.droppedUzis[i];
-      if (typeof drop.maxAge === "number") {
-        drop.age = (drop.age ?? 0) + dtSeconds;
-        if (drop.age >= drop.maxAge) {
-          state.droppedUzis.splice(i, 1);
-        }
-      }
-    }
-    for (let i = state.explosions.length - 1; i >= 0; i--) {
-      state.explosions[i].timer -= dtSeconds;
-      if (state.explosions[i].timer <= 0) {
-        state.explosions.splice(i, 1);
-      }
-    }
-    for (let i = state.destroyingWalls.length - 1; i >= 0; i--) {
-      const wall = state.destroyingWalls[i];
-      wall.elapsed += dtSeconds;
-      if (wall.elapsed >= wall.duration) {
-        const lvl = state.levels[wall.levelId];
-        lvl.map.tiles[wall.row][wall.col] = wall.replacementTile;
-        if (state.currentLevelId === wall.levelId) {
-          state.map.tiles[wall.row][wall.col] = wall.replacementTile;
-        }
-        state.destroyingWalls.splice(i, 1);
-        state.mapVersion += 1;
-      }
-    }
-    for (let i = state.destroyingDoors.length - 1; i >= 0; i--) {
-      const d = state.destroyingDoors[i];
-      d.elapsed += dtSeconds;
-      if (d.elapsed >= d.duration) {
-        if (d.levelId === "level-basement") {
-          const basement = state.levels["level-basement"];
-          if (d.doorId === "basement-hall-north-door") {
-            basement.spaDoorClosed = false;
-          } else {
-            basement.doors = basement.doors.filter((dr) => dr.id !== d.doorId);
-          }
-        } else if (d.levelId === "level-upstairs") {
-          const upstairs = state.levels["level-upstairs"];
-          upstairs.doors = upstairs.doors.filter((dr) => dr.id !== d.doorId);
-        }
-        state.destroyingDoors.splice(i, 1);
-        state.mapVersion += 1;
-      }
-    }
-    if (state.burningNpcs.size > 0) {
-      const npcTargets = getLevelNpcTargets(state);
-      for (const key of Array.from(state.burningNpcs)) {
-        const target = npcTargets.find((t) => t.key === key);
-        if (target) {
-          damageArmedNpc(
-            state,
-            key,
-            NPC_BURN_DAMAGE_PER_SECOND * dtSeconds,
-            target.rect.x + target.rect.width * 0.5,
-            target.rect.y + target.rect.height * 0.5,
-            target.groundZ
-          );
-        }
-      }
-    }
-    for (let i = state.bloodParticles.length - 1; i >= 0; i--) {
-      const pt = state.bloodParticles[i];
-      pt.age += dtSeconds;
-      pt.x += pt.vx * dtSeconds;
-      pt.y += pt.vy * dtSeconds;
-      pt.z += pt.vz * dtSeconds;
-      pt.vz -= 130 * dtSeconds;
-      if (pt.z <= pt.groundZ) {
-        if (pt.spawnsPool) {
-          state.bloodPools.push({
-            levelId: pt.levelId,
-            x: pt.x,
-            y: pt.y,
-            z: pt.groundZ,
-            age: 0,
-            maxAge: BLOOD_POOL_DURATION_SECONDS
-          });
-        }
-        state.bloodParticles.splice(i, 1);
-      }
-    }
-  }
-  function updateProjectiles(state, dtSeconds) {
-    if (state.projectiles.length === 0 || dtSeconds <= 0) {
-      return;
-    }
-    const mapWidth = state.map.cols * state.map.tileSize;
-    const mapHeight = state.map.rows * state.map.tileSize;
-    const activeLevel = getActiveLevel(state);
-    const obstacles = activeLevel.getSolidObstacles();
-    const npcTargets = getLevelNpcTargets(state);
-    for (let i = state.projectiles.length - 1; i >= 0; i--) {
-      const p = state.projectiles[i];
-      const stepSpeed = Math.hypot(p.vx, p.vy);
-      const totalStepDist = stepSpeed * dtSeconds;
-      const subSteps = Math.max(1, Math.ceil(totalStepDist / 4));
-      const subDt = dtSeconds / subSteps;
-      let removed = false;
-      for (let s = 0; s < subSteps; s++) {
-        p.x += p.vx * subDt;
-        p.y += p.vy * subDt;
-        p.z += (p.vz ?? 0) * subDt;
-        p.distanceTraveled = (p.distanceTraveled ?? 0) + stepSpeed * subDt;
-        if (p.x < 0 || p.y < 0 || p.x >= mapWidth || p.y >= mapHeight) {
-          if (p.kind === "rocket") {
-            detonateRocket(
-              state,
-              p.x,
-              p.y,
-              p.cutsceneShot,
-              p.sourceNpcKey,
-              p.owner ?? "npc"
-            );
-          }
-          removed = true;
-          break;
-        }
-        if (typeof p.maxDistance === "number" && p.distanceTraveled >= p.maxDistance) {
-          if (p.kind === "rocket") {
-            detonateRocket(
-              state,
-              p.x,
-              p.y,
-              p.cutsceneShot,
-              p.sourceNpcKey,
-              p.owner ?? "npc"
-            );
-          }
-          removed = true;
-          break;
-        }
-        const isFireball = p.kind === "fireball";
-        const isRocket = p.kind === "rocket";
-        const projRect = isFireball || isRocket ? { x: p.x - 4, y: p.y - 4, width: 8, height: 8 } : { x: p.x - 1.5, y: p.y - 1.5, width: 3, height: 3 };
-        if (isFireball && state.currentLevelId === "level-basement") {
-          const basement = state.levels["level-basement"];
-          if (basement.igniteStairsWoodAt(projRect)) {
-            removed = true;
-            break;
-          }
-        }
-        if (p.owner === "npc" && !p.cutsceneShot) {
-          if (rectsIntersect(projRect, state.player)) {
-            if (isRocket) {
-              detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, "npc");
-            } else {
-              damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
-            }
-            removed = true;
-            break;
-          }
-        }
-        const hitNpc = npcTargets.find(
-          (t) => t.key !== p.sourceNpcKey && rectsIntersect(projRect, t.rect)
-        );
-        if (hitNpc && !p.cutsceneShot) {
-          if (isRocket) {
-            detonateRocket(
-              state,
-              p.x,
-              p.y,
-              false,
-              p.sourceNpcKey,
-              p.owner ?? "npc"
-            );
-          } else if (isFireball) {
-            state.burningNpcs.add(hitNpc.key);
-            const armed = getArmedNpcByKey(state, hitNpc.key);
-            if (armed) {
-              igniteNpc(armed);
-            }
-            damageArmedNpc(
-              state,
-              hitNpc.key,
-              PLAYER_FIREBALL_NPC_DAMAGE,
-              p.x,
-              p.y,
-              hitNpc.groundZ
-            );
-          } else {
-            spawnNpcBlood(state, p.x, p.y, hitNpc.groundZ);
-            if (p.owner !== "npc") {
-              damageArmedNpc(
-                state,
-                hitNpc.key,
-                PLAYER_UZI_NPC_DAMAGE,
-                p.x,
-                p.y,
-                hitNpc.groundZ
-              );
-            }
-          }
-          removed = true;
-          break;
-        }
-        if (p.owner !== "npc" && !p.cutsceneShot && state.currentLevelId === "level-upstairs") {
-          const cat = state.levels["level-upstairs"].cat;
-          if (cat.mode !== "dead" && rectsIntersect(projRect, cat)) {
-            if (isRocket) {
-              detonateRocket(
-                state,
-                p.x,
-                p.y,
-                false,
-                p.sourceNpcKey,
-                p.owner ?? "player"
-              );
-            } else if (isFireball) {
-              damageUpstairsCat(state, PLAYER_FIREBALL_NPC_DAMAGE);
-            } else {
-              damageUpstairsCat(state, PLAYER_UZI_NPC_DAMAGE);
-            }
-            removed = true;
-            break;
-          }
-        }
-        if (p.fromRoof) {
-          const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
-          const hitTallTreeOrEdge = isRectCollidingWithMap(
-            state.map,
-            projRect.x,
-            projRect.y,
-            projRect.width,
-            projRect.height,
-            true,
-            (c, r) => c >= 0 && r >= 0 && c < state.map.cols && r < state.map.rows && state.map.tiles[r][c] !== 1 /* Tree */
-          );
-          if (hitChimney || hitTallTreeOrEdge) {
-            if (!isFireball && !isRocket) {
-              state.bulletHoles.push({
-                levelId: state.currentLevelId,
-                x: p.x,
-                y: p.y,
-                z: Math.max(2, p.z),
-                age: 0,
-                maxAge: BULLET_HOLE_DURATION_SECONDS
-              });
-            } else if (isRocket) {
-              detonateRocket(
-                state,
-                p.x,
-                p.y,
-                p.cutsceneShot,
-                p.sourceNpcKey,
-                p.owner ?? "npc"
-              );
-            }
-            removed = true;
-            break;
-          }
-          continue;
-        }
-        const hitMap = isRectCollidingWithMap(
-          state.map,
-          projRect.x,
-          projRect.y,
-          projRect.width,
-          projRect.height,
-          true,
-          p.cutsceneShot ? (c, r) => {
-            const tile = state.map.tiles[r]?.[c];
-            if (r < 5) return true;
-            if (tile === 22 /* FurnitureSolid */) return true;
-            return false;
-          } : void 0
-        );
-        const sourceNpcTarget = p.sourceNpcKey ? npcTargets.find((t) => t.key === p.sourceNpcKey) : void 0;
-        const hitObstacle = p.cutsceneShot ? false : obstacles.some((obs) => {
-          if (sourceNpcTarget && obs.x === sourceNpcTarget.rect.x && obs.y === sourceNpcTarget.rect.y && obs.width === sourceNpcTarget.rect.width && obs.height === sourceNpcTarget.rect.height) {
-            return false;
-          }
-          return rectsIntersect(projRect, obs);
-        });
-        const hitOutsideDynamic = state.currentLevelId === "level-outside" && (rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle));
-        if (hitMap || hitObstacle || hitOutsideDynamic) {
-          if (isRocket) {
-            detonateRocket(
-              state,
-              p.x,
-              p.y,
-              p.cutsceneShot,
-              p.sourceNpcKey,
-              p.owner ?? "npc"
-            );
-          } else if (!isFireball && (hitMap || hitObstacle)) {
-            state.bulletHoles.push({
-              levelId: state.currentLevelId,
-              x: p.x,
-              y: p.y,
-              z: Math.max(2, p.z),
-              age: 0,
-              maxAge: BULLET_HOLE_DURATION_SECONDS
-            });
-          }
-          removed = true;
-          break;
-        }
-      }
-      if (removed) {
-        state.projectiles.splice(i, 1);
-      }
-    }
-  }
-  function fireUziProjectile(state) {
-    const player = state.player;
-    if (player.uziAmmo <= 0 || player.uziDepleted) {
-      return;
-    }
-    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
-    const rightAngle = aimYaw + Math.PI / 2;
-    const cx = player.x + player.width * 0.5;
-    const cy = player.y + player.height * 0.5;
-    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
-    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
-    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180);
-    const shotYaw = aimYaw + yawSpread;
-    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180);
-    const spawnX = cx + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
-    const spawnY = cy + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
-    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 10;
-    state.projectiles.push({
-      kind: "bullet",
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      vx: Math.cos(shotYaw) * UZI_PROJECTILE_SPEED,
-      vy: Math.sin(shotYaw) * UZI_PROJECTILE_SPEED,
-      vz: UZI_PROJECTILE_SPEED * Math.tan(pitchSpread),
-      yaw: shotYaw,
-      distanceTraveled: 0,
-      fromRoof: onRoof
-    });
-    player.weaponVibrationTimer = Math.max(
-      player.weaponVibrationTimer,
-      UZI_FIRE_INTERVAL_SECONDS + 0.05
-    );
-    player.uziAmmo = Math.max(0, player.uziAmmo - 1);
-    if (player.uziAmmo <= 0) {
-      player.uziDepleted = true;
-      player.uziDropTimer = UZI_DROP_DURATION_SECONDS;
-      player.uziCheatRefillTimer = state.cheatMode ? 3 : 0;
-      player.equippedItem = "empty";
-      state.droppedUzis.push({
-        levelId: state.currentLevelId,
-        x: cx + Math.cos(rightAngle) * 7,
-        y: cy + Math.sin(rightAngle) * 7,
-        z: groundZ,
-        yaw: aimYaw + 0.4,
-        age: 0,
-        maxAge: PLAYER_DROPPED_UZI_DURATION_SECONDS
-      });
-    }
-  }
-  function fireFlamethrowerProjectile(state) {
-    const player = state.player;
-    if (player.flamethrowerAmmo <= 0) {
-      return;
-    }
-    if (Number.isFinite(player.flamethrowerAmmo)) {
-      player.flamethrowerAmmo = Math.max(0, player.flamethrowerAmmo - 1);
-    }
-    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
-    const rightAngle = aimYaw + Math.PI / 2;
-    const cx = player.x + player.width * 0.5;
-    const cy = player.y + player.height * 0.5;
-    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
-    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
-    const spawnX = cx + Math.cos(aimYaw) * 8.5 + Math.cos(rightAngle) * 3.5;
-    const spawnY = cy + Math.sin(aimYaw) * 8.5 + Math.sin(rightAngle) * 3.5;
-    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 9.5;
-    state.projectiles.push({
-      kind: "fireball",
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      vx: Math.cos(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
-      vy: Math.sin(aimYaw) * FLAMETHROWER_PROJECTILE_SPEED,
-      vz: 0,
-      yaw: aimYaw,
-      distanceTraveled: 0,
-      maxDistance: FLAMETHROWER_MAX_DISTANCE,
-      fromRoof: onRoof
-    });
-    player.weaponVibrationTimer = Math.max(
-      player.weaponVibrationTimer,
-      FLAMETHROWER_FIRE_INTERVAL_SECONDS + 0.05
-    );
-  }
-  function firePlayerBazookaProjectile(state) {
-    const player = state.player;
-    const aimYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
-    const rightAngle = aimYaw + Math.PI / 2;
-    const cx = player.x + player.width * 0.5;
-    const cy = player.y + player.height * 0.5;
-    const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
-    const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
-    const spawnX = cx + Math.cos(aimYaw) * 9 + Math.cos(rightAngle) * 3;
-    const spawnY = cy + Math.sin(aimYaw) * 9 + Math.sin(rightAngle) * 3;
-    const spawnZ = groundZ + (player.jumpOffset ?? 0) + 11.5;
-    state.projectiles.push({
-      kind: "rocket",
-      owner: "player",
-      x: spawnX,
-      y: spawnY,
-      z: spawnZ,
-      vx: Math.cos(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
-      vy: Math.sin(aimYaw) * NPC_BAZOOKA_ROCKET_SPEED,
-      vz: 0,
-      yaw: aimYaw,
-      distanceTraveled: 0,
-      maxDistance: 320,
-      fromRoof: onRoof
-    });
-    player.weaponVibrationTimer = Math.max(player.weaponVibrationTimer, 0.25);
-  }
-  function updateGameState(state, input, dtSeconds) {
-    const safeDt = Math.max(0, dtSeconds);
-    state.elapsedTime += safeDt;
-    dtSeconds = safeDt;
-    const prevUziCooldown = state.player.uziFireCooldown;
-    const prevFlameCooldown = state.player.flamethrowerFireCooldown;
-    updatePlayerHealthAndTimers(state.player, dtSeconds);
-    if (state.cheatMode && state.player.uziDepleted && state.player.uziCheatRefillTimer > 0) {
-      state.player.uziCheatRefillTimer = Math.max(
-        0,
-        state.player.uziCheatRefillTimer - dtSeconds
-      );
-      if (state.player.uziCheatRefillTimer === 0) {
-        state.player.unlockedUzi = true;
-        state.player.uziDepleted = false;
-        state.player.uziAmmo = MAX_UZI_AMMO;
-        state.player.equippedItem = "uzi";
-        state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
-        debugLog("Cheat refill: new Uzi obtained with 30 rounds");
-      }
-    }
-    const uziCooldownRemainder = prevUziCooldown > 0 ? Math.max(0, dtSeconds - prevUziCooldown) : 0;
-    const flameCooldownRemainder = prevFlameCooldown > 0 ? Math.max(0, dtSeconds - prevFlameCooldown) : 0;
-    const actionPressed = consumeActionPress(input);
-    const attackPressed = consumeAttackPress(input);
-    const slotPressed = consumeSlotPress(input);
-    if (input.pointerClick) {
-      input.pointerClick = null;
-    }
-    if (state.screenFade) {
-      state.screenFade.timer += dtSeconds;
-      if (state.screenFade.phase === "out") {
-        if (state.screenFade.timer >= state.screenFade.duration) {
-          const onMidpoint = state.screenFade.onMidpoint;
-          state.screenFade.onMidpoint = void 0;
-          state.screenFade.phase = "in";
-          state.screenFade.timer = 0;
-          if (onMidpoint) {
-            onMidpoint();
-          }
-          if (typeof input.cameraYaw === "number") {
-            input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
-          }
-        }
-        state.player.isMoving = false;
-        state.nearbyInteractable = null;
-        return;
-      } else if (state.screenFade.timer >= state.screenFade.duration) {
-        const onComplete = state.screenFade.onComplete;
-        state.screenFade = null;
-        if (onComplete) {
-          onComplete();
-        }
-      }
-    }
-    if (state.houseExploding) {
-      updateEffectTimers(state, dtSeconds);
-      if (state.houseExplosionTimer > 0) {
-        state.houseExplosionTimer = Math.max(0, state.houseExplosionTimer - dtSeconds);
-        state.houseExplosionSpawnAccum += dtSeconds;
-        while (state.houseExplosionSpawnAccum >= 0.12) {
-          state.houseExplosionSpawnAccum -= 0.12;
-          spawnHouseExplosionWave(state, true);
-        }
-        if (state.houseExplosionTimer <= 0) {
-          state.worldFadedToBlack = true;
-        }
-      }
-    }
-    if (state.activeDialogue) {
-      state.player.isMoving = false;
-      if (actionPressed) {
-        if (state.activeDialogue.unclosable && state.activeDialogue.currentIndex >= state.activeDialogue.lines.length - 1) {
-          return;
-        }
-        state.activeDialogue.currentIndex += 1;
-        if (state.houseExploding && state.activeDialogue.currentIndex >= 1) {
-          state.worldFadedToBlack = true;
-        }
-        if (state.activeDialogue.currentIndex >= state.activeDialogue.lines.length) {
-          const onClose = state.activeDialogue.onClose;
-          const prevLevel = state.currentLevelId;
-          state.activeDialogue = null;
-          if (onClose) {
-            onClose();
-          }
-          if (state.currentLevelId !== prevLevel && typeof input.cameraYaw === "number") {
-            input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
-          }
-        }
-      }
-      return;
-    }
-    if (slotPressed !== null) {
-      selectPlayerEquipmentSlot(state.player, slotPressed);
-    }
-    updatePlayerJump(state.player, dtSeconds);
-    updateProjectiles(state, dtSeconds);
-    if (!state.player.unlockedUzi || state.player.uziDepleted) {
-      for (let i = state.droppedUzis.length - 1; i >= 0; i--) {
-        const uzi = state.droppedUzis[i];
-        if (!uzi.pickupable || uzi.levelId !== state.currentLevelId) continue;
-        const uziRect = {
-          x: uzi.x - 6,
-          y: uzi.y - 6,
-          width: 12,
-          height: 12
-        };
-        if (rectsIntersect(state.player, uziRect)) {
-          const pickedAmmo = uzi.ammo ?? MAX_UZI_AMMO;
-          state.droppedUzis.splice(i, 1);
-          state.player.unlockedUzi = true;
-          state.player.uziDepleted = pickedAmmo <= 0;
-          state.player.uziAmmo = pickedAmmo;
-          state.player.uziDropTimer = 0;
-          state.player.uziCheatRefillTimer = 0;
-          state.player.equippedItem = pickedAmmo > 0 ? "uzi" : "empty";
-          state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
-          debugLog(`Picked up Uzi from fallen NPC (${pickedAmmo} rounds)`);
-          break;
-        }
-      }
-    }
-    for (let i = state.droppedFlamethrowers.length - 1; i >= 0; i--) {
-      const flameDrop = state.droppedFlamethrowers[i];
-      if (flameDrop.levelId !== state.currentLevelId) continue;
-      const flameRect = {
-        x: flameDrop.x - 7,
-        y: flameDrop.y - 7,
-        width: 14,
-        height: 14
-      };
-      if (rectsIntersect(state.player, flameRect)) {
-        state.droppedFlamethrowers.splice(i, 1);
-        state.player.unlockedFlamethrower = true;
-        if (Number.isFinite(state.player.flamethrowerAmmo)) {
-          state.player.flamethrowerAmmo += flameDrop.ammo;
-        } else {
-          state.player.flamethrowerAmmo = flameDrop.ammo;
-        }
-        if (state.player.equippedItem === "empty") {
-          selectPlayerEquipmentSlot(state.player, 4);
-        }
-        debugLog(`Picked up Flamethrower (+${flameDrop.ammo} flames)`);
-        break;
-      }
-    }
-    for (let i = state.droppedKatanas.length - 1; i >= 0; i--) {
-      const katana = state.droppedKatanas[i];
-      if (katana.levelId !== state.currentLevelId) continue;
-      const katanaRect = {
-        x: katana.x - 7,
-        y: katana.y - 7,
-        width: 14,
-        height: 14
-      };
-      if (rectsIntersect(state.player, katanaRect)) {
-        state.droppedKatanas.splice(i, 1);
-        state.player.unlockedKatana = true;
-        selectPlayerEquipmentSlot(state.player, 5);
-        debugLog("Picked up Katana!");
-        break;
-      }
-    }
-    for (let i = state.droppedBazookas.length - 1; i >= 0; i--) {
-      const bazooka = state.droppedBazookas[i];
-      if (bazooka.levelId !== state.currentLevelId) continue;
-      const bazookaRect = {
-        x: bazooka.x - 7,
-        y: bazooka.y - 7,
-        width: 14,
-        height: 14
-      };
-      if (rectsIntersect(state.player, bazookaRect)) {
-        state.droppedBazookas.splice(i, 1);
-        state.player.unlockedBazooka = true;
-        selectPlayerEquipmentSlot(state.player, 6);
-        debugLog("Picked up Bazooka!");
-        break;
-      }
-    }
-    for (let i = state.medkits.length - 1; i >= 0; i--) {
-      const medkit = state.medkits[i];
-      if (medkit.levelId !== state.currentLevelId) continue;
-      if (medkit.id === "basement-spa-medkit" && state.levels["level-basement"].spaDoorClosed) {
-        continue;
-      }
-      if (state.player.health >= MAX_PLAYER_HEALTH) continue;
-      const medkitRect = {
-        x: medkit.x - 7,
-        y: medkit.y - 7,
-        width: 14,
-        height: 14
-      };
-      if (rectsIntersect(state.player, medkitRect)) {
-        state.medkits.splice(i, 1);
-        setPlayerHealth(state.player, state.player.health + MEDKIT_HEAL_AMOUNT);
-        debugLog(`Picked up Medkit (+${MEDKIT_HEAL_AMOUNT} HP)`);
-        break;
-      }
-    }
-    updateEffectTimers(state, dtSeconds);
-    for (const door of state.levels["level-basement"].openedDoors) {
-      door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
-    }
-    for (const door of state.levels["level-upstairs"].openedDoors) {
-      door.progress = Math.min(1, door.progress + dtSeconds / 0.45);
-    }
-    const transitionCtx = {
-      loadLevel: (nextId) => {
-        loadLevel(state, nextId);
-        if (typeof input.cameraYaw === "number") {
-          input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
-        }
-      },
-      openDialogue: (lines, onClose, speakerPortrait, unclosable, variant) => {
-        state.activeDialogue = {
-          lines,
-          currentIndex: 0,
-          onClose,
-          speakerPortrait,
-          unclosable,
-          variant
-        };
-      },
-      damagePlayer: (amount) => damagePlayer(state, amount),
-      fireNpcUzi: (npc, originX, originY, aimYaw) => fireNpcUziProjectile(state, npc, originX, originY, aimYaw),
-      fireNpcFlamethrower: (npc, originX, originY, aimYaw) => fireNpcFlamethrowerProjectile(state, npc, originX, originY, aimYaw),
-      fireNpcBazooka: (npc, originX, originY, aimYaw) => fireNpcBazookaProjectile(state, originX, originY, aimYaw, npc.key, false),
-      fireRosannaCutsceneRocket: (originX, originY, aimYaw) => fireNpcBazookaProjectile(
-        state,
-        originX,
-        originY,
-        aimYaw,
-        "upstairs:Rosanna",
-        true
-      ),
-      getSecretSantaReceiver: () => {
-        if (!state.secretSantaDB) return void 0;
-        const playerName = state.secretSantaDB.playerName;
-        if (!playerName) return void 0;
-        return state.secretSantaDB.getGiftReceiverOf(playerName);
-      },
-      fadeWorldToBlack: () => {
-        state.worldFadedToBlack = true;
-      },
-      detonateHouseC4: () => {
-        triggerUpstairsHouseExplosion(state);
-      }
-    };
-    if (state.currentLevelId === "level-outside") {
-      const handledEarly = updateOutsideLevel(state, input, dtSeconds);
-      if (handledEarly) {
-        return;
-      }
-    } else if (state.currentLevelId === "level-basement") {
-      const basement = state.levels["level-basement"];
-      const movementLocked = basement.updateCutscene(
-        dtSeconds,
-        state.player,
-        transitionCtx
-      );
-      if (movementLocked) {
-        refreshInteractables(state);
-        return;
-      }
-      updatePlayer(
-        state.player,
-        input,
-        dtSeconds,
-        basement.map,
-        basement.getSolidObstacles(state.player)
-      );
-      if (!isPlayerOnBasementStairs(state.player)) {
-        if (rectsIntersect(state.player, BASEMENT_STAIRS_SIDE_NORTH_BOUNDS)) {
-          state.player.y = BASEMENT_STAIRS_SIDE_NORTH_BOUNDS.y - state.player.height;
-        } else if (rectsIntersect(state.player, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS)) {
-          state.player.y = BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.y + BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS.height;
-        }
-      }
-      basement.updateHazardsAndItems(dtSeconds, state.player, transitionCtx);
-      basement.updateNpcSight(dtSeconds, state.player, transitionCtx);
-      if (state.activeDialogue) {
-        refreshInteractables(state);
-        return;
-      }
-      if (!state.screenFade && isPlayerOnBasementStairs(state.player) && rectEdgeDistance(state.player, BASEMENT_STAIRS_TRIGGER_BOUNDS) <= INTERACTION_MAX_GAP_PX) {
-        state.player.isMoving = false;
-        state.nearbyInteractable = null;
-        state.screenFade = {
-          phase: "out",
-          timer: 0,
-          duration: 0.5,
-          onMidpoint: () => {
-            state.player.states.set(USED_STAIRS_STATE_KEY, true);
-            transitionCtx.loadLevel("level-upstairs");
-          },
-          onComplete: () => {
-            if (!state.player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
-              state.player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
-              transitionCtx.openDialogue([
-                "Hmm... so I believe the Christmas tree is to the left, but I must not be seen!"
-              ]);
-            }
-          }
-        };
-        return;
-      }
-    } else if (state.currentLevelId === "level-upstairs") {
-      const upstairs = state.levels["level-upstairs"];
-      const movementLocked = upstairs.updateCutscene(
-        dtSeconds,
-        state.player,
-        transitionCtx
-      );
-      if (movementLocked) {
-        refreshInteractables(state);
-        return;
-      }
-      updatePlayer(
-        state.player,
-        input,
-        dtSeconds,
-        upstairs.map,
-        upstairs.getSolidObstacles()
-      );
-      updateCat(
-        upstairs.cat,
-        state.player,
-        dtSeconds,
-        upstairs.map,
-        upstairs.getSolidObstacles(),
-        (damage) => damagePlayer(state, damage)
-      );
-      if (upstairs.updateCutscene(0, state.player, transitionCtx)) {
-        refreshInteractables(state);
-        return;
-      }
-      upstairs.updateTableRoomAmbush(dtSeconds, state.player);
-      upstairs.updateNpcSight(dtSeconds, state.player, transitionCtx);
-      if (state.activeDialogue) {
-        refreshInteractables(state);
-        return;
-      }
-      if (!state.screenFade && rectEdgeDistance(state.player, UPSTAIRS_STAIRS_TRIGGER_BOUNDS) <= INTERACTION_MAX_GAP_PX) {
-        state.player.isMoving = false;
-        state.nearbyInteractable = null;
-        state.screenFade = {
-          phase: "out",
-          timer: 0,
-          duration: 0.5,
-          onMidpoint: () => {
-            transitionCtx.loadLevel("level-basement");
-          }
-        };
-        return;
-      }
-    } else if (state.currentLevelId === "level-people") {
-      const peopleLevel = state.levels["level-people"];
-      updatePlayer(
-        state.player,
-        input,
-        dtSeconds,
-        peopleLevel.map,
-        peopleLevel.getSolidObstacles()
-      );
-    }
-    refreshInteractables(state);
-    if (actionPressed && state.player.equippedItem === "uzi" && state.player.unlockedUzi && !state.player.uziDepleted) {
-      for (const floorUzi of state.droppedUzis) {
-        if (!floorUzi.pickupable || floorUzi.levelId !== state.currentLevelId) continue;
-        const uziRect = {
-          x: floorUzi.x - 7,
-          y: floorUzi.y - 7,
-          width: 14,
-          height: 14
-        };
-        if (rectsIntersect(state.player, uziRect)) {
-          const prevPlayerAmmo = state.player.uziAmmo;
-          const floorAmmo = floorUzi.ammo ?? MAX_UZI_AMMO;
-          state.player.uziAmmo = floorAmmo;
-          floorUzi.ammo = prevPlayerAmmo;
-          state.player.uziDepleted = floorAmmo <= 0;
-          state.player.equippedItem = state.player.uziDepleted ? "empty" : "uzi";
-          state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
-          state.player.uziFireCooldown = 0;
-          state.player.punchTimer = 0;
-          debugLog(
-            `Swapped Uzi on floor (${prevPlayerAmmo} <-> ${floorAmmo} rounds)`
-          );
-          return;
-        }
-      }
-    }
-    if (actionPressed && state.nearbyInteractable) {
-      const target = state.nearbyInteractable;
-      if (state.currentLevelId === "level-outside") {
-        syncOutsideToLevel(state);
-      }
-      const activeLevel = getActiveLevel(state);
-      const prevLevelId = state.currentLevelId;
-      const handledByLevel = activeLevel.handleInteraction(
-        target.id,
-        state.player,
-        transitionCtx
-      );
-      if (handledByLevel) {
-        if (prevLevelId === "level-outside" && state.currentLevelId === "level-outside") {
-          syncLevelToOutside(state);
-        }
-        refreshInteractables(state);
-      } else if (target.dialogueLines.length > 0) {
-        state.activeDialogue = {
-          lines: target.dialogueLines,
-          currentIndex: 0,
-          speakerPortrait: target.speakerPortrait
-        };
-      }
-      return;
-    }
-    if (state.player.equippedItem === "empty") {
-      if (actionPressed && !state.nearbyInteractable) {
-        triggerPlayerJump(state.player);
-      }
-    } else if (state.player.equippedItem === "unarmed") {
-      if (attackPressed || !state.nearbyInteractable && actionPressed) {
-        if (triggerPlayerPunch(state.player)) {
-          checkPunchNpcHit(state);
-        }
-      }
-    } else if (state.player.equippedItem === "katana") {
-      if (attackPressed || !state.nearbyInteractable && actionPressed) {
-        if (triggerPlayerKatanaSwing(state.player)) {
-          checkKatanaNpcHit(state);
-        }
-      }
-    } else if (state.player.equippedItem === "uzi") {
-      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
-      if (wantsToFire && state.player.uziFireCooldown <= 1e-6) {
-        state.player.uziFireCooldown = Math.max(
-          0.01,
-          UZI_FIRE_INTERVAL_SECONDS - uziCooldownRemainder
-        );
-        fireUziProjectile(state);
-      }
-    } else if (state.player.equippedItem === "flamethrower") {
-      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
-      if (wantsToFire && state.player.flamethrowerFireCooldown <= 1e-6 && state.player.flamethrowerAmmo > 0) {
-        state.player.flamethrowerFireCooldown = Math.max(
-          0.01,
-          FLAMETHROWER_FIRE_INTERVAL_SECONDS - flameCooldownRemainder
-        );
-        fireFlamethrowerProjectile(state);
-      }
-    } else if (state.player.equippedItem === "bazooka") {
-      const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
-      if (wantsToFire && state.player.bazookaFireCooldown <= 1e-6) {
-        state.player.bazookaFireCooldown = BAZOOKA_FIRE_INTERVAL_SECONDS;
-        firePlayerBazookaProjectile(state);
-      }
-    }
-  }
 
   // src/main.ts
   function detectIsLandscape() {

@@ -19,9 +19,11 @@ export const PLAYER_JUMP_INITIAL_VELOCITY =
   (4 * PLAYER_JUMP_HEIGHT) / PLAYER_JUMP_DURATION;
 
 export const MAX_PLAYER_HEALTH = 100;
+export const ARMOR_MAX_PLAYER_HEALTH = 200;
 export const PUNCH_DURATION_SECONDS = 0.28;
 export const UZI_EQUIP_DURATION_SECONDS = 0.5;
 export const UZI_DROP_DURATION_SECONDS = 0.45;
+export const PLAYER_UZI_RELOAD_SECONDS = 1.5;
 export const UZI_FIRE_INTERVAL_SECONDS = 0.1;
 export const UZI_PROJECTILE_SPEED = 24 * TILE_SIZE;
 export const MAX_UZI_AMMO = 30;
@@ -79,6 +81,8 @@ export interface Player {
   nextFootprintFoot: 'left' | 'right';
   states: Map<string, unknown>;
   health: number;
+  maxHealth: number;
+  hasBodyArmor: boolean;
   delayedHealth: number;
   delayedHealthRate: number;
   equippedItem: EquipmentId;
@@ -86,6 +90,7 @@ export interface Player {
   uziAmmo: number;
   uziDepleted: boolean;
   uziDropTimer: number;
+  uziReloadTimer: number;
   uziCheatRefillTimer: number;
   unlockedFlamethrower: boolean;
   flamethrowerAmmo: number;
@@ -120,6 +125,8 @@ export function createPlayer(x: number, y: number): Player {
     nextFootprintFoot: 'left',
     states: new Map<string, unknown>(),
     health: MAX_PLAYER_HEALTH,
+    maxHealth: MAX_PLAYER_HEALTH,
+    hasBodyArmor: false,
     delayedHealth: MAX_PLAYER_HEALTH,
     delayedHealthRate: 0,
     equippedItem: 'empty',
@@ -127,6 +134,7 @@ export function createPlayer(x: number, y: number): Player {
     uziAmmo: MAX_UZI_AMMO,
     uziDepleted: false,
     uziDropTimer: 0,
+    uziReloadTimer: 0,
     uziCheatRefillTimer: 0,
     unlockedFlamethrower: false,
     flamethrowerAmmo: Infinity,
@@ -144,10 +152,17 @@ export function createPlayer(x: number, y: number): Player {
 }
 
 export function setPlayerHealth(player: Player, newHealth: number): void {
-  const clamped = Math.max(0, Math.min(MAX_PLAYER_HEALTH, newHealth));
+  const cap = player.maxHealth || MAX_PLAYER_HEALTH;
+  const clamped = Math.max(0, Math.min(cap, newHealth));
   player.health = clamped;
   // Rate is recalculated on every health change so delayedHealth reaches health in 1 second.
   player.delayedHealthRate = Math.abs(player.delayedHealth - player.health);
+}
+
+export function equipPlayerBodyArmor(player: Player): void {
+  player.hasBodyArmor = true;
+  player.maxHealth = ARMOR_MAX_PLAYER_HEALTH;
+  setPlayerHealth(player, ARMOR_MAX_PLAYER_HEALTH);
 }
 
 export function applyPlayerDamage(player: Player, amount: number): void {
@@ -179,6 +194,12 @@ export function updatePlayerHealthAndTimers(player: Player, dtSeconds: number): 
   }
   if (player.uziDropTimer > 0) {
     player.uziDropTimer = Math.max(0, player.uziDropTimer - dtSeconds);
+  }
+  if (player.uziReloadTimer > 0) {
+    player.uziReloadTimer = Math.max(0, player.uziReloadTimer - dtSeconds);
+    if (player.uziReloadTimer === 0 && player.uziAmmo <= 0) {
+      player.uziAmmo = MAX_UZI_AMMO;
+    }
   }
   if (player.flamethrowerFireCooldown > 0) {
     player.flamethrowerFireCooldown = Math.max(

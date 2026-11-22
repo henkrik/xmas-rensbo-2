@@ -55,6 +55,7 @@ export interface LevelTransitionContext {
   getSecretSantaReceiver?: () => string | undefined;
   fadeWorldToBlack?: () => void;
   detonateHouseC4?: () => void;
+  getRemainingNaughtyListNames?: () => string[];
 }
 
 export interface GameLevel {

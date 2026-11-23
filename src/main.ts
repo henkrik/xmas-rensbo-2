@@ -5,6 +5,7 @@ import {
   createEmptyInput,
   createVirtualJoystick,
 } from './core/input';
+import { attachAudioUnlockListeners } from './core/audio';
 import { attachDebugConsole } from './core/debugConsole';
 import { initSecretSantaDB } from './core/secretSantaDB';
 import secretText from '../inspiration/secret.txt';
@@ -378,6 +379,7 @@ async function startGame(): Promise<void> {
   // Initialize SecretSantaDB and debug log giver/receiver mappings
   const secretSantaDB = await initSecretSantaDB(secretText);
 
+  attachAudioUnlockListeners(window);
   attachKeyboardListeners(window, input, {
     onToggleJoystick: () => {
       joystickEnabled = !joystickEnabled;

@@ -1,3 +1,8 @@
+import {
+  playSound,
+  primeGameAudioSnapshot,
+  updateGameAudio,
+} from '../core/audio';
 import { debugLog } from '../core/debugConsole';
 import { SecretSantaDB } from '../core/secretSantaDB';
 import {
@@ -2349,6 +2354,17 @@ export function updateGameState(
   dtSeconds: number
 ): void {
   const safeDt = Math.max(0, dtSeconds);
+  primeGameAudioSnapshot(state);
+  updateGameStateCore(state, input, safeDt);
+  updateGameAudio(state, input, safeDt);
+}
+
+function updateGameStateCore(
+  state: GameState,
+  input: InputState,
+  dtSeconds: number
+): void {
+  const safeDt = Math.max(0, dtSeconds);
   state.elapsedTime += safeDt;
   dtSeconds = safeDt;
   const prevUziCooldown = state.player.uziFireCooldown;
@@ -2948,6 +2964,8 @@ export function updateGameState(
         FLAMETHROWER_FIRE_INTERVAL_SECONDS - flameCooldownRemainder
       );
       fireFlamethrowerProjectile(state);
+    } else if (wantsToFire && state.player.flamethrowerAmmo <= 0) {
+      playSound('no_ammo', 0.18);
     }
   } else if (state.player.equippedItem === 'bazooka') {
     const wantsToFire =

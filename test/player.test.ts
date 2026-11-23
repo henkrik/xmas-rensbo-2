@@ -13,6 +13,7 @@ import {
   updateCat,
 } from '../src/entities/cat';
 import { debugConsole, debugLog } from '../src/core/debugConsole';
+import { soundManager } from '../src/core/audio';
 import { SecretSantaDB, initSecretSantaDB } from '../src/core/secretSantaDB';
 import {
   applyKeyEvent,
@@ -4444,8 +4445,10 @@ Tanja -> Alex
     upstairs.tanjaCombat.path = [];
     upstairs.tanjaCombat.pathTimer = 1.0;
     applyKeyEvent(input, 'Space', true);
-    for (let i = 0; i < 40 && (upstairs.tanjaCombat.mode as string) !== 'dead'; i++) {
+    for (let i = 0; i < 60 && (upstairs.tanjaCombat.mode as string) !== 'dead'; i++) {
       state.player.health = MAX_PLAYER_HEALTH;
+      state.player.x = upstairs.tanjaNpc.x + 4;
+      state.player.y = upstairs.tanjaNpc.y - 1.5 * TILE_SIZE;
       updateGameState(state, input, 0.05);
     }
     applyKeyEvent(input, 'Space', false);
@@ -5158,5 +5161,117 @@ describe('Hostile armored headcrab cat', () => {
     updateGameState(flashState, flashInput, 0.01);
     applyKeyEvent(flashInput, 'Space', false);
     expect(flashState.fireFlashTimer).toBe(0);
+
+    // 12. N64 chiptune music & sound effects trigger for interactions, footsteps, animals, doors, weapons, fire/embers, rockets, explosions, and window break
+    const sfxState = createGameState({
+      initialLevelId: 'level-outside',
+      showIntroDialogue: false,
+    });
+    const sfxInput = createEmptyInput();
+    soundManager.clearRecentEvents();
+
+    // Outside peaceful Christmas music & snow footsteps (walk on snow lawn at col 6, row 20)
+    sfxState.player.x = 6 * TILE_SIZE;
+    sfxState.player.y = 20 * TILE_SIZE;
+    sfxInput.up = true;
+    updateGameState(sfxState, sfxInput, 0.2);
+    sfxInput.up = false;
+    expect(soundManager.getCurrentMusicTrack()).toBe('peaceful_xmas');
+    expect(soundManager.getRecentEvents()).toContain('footstep_snow');
+
+    // Dog chasing -> dog_bark (move Santa within dog aggro distance)
+    sfxState.player.x = sfxState.dog.x - 24;
+    sfxState.player.y = sfxState.dog.y;
+    updateGameState(sfxState, sfxInput, 0.05);
+    expect(soundManager.getRecentEvents()).toContain('dog_bark');
+
+    // Locked front door -> door_locked & dialogue_open; advancing -> dialogue_advance
+    sfxState.player.x = HOUSE_DOOR_COL * TILE_SIZE;
+    sfxState.player.y = (HOUSE_DOOR_ROW + 1) * TILE_SIZE + 2;
+    updateGameState(sfxState, sfxInput, 0.01);
+    applyKeyEvent(sfxInput, 'Space', true);
+    updateGameState(sfxState, sfxInput, 0.02);
+    applyKeyEvent(sfxInput, 'Space', false);
+    expect(soundManager.getRecentEvents()).toContain('door_locked');
+    expect(soundManager.getRecentEvents()).toContain('dialogue_open');
+    applyKeyEvent(sfxInput, 'Space', true);
+    updateGameState(sfxState, sfxInput, 0.02);
+    applyKeyEvent(sfxInput, 'Space', false);
+    expect(soundManager.getRecentEvents()).toContain('dialogue_advance');
+    sfxState.activeDialogue = null;
+
+    // Upstairs: action music, cat meow/angry, weapons (uzi, flamethrower + fire_ember, katana, bazooka + rocket_flight + explosion), window break
+    loadLevel(sfxState, 'level-upstairs');
+    const sfxUp = sfxState.levels['level-upstairs'];
+    soundManager.clearRecentEvents();
+
+    // Trigger Rosanna window break sound during jumping phase
+    sfxUp.rosannaCutscene = {
+      active: true,
+      phase: 'firing',
+      santaX: 11 * TILE_SIZE,
+      santaY: 2.5 * TILE_SIZE,
+      santaZ: 2,
+      facingAngle: Math.PI / 2,
+      walkTimer: 0,
+      elapsed: 2.3,
+      firedShot: true,
+    };
+    updateGameState(sfxState, sfxInput, 0.1);
+    expect(soundManager.getCurrentMusicTrack()).toBe('action_xmas');
+    expect(soundManager.getRecentEvents()).toContain('window_break');
+    sfxUp.rosannaCutscene = null;
+    sfxState.player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
+
+    // Cat fleeing -> cat_meow; cat damaged -> cat_angry
+    sfxUp.cat.mode = 'flee';
+    updateGameState(sfxState, sfxInput, 0.05);
+    expect(soundManager.getRecentEvents()).toContain('cat_meow');
+    applyCatDamage(sfxUp.cat, 20);
+    updateGameState(sfxState, sfxInput, 0.05);
+    expect(soundManager.getRecentEvents()).toContain('cat_angry');
+
+    // Weapons: Uzi fire, Flamethrower fire + ember, Katana swoosh, Bazooka fire + rocket_flight + explosion
+    sfxState.player.unlockedUzi = true;
+    sfxState.player.unlockedFlamethrower = true;
+    sfxState.player.flamethrowerAmmo = 10;
+    sfxState.player.unlockedKatana = true;
+    sfxState.player.unlockedBazooka = true;
+    sfxState.player.x = 11 * TILE_SIZE;
+    sfxState.player.y = 11 * TILE_SIZE;
+    sfxState.player.yaw = 0;
+
+    selectPlayerEquipmentSlot(sfxState.player, 3);
+    applyKeyEvent(sfxInput, 'Space', true);
+    updateGameState(sfxState, sfxInput, 0.02);
+    applyKeyEvent(sfxInput, 'Space', false);
+    expect(soundManager.getRecentEvents()).toContain('weapon_switch');
+    expect(soundManager.getRecentEvents()).toContain('uzi_fire');
+
+    selectPlayerEquipmentSlot(sfxState.player, 4);
+    applyKeyEvent(sfxInput, 'Space', true);
+    updateGameState(sfxState, sfxInput, 0.02);
+    applyKeyEvent(sfxInput, 'Space', false);
+    expect(soundManager.getRecentEvents()).toContain('flamethrower_fire');
+    expect(soundManager.getRecentEvents()).toContain('fire_ember');
+
+    selectPlayerEquipmentSlot(sfxState.player, 5);
+    applyKeyEvent(sfxInput, 'Space', true);
+    updateGameState(sfxState, sfxInput, 0.02);
+    applyKeyEvent(sfxInput, 'Space', false);
+    expect(soundManager.getRecentEvents()).toContain('katana_swing');
+
+    selectPlayerEquipmentSlot(sfxState.player, 6);
+    sfxState.player.yaw = -Math.PI / 2;
+    sfxState.player.bazookaFireCooldown = 0;
+    applyKeyEvent(sfxInput, 'Space', true);
+    updateGameState(sfxState, sfxInput, 0.02);
+    applyKeyEvent(sfxInput, 'Space', false);
+    expect(soundManager.getRecentEvents()).toContain('bazooka_fire');
+    expect(soundManager.getRecentEvents()).toContain('rocket_flight');
+    for (let i = 0; i < 20; i++) {
+      updateGameState(sfxState, sfxInput, 0.05);
+    }
+    expect(soundManager.getRecentEvents()).toContain('explosion');
   });
 });

@@ -421,169 +421,6 @@
     };
   }
 
-  // src/core/debugConsole.ts
-  var DebugConsole = class {
-    constructor(maxLines = 50) {
-      __publicField(this, "lines", []);
-      __publicField(this, "maxLines");
-      __publicField(this, "element", null);
-      this.maxLines = maxLines;
-    }
-    log(message) {
-      this.lines.push(message);
-      if (this.lines.length > this.maxLines) {
-        this.lines.splice(0, this.lines.length - this.maxLines);
-      }
-      this.render();
-    }
-    getLines() {
-      return this.lines;
-    }
-    clear() {
-      this.lines = [];
-      this.render();
-    }
-    attach(frame) {
-      if (!frame || typeof document === "undefined") {
-        return () => {
-        };
-      }
-      frame.classList.add("debug");
-      const el = document.createElement("pre");
-      el.id = "viewport-debug-text";
-      frame.appendChild(el);
-      this.element = el;
-      this.render();
-      return () => {
-        if (this.element === el) {
-          this.element = null;
-        }
-        el.remove();
-        frame.classList.remove("debug");
-      };
-    }
-    render() {
-      if (this.element) {
-        this.element.textContent = this.lines.join("\n");
-      }
-    }
-  };
-  var debugConsole = new DebugConsole();
-  function debugLog(message) {
-    debugConsole.log(message);
-  }
-  function attachDebugConsole(frame) {
-    return debugConsole.attach(frame);
-  }
-  if (typeof globalThis !== "undefined") {
-    globalThis.debugLog = debugLog;
-  }
-
-  // src/core/secretSantaDB.ts
-  var SecretSantaDB = class {
-    constructor(content, playerId = null) {
-      __publicField(this, "giverToReceiver", /* @__PURE__ */ new Map());
-      __publicField(this, "playerId", null);
-      this.playerId = playerId;
-      if (content) {
-        this.loadFromText(content);
-      }
-    }
-    /**
-     * Base64 decodes the playerId. Returns atob(playerId) if playerId is non-null, null otherwise.
-     */
-    get playerName() {
-      if (!this.playerId) {
-        return null;
-      }
-      try {
-        return atob(this.playerId);
-      } catch {
-        return null;
-      }
-    }
-    /**
-     * Base64 encodes a name string using btoa.
-     */
-    toPlayerId(name) {
-      return btoa(name);
-    }
-    /**
-     * Parses non-empty lines formatted as "Name1 -> Name2" and populates the map.
-     */
-    loadFromText(content) {
-      this.giverToReceiver.clear();
-      const lines = content.split(/\r?\n/);
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) continue;
-        const parts = line.split("->");
-        if (parts.length === 2) {
-          const giftGiver = parts[0].trim();
-          const giftReceiver = parts[1].trim();
-          if (giftGiver && giftReceiver) {
-            this.giverToReceiver.set(giftGiver, giftReceiver);
-          }
-        }
-      }
-    }
-    /**
-     * Returns a list of all gift givers in insertion order.
-     */
-    get giftGivers() {
-      return Array.from(this.giverToReceiver.keys());
-    }
-    /**
-     * Looks up the gift receiver for a given gift giver name.
-     */
-    getGiftReceiverOf(giftGiver) {
-      return this.giverToReceiver.get(giftGiver);
-    }
-    /**
-     * Debug logs each gift giver's name and who they give presents to according to this map
-     * in the format: "Gift Giver (PlayerID) -> Gift Receiver"
-     * Followed by:
-     * "Based on pid, the current player is <playerName> who should give a gift to <receiver>"
-     */
-    debugLogAll() {
-      for (const giver of this.giftGivers) {
-        const receiver = this.getGiftReceiverOf(giver);
-        const pid = this.toPlayerId(giver);
-        debugLog(`${giver} (${pid}) -> ${receiver}`);
-      }
-      const currentName = this.playerName;
-      const receiverOfPlayer = currentName ? this.getGiftReceiverOf(currentName) : void 0;
-      debugLog(
-        `Based on pid, the current player is ${currentName ?? "null"} who should give a gift to ${receiverOfPlayer ?? "null"}`
-      );
-    }
-  };
-  async function initSecretSantaDB(initialContent, playerId) {
-    let content = initialContent;
-    if (content === void 0 && typeof fetch === "function") {
-      try {
-        const res = await fetch("./secret.txt");
-        if (res.ok) {
-          content = await res.text();
-        }
-      } catch {
-      }
-    }
-    let pid = playerId;
-    if (pid === void 0) {
-      if (typeof window !== "undefined" && window.location?.search) {
-        pid = new URLSearchParams(window.location.search).get("pid");
-      } else {
-        pid = null;
-      }
-    }
-    const db = new SecretSantaDB(content, pid);
-    return db;
-  }
-
-  // inspiration/secret.txt
-  var secret_default = "Alex -> Anne Marie\nAnne Marie -> Olexa\nAnnelotte -> Rosanna\nArjan -> Hanneloes\nDiana -> Alex\nHanneloes -> Annelotte\nHenrik -> Albin\nOlexa -> Arjan\nRosanna -> Simon\nSimon -> Diana\nSylvester -> Henrik\nTanja -> Sylvester\nAlbin -> Tanja\n";
-
   // src/world/tilemap.ts
   var TILE_SIZE = 16;
   var MAP_COLS = 32;
@@ -1209,472 +1046,364 @@
     }
   }
 
-  // src/entities/sight.ts
-  var DEFAULT_CONE_OF_SIGHT_DISTANCE = 15 * TILE_SIZE;
-  var DEFAULT_LINE_OF_SIGHT_POINTS = 20;
-  var DEFAULT_CONE_OF_SIGHT_FOV = 45 * Math.PI / 180;
-  var LineOfSight = class {
-    constructor(position, direction, distance, map, maxPoints = DEFAULT_LINE_OF_SIGHT_POINTS, ignoreTilePred) {
-      __publicField(this, "position");
-      __publicField(this, "direction");
-      __publicField(this, "distance");
-      __publicField(this, "map");
-      __publicField(this, "maxPoints");
-      __publicField(this, "boxes", []);
-      __publicField(this, "ignoreTilePred");
-      __publicField(this, "callbacks", []);
-      this.position = { ...position };
-      this.direction = direction;
-      this.distance = distance;
-      this.map = map;
-      this.maxPoints = Math.max(1, Math.floor(maxPoints));
-      this.ignoreTilePred = ignoreTilePred;
-      this.recomputeBoxes();
-    }
-    /**
-     * Number of bounding boxes that were spawned (getter `n`).
-     */
-    get n() {
-      return this.boxes.length;
-    }
-    /**
-     * Returns the point (center of the box) of the i-th box.
-     */
-    points(i) {
-      if (i < 0 || i >= this.boxes.length) {
-        return { ...this.position };
-      }
-      const b = this.boxes[i];
-      return {
-        x: b.x + b.width / 2,
-        y: b.y + b.height / 2
-      };
-    }
-    onDetection(cb) {
-      this.callbacks.push(cb);
-      return () => {
-        const idx = this.callbacks.indexOf(cb);
-        if (idx !== -1) {
-          this.callbacks.splice(idx, 1);
-        }
-      };
-    }
-    recomputeBoxes() {
-      this.boxes = [];
-      const dirX = Math.cos(this.direction);
-      const dirY = Math.sin(this.direction);
-      const distanceVector = {
-        x: dirX * this.distance,
-        y: dirY * this.distance
-      };
-      for (let i = 0; i < this.maxPoints; i++) {
-        const px = this.position.x + distanceVector.x / this.maxPoints * i;
-        const py = this.position.y + distanceVector.y / this.maxPoints * i;
-        const box = {
-          x: px,
-          y: py,
-          width: 4,
-          height: 4
-        };
-        this.boxes.push(box);
-        if (this.map && isRectCollidingWithMap(
-          this.map,
-          box.x,
-          box.y,
-          box.width,
-          box.height,
-          false,
-          this.ignoreTilePred
-        )) {
-          break;
-        }
-      }
-    }
-    checkDetection(player) {
-      for (const box of this.boxes) {
-        if (rectsIntersect(player, box)) {
-          for (const cb of this.callbacks) {
-            cb(player);
-          }
-          return true;
-        }
-      }
-      return false;
-    }
-  };
-  var _ConeOfSight = class _ConeOfSight {
-    constructor(position, direction, distance = DEFAULT_CONE_OF_SIGHT_DISTANCE, fovOrMap = DEFAULT_CONE_OF_SIGHT_FOV, mapOrFov) {
-      __publicField(this, "position");
-      __publicField(this, "direction");
-      __publicField(this, "distance");
-      __publicField(this, "fieldOfView");
-      __publicField(this, "map");
-      __publicField(this, "lines", []);
-      __publicField(this, "sightPolygon", []);
-      __publicField(this, "callbacks", []);
-      this.position = { ...position };
-      this.direction = direction;
-      this.distance = distance;
-      if (typeof fovOrMap === "number") {
-        this.fieldOfView = fovOrMap;
-        this.map = typeof mapOrFov === "object" ? mapOrFov : void 0;
-      } else {
-        this.map = fovOrMap;
-        this.fieldOfView = typeof mapOrFov === "number" ? mapOrFov : DEFAULT_CONE_OF_SIGHT_FOV;
-      }
-      this.recomputeLines();
-    }
-    onDetection(cb) {
-      this.callbacks.push(cb);
-      return () => {
-        const idx = this.callbacks.indexOf(cb);
-        if (idx !== -1) {
-          this.callbacks.splice(idx, 1);
-        }
-      };
-    }
-    recomputeLines() {
-      const angles = [
-        this.direction - this.fieldOfView / 2,
-        this.direction - this.fieldOfView / 4,
-        this.direction,
-        this.direction + this.fieldOfView / 4,
-        this.direction + this.fieldOfView / 2
-      ];
-      this.lines = angles.map(
-        (ang) => new LineOfSight(this.position, ang, this.distance, this.map)
-      );
-      this.sightPolygon = [
-        { ...this.position },
-        ...this.lines.map((line) => line.points(line.n - 1))
-      ];
-    }
-    getAllBoxes() {
-      const all = [];
-      for (const line of this.lines) {
-        all.push(...line.boxes);
-      }
-      return all;
-    }
-    checkDetection(player) {
-      if (_ConeOfSight.cheatMode) {
-        return false;
-      }
-      let detected = false;
-      for (const line of this.lines) {
-        if (line.checkDetection(player)) {
-          detected = true;
-        }
-      }
-      if (detected) {
-        for (const cb of this.callbacks) {
-          cb(player);
-        }
-      }
-      return detected;
-    }
-  };
-  __publicField(_ConeOfSight, "cheatMode", false);
-  var ConeOfSight = _ConeOfSight;
-
-  // src/entities/cat.ts
-  var CAT_START_X = 26.5 * TILE_SIZE;
-  var CAT_START_Y = 17 * TILE_SIZE;
-  var CAT_MAX_SPEED = 60;
-  var CAT_ACCELERATION = 120;
-  var CAT_DECELERATION = 100;
-  var EXTRA_ROOM_BOUNDS = {
-    x: 25.5 * TILE_SIZE,
-    y: 11 * TILE_SIZE,
-    width: 2.5 * TILE_SIZE,
-    height: 7 * TILE_SIZE
-  };
-  var CAT_STOP_FLEE_DISTANCE = 5 * TILE_SIZE;
-  var CAT_RETRIGGER_FLEE_DISTANCE = 2 * TILE_SIZE;
-  var MAX_CAT_HEALTH = 500;
-  var CAT_ARMOR_DAMAGE_MULTIPLIER = 1;
-  var CAT_HOSTILE_JUMP_SPEED = 95;
-  var CAT_JUMP_CYCLE_SECONDS = 0.55;
-  var CAT_JUMP_PEAK_Z = 13.5;
-  var CAT_LATCH_DURATION_SECONDS = 10;
-  var CAT_LATCH_DAMAGE_PER_SECOND = 5;
-  var CAT_LATCH_TICK_INTERVAL_SECONDS = 1;
-  var CAT_DELAYED_HEALTH_RATE = 40;
-  function createCat(x = CAT_START_X, y = CAT_START_Y) {
+  // src/entities/dog.ts
+  var DOG_START_X = 26.5 * TILE_SIZE;
+  var DOG_START_Y = 12.5 * TILE_SIZE;
+  var DOG_MAX_SPEED = 37;
+  var DOG_ACCELERATION = 95;
+  var DOG_DECELERATION = 90;
+  var DOG_AGGRO_DISTANCE = 6.5 * TILE_SIZE;
+  var DOG_DEAGGRO_DISTANCE = 10.5 * TILE_SIZE;
+  function createDog(x = DOG_START_X, y = DOG_START_Y) {
     return {
       x,
       y,
-      width: 10,
-      height: 10,
+      width: 12,
+      height: 12,
       vx: 0,
       vy: 0,
-      maxSpeed: CAT_MAX_SPEED,
-      acceleration: CAT_ACCELERATION,
-      deceleration: CAT_DECELERATION,
-      mode: "standing",
+      maxSpeed: DOG_MAX_SPEED,
+      acceleration: DOG_ACCELERATION,
+      deceleration: DOG_DECELERATION,
+      mode: "waiting",
       facing: "left",
-      yaw: Math.PI / 2,
+      yaw: Math.PI,
       animTimer: 0,
-      hasBeenActivated: false,
-      wallForceDirX: 0,
-      wallForceDirY: 0,
-      health: MAX_CAT_HEALTH,
-      delayedHealth: MAX_CAT_HEALTH,
-      delayedHealthRate: CAT_DELAYED_HEALTH_RATE,
-      jumpZ: 0,
-      jumpPhase: 0,
-      latchTimer: 0,
-      latchDamageAccum: 0,
-      blinkRedTimer: 0
+      heartSpawnTimer: 0,
+      hearts: []
     };
   }
-  function applyCatDamage(cat, rawDamage) {
-    if (cat.mode === "dead" || rawDamage <= 0) {
-      return false;
-    }
-    const prevMode = cat.mode;
-    const armorDamage = rawDamage * CAT_ARMOR_DAMAGE_MULTIPLIER;
-    cat.health = Math.max(0, cat.health - armorDamage);
-    cat.blinkRedTimer = Math.max(cat.blinkRedTimer, 0.35);
-    if (cat.health <= 0) {
-      cat.mode = "dead";
-      cat.vx = 0;
-      cat.vy = 0;
-      cat.jumpZ = 0;
-      cat.latchTimer = 0;
-      cat.latchDamageAccum = 0;
-      debugLog(`Cat state changed: ${prevMode} -> dead`);
-      return true;
-    }
-    if (cat.mode !== "latched") {
-      cat.hasBeenActivated = true;
-      cat.mode = "hostile";
-      if (prevMode !== "hostile") {
-        cat.jumpPhase = 0;
-        debugLog(`Cat state changed: ${prevMode} -> hostile`);
-      }
-    }
-    return true;
-  }
-  function updateCat(cat, player, dtSeconds, map, solidObstacles = [], onDamagePlayer) {
-    if (cat.delayedHealth > cat.health) {
-      cat.delayedHealth = Math.max(
-        cat.health,
-        cat.delayedHealth - cat.delayedHealthRate * dtSeconds
-      );
-    } else if (cat.delayedHealth < cat.health) {
-      cat.delayedHealth = cat.health;
-    }
-    if (cat.mode === "dead") {
-      cat.vx = 0;
-      cat.vy = 0;
-      cat.jumpZ = 0;
-      return;
-    }
-    const catCenterX = cat.x + cat.width / 2;
-    const catCenterY = cat.y + cat.height / 2;
+  function updateDog(dog, player, dtSeconds, map, solidObstacles = [], speedMultiplier = 1) {
+    const dogCenterX = dog.x + dog.width / 2;
+    const dogCenterY = dog.y + dog.height / 2;
     const playerCenterX = player.x + player.width / 2;
     const playerCenterY = player.y + player.height / 2;
-    const dx = playerCenterX - catCenterX;
-    const dy = playerCenterY - catCenterY;
+    const dx = playerCenterX - dogCenterX;
+    const dy = playerCenterY - dogCenterY;
     const dist = Math.hypot(dx, dy);
+    if (dog.mode === "waiting" && dist <= DOG_AGGRO_DISTANCE) {
+      dog.mode = "chasing";
+      dog.heartSpawnTimer = 0;
+    } else if (dog.mode === "chasing" && dist >= DOG_DEAGGRO_DISTANCE) {
+      dog.mode = "waiting";
+    }
+    const effectiveMaxSpeed = dog.maxSpeed * speedMultiplier;
+    if (dog.mode === "chasing") {
+      const ux = dist > 1e-3 ? dx / dist : 0;
+      const uy = dist > 1e-3 ? dy / dist : 0;
+      const targetVx = ux * effectiveMaxSpeed;
+      const targetVy = uy * effectiveMaxSpeed;
+      const dvx = targetVx - dog.vx;
+      const dvy = targetVy - dog.vy;
+      const dvLen = Math.hypot(dvx, dvy);
+      const maxDeltaV = dog.acceleration * dtSeconds;
+      if (dvLen <= maxDeltaV || dvLen === 0) {
+        dog.vx = targetVx;
+        dog.vy = targetVy;
+      } else {
+        dog.vx += dvx / dvLen * maxDeltaV;
+        dog.vy += dvy / dvLen * maxDeltaV;
+      }
+      if (Math.abs(dog.vx) > 2) {
+        dog.facing = dog.vx < 0 ? "left" : "right";
+      } else if (Math.abs(dx) > 0.5) {
+        dog.facing = dx < 0 ? "left" : "right";
+      }
+    } else {
+      const speed = Math.hypot(dog.vx, dog.vy);
+      const maxDrop = dog.deceleration * dtSeconds;
+      if (speed <= maxDrop) {
+        dog.vx = 0;
+        dog.vy = 0;
+      } else {
+        dog.vx -= dog.vx / speed * maxDrop;
+        dog.vy -= dog.vy / speed * maxDrop;
+      }
+    }
     const collidesAt = (testX, testY) => {
-      if (isRectCollidingWithMap(map, testX, testY, cat.width, cat.height)) {
+      if (isRectCollidingWithMap(map, testX, testY, dog.width, dog.height)) {
         return true;
       }
       const testRect = {
         x: testX,
         y: testY,
-        width: cat.width,
-        height: cat.height
+        width: dog.width,
+        height: dog.height
       };
       return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
     };
-    if (cat.mode === "latched") {
-      cat.blinkRedTimer += dtSeconds;
-      cat.animTimer += dtSeconds;
-      const playerYaw = typeof player.yaw === "number" ? player.yaw : player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
-      const faceOffset = 3.2;
-      cat.x = playerCenterX + Math.cos(playerYaw) * faceOffset - cat.width * 0.5;
-      cat.y = playerCenterY + Math.sin(playerYaw) * faceOffset - cat.height * 0.5;
-      cat.vx = 0;
-      cat.vy = 0;
-      cat.yaw = playerYaw + Math.PI;
-      cat.facing = Math.cos(cat.yaw) < 0 ? "left" : "right";
-      cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
-      const step = Math.min(dtSeconds, cat.latchTimer);
-      cat.latchTimer = Math.max(0, cat.latchTimer - dtSeconds);
-      cat.latchDamageAccum += step;
-      while (cat.latchDamageAccum >= CAT_LATCH_TICK_INTERVAL_SECONDS - 1e-6) {
-        cat.latchDamageAccum -= CAT_LATCH_TICK_INTERVAL_SECONDS;
-        onDamagePlayer?.(CAT_LATCH_DAMAGE_PER_SECOND);
+    if (dog.vx !== 0 || dog.vy !== 0) {
+      if (Math.hypot(dog.vx, dog.vy) > 0.5) {
+        dog.yaw = Math.atan2(dog.vy, dog.vx);
       }
-      if (cat.latchTimer <= 1e-6) {
-        cat.mode = "flee";
-        cat.hasBeenActivated = true;
-        cat.jumpZ = 0;
-        cat.jumpPhase = 0;
-        cat.latchTimer = 0;
-        cat.latchDamageAccum = 0;
-        cat.blinkRedTimer = 0;
-        const awayYaw = playerYaw;
-        const fleeKickX = Math.cos(awayYaw) * 8;
-        const fleeKickY = Math.sin(awayYaw) * 8;
-        if (!collidesAt(cat.x + fleeKickX, cat.y + fleeKickY)) {
-          cat.x += fleeKickX;
-          cat.y += fleeKickY;
+      dog.animTimer += dtSeconds;
+      const nextX = dog.x + dog.vx * dtSeconds;
+      if (!collidesAt(nextX, dog.y)) {
+        dog.x = nextX;
+      } else {
+        dog.vx = 0;
+      }
+      const nextY = dog.y + dog.vy * dtSeconds;
+      if (!collidesAt(dog.x, nextY)) {
+        dog.y = nextY;
+      } else {
+        dog.vy = 0;
+      }
+    }
+    for (let i = dog.hearts.length - 1; i >= 0; i--) {
+      const h = dog.hearts[i];
+      h.age += dtSeconds;
+      h.x += h.vx * dtSeconds;
+      h.y += h.vy * dtSeconds;
+      if (h.age >= h.maxAge) {
+        dog.hearts.splice(i, 1);
+      }
+    }
+    if (dog.mode === "chasing") {
+      dog.heartSpawnTimer -= dtSeconds;
+      while (dog.heartSpawnTimer <= 0) {
+        const phase = dog.hearts.length + Math.floor(dog.animTimer * 10);
+        const offsetX = (phase % 3 - 1) * 4;
+        dog.hearts.push({
+          x: dog.x + dog.width / 2 + offsetX,
+          y: dog.y - 2,
+          vx: offsetX * 2.5,
+          vy: -16,
+          age: 0,
+          maxAge: 0.85
+        });
+        dog.heartSpawnTimer += 0.22;
+      }
+    }
+    return rectsIntersect(dog, player);
+  }
+
+  // src/entities/snowball.ts
+  var SNOWBALL_SPEED = 110;
+  var THROW_INTERVAL_SECONDS = 2.4;
+  var HIT_BLINK_DURATION_SECONDS = 2;
+  function createDrivewayThrowers() {
+    const rowY = 16 * TILE_SIZE + 2;
+    const leftX = 12 * TILE_SIZE + 2;
+    const rightX = 18 * TILE_SIZE + 2;
+    return [
+      {
+        id: "thrower-sylvester",
+        name: "Sylvester",
+        x: leftX,
+        y: rowY,
+        width: 12,
+        height: 12,
+        facing: "right",
+        targetX: rightX,
+        throwInterval: THROW_INTERVAL_SECONDS,
+        // Throw shortly after level starts/resets
+        throwTimer: 0.6
+      },
+      {
+        id: "thrower-annelotte",
+        name: "Annelotte",
+        x: rightX,
+        y: rowY,
+        width: 12,
+        height: 12,
+        facing: "left",
+        targetX: leftX,
+        throwInterval: THROW_INTERVAL_SECONDS,
+        // Staggered so they alternate throwing back and forth across the driveway
+        throwTimer: 1.8
+      }
+    ];
+  }
+  function spawnSnowballFromThrower(thrower) {
+    const dir = thrower.facing === "right" ? 1 : -1;
+    return {
+      x: thrower.facing === "right" ? thrower.x + thrower.width : thrower.x - 6,
+      y: thrower.y + 3,
+      width: 6,
+      height: 6,
+      vx: dir * SNOWBALL_SPEED,
+      vy: 0,
+      targetX: thrower.targetX
+    };
+  }
+  function updateSnowballFight(throwers, snowballs, player, dtSeconds) {
+    for (const thrower of throwers) {
+      thrower.throwTimer -= dtSeconds;
+      if (thrower.throwTimer <= 0) {
+        thrower.throwTimer += thrower.throwInterval;
+        snowballs.push(spawnSnowballFromThrower(thrower));
+      }
+    }
+    for (let i = snowballs.length - 1; i >= 0; i--) {
+      const sb = snowballs[i];
+      sb.x += sb.vx * dtSeconds;
+      sb.y += sb.vy * dtSeconds;
+      if (rectsIntersect(sb, player)) {
+        return true;
+      }
+      if (sb.vx > 0 && sb.x >= sb.targetX || sb.vx < 0 && sb.x + sb.width <= sb.targetX + 12) {
+        snowballs.splice(i, 1);
+      }
+    }
+    return false;
+  }
+
+  // src/world/interaction.ts
+  var INTERACTION_MAX_GAP_PX = 6;
+  function rectEdgeDistance(a, b) {
+    const dx = Math.max(0, b.x - (a.x + a.width), a.x - (b.x + b.width));
+    const dy = Math.max(0, b.y - (a.y + a.height), a.y - (b.y + b.height));
+    return Math.hypot(dx, dy);
+  }
+  function buildInteractables(throwers, options = {}) {
+    const {
+      hasLadder = false,
+      ladderPlaced = false,
+      isOnRoof = false,
+      motorcycleStatus = "parked",
+      alexNpc
+    } = options;
+    if (isOnRoof) {
+      return [
+        {
+          id: "roof-ladder",
+          bounds: { ...ROOF_LADDER_BOUNDS },
+          promptText: "Climb down ladder",
+          dialogueLines: []
+        },
+        {
+          id: "roof-chimney",
+          bounds: { ...ROOF_CHIMNEY_BOUNDS },
+          promptText: "Climb down chimney",
+          dialogueLines: []
+        },
+        {
+          id: "roof-rudolph",
+          bounds: { ...ROOF_RUDOLPH_BOUNDS },
+          promptText: "Inspect Rudolph",
+          dialogueLines: []
         }
-        cat.vx = Math.cos(awayYaw) * cat.maxSpeed;
-        cat.vy = Math.sin(awayYaw) * cat.maxSpeed;
-        cat.yaw = awayYaw;
-        cat.facing = cat.vx < 0 ? "left" : "right";
-        debugLog("Cat state changed: latched -> flee");
-      }
-      return;
+      ];
     }
-    if (cat.mode === "hostile") {
-      cat.blinkRedTimer += dtSeconds;
-      cat.animTimer += dtSeconds;
-      cat.jumpPhase = (cat.jumpPhase + dtSeconds / CAT_JUMP_CYCLE_SECONDS) % 1;
-      cat.jumpZ = 4 * CAT_JUMP_PEAK_Z * cat.jumpPhase * (1 - cat.jumpPhase);
-      const ux = dist > 1e-3 ? dx / dist : 1;
-      const uy = dist > 1e-3 ? dy / dist : 0;
-      cat.vx = ux * CAT_HOSTILE_JUMP_SPEED;
-      cat.vy = uy * CAT_HOSTILE_JUMP_SPEED;
-      cat.yaw = Math.atan2(uy, ux);
-      cat.facing = ux < 0 ? "left" : "right";
-      const stepDist = Math.min(dist, CAT_HOSTILE_JUMP_SPEED * dtSeconds);
-      const nextX = cat.x + ux * stepDist;
-      if (!collidesAt(nextX, cat.y)) {
-        cat.x = nextX;
-      } else {
-        cat.vx = 0;
+    const list = throwers.map((t) => {
+      if (t.id === "thrower-sylvester") {
+        return {
+          id: t.id,
+          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+          promptText: "Talk to Sylvester",
+          dialogueLines: ["Watch out! Annelotte is crazy!"],
+          speakerPortrait: "Sylvester"
+        };
       }
-      const nextY = cat.y + uy * stepDist;
-      if (!collidesAt(cat.x, nextY)) {
-        cat.y = nextY;
-      } else {
-        cat.vy = 0;
+      if (t.id === "thrower-annelotte") {
+        return {
+          id: t.id,
+          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+          promptText: "Talk to Annelotte",
+          dialogueLines: [
+            "It's good to talk about your feelings... how does a snowball in your face feel?"
+          ],
+          speakerPortrait: "Annelotte"
+        };
       }
-      const newDist = Math.hypot(
-        playerCenterX - (cat.x + cat.width * 0.5),
-        playerCenterY - (cat.y + cat.height * 0.5)
-      );
-      if (rectsIntersect(cat, player) || newDist <= 12) {
-        cat.mode = "latched";
-        cat.latchTimer = CAT_LATCH_DURATION_SECONDS;
-        cat.latchDamageAccum = 0;
-        cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
-        cat.vx = 0;
-        cat.vy = 0;
-        debugLog("Cat state changed: hostile -> latched");
-      }
-      return;
+      return {
+        id: t.id,
+        bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+        promptText: "Talk to",
+        dialogueLines: ["Watch out!"]
+      };
+    });
+    list.push({
+      id: "house-double-door",
+      bounds: {
+        x: 9 * TILE_SIZE + 8,
+        y: HOUSE_DOOR_ROW * TILE_SIZE,
+        width: TILE_SIZE * 2,
+        height: TILE_SIZE
+      },
+      promptText: "Open door",
+      dialogueLines: ["It's locked."]
+    });
+    list.push({
+      id: "house-door",
+      bounds: {
+        x: HOUSE_DOOR_COL * TILE_SIZE,
+        y: HOUSE_DOOR_ROW * TILE_SIZE,
+        width: TILE_SIZE,
+        height: TILE_SIZE
+      },
+      promptText: "Open door",
+      dialogueLines: [
+        "It's locked.",
+        "There has to be another way into the house..."
+      ]
+    });
+    if (motorcycleStatus === "parked") {
+      list.push({
+        id: "motorcycle",
+        bounds: {
+          x: MOTORCYCLE_START_X,
+          y: MOTORCYCLE_START_Y,
+          width: TILE_SIZE * 2,
+          height: TILE_SIZE
+        },
+        promptText: "Drive",
+        dialogueLines: []
+      });
     }
-    cat.jumpZ = 0;
-    cat.blinkRedTimer = 0;
-    const prevMode = cat.mode;
-    if (!cat.hasBeenActivated) {
-      if (rectsIntersect(player, EXTRA_ROOM_BOUNDS)) {
-        cat.hasBeenActivated = true;
-        cat.mode = "flee";
-      }
-    } else {
-      if (cat.mode === "flee") {
-        if (dist > CAT_STOP_FLEE_DISTANCE) {
-          cat.mode = "standing";
-        }
-      } else if (cat.mode === "standing") {
-        if (dist <= CAT_RETRIGGER_FLEE_DISTANCE) {
-          cat.mode = "flee";
-        }
-      }
+    if (!hasLadder && !ladderPlaced) {
+      list.push({
+        id: "ground-ladder",
+        bounds: { ...GROUND_LADDER_BOUNDS },
+        promptText: "Pick up",
+        dialogueLines: []
+      });
+      list.push({
+        id: "house-west-inspect",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Inspect",
+        dialogueLines: [
+          "Hmm.. looks like there is a chimney up there, but I can't reach it"
+        ]
+      });
+    } else if (hasLadder && !ladderPlaced) {
+      list.push({
+        id: "house-west-place-ladder",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Place ladder",
+        dialogueLines: []
+      });
+    } else if (ladderPlaced) {
+      list.push({
+        id: "house-west-climb-ladder",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Climb ladder",
+        dialogueLines: []
+      });
     }
-    if (cat.mode !== prevMode) {
-      debugLog(`Cat state changed: ${prevMode} -> ${cat.mode}`);
+    if (alexNpc) {
+      list.push({
+        id: "outside-alex",
+        bounds: { ...alexNpc },
+        promptText: "Talk to Alex",
+        dialogueLines: ["Just practicing my swings..."],
+        speakerPortrait: "Alex"
+      });
     }
-    if (cat.mode === "flee") {
-      const lookDist = 8;
-      const wallWest = collidesAt(cat.x - lookDist, cat.y);
-      const wallEast = collidesAt(cat.x + lookDist, cat.y);
-      const wallNorth = collidesAt(cat.x, cat.y - lookDist);
-      const wallSouth = collidesAt(cat.x, cat.y + lookDist);
-      let forceDirX = 0;
-      let forceDirY = 0;
-      if (wallWest) forceDirX += 1;
-      if (wallEast) forceDirX -= 1;
-      if (wallNorth) forceDirY += 1;
-      if (wallSouth) forceDirY -= 1;
-      if (forceDirX !== cat.wallForceDirX || forceDirY !== cat.wallForceDirY) {
-        debugLog(
-          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (${forceDirX}, ${forceDirY})`
-        );
-        cat.wallForceDirX = forceDirX;
-        cat.wallForceDirY = forceDirY;
-      }
-      let ux = dist > 1e-3 ? -dx / dist : -1;
-      let uy = dist > 1e-3 ? -dy / dist : 0;
-      const targetVx = ux * cat.maxSpeed;
-      const targetVy = uy * cat.maxSpeed;
-      const dvx = targetVx - cat.vx;
-      const dvy = targetVy - cat.vy;
-      const dvLen = Math.hypot(dvx, dvy);
-      const maxDeltaV = cat.acceleration * dtSeconds;
-      if (dvLen <= maxDeltaV || dvLen === 0) {
-        cat.vx = targetVx;
-        cat.vy = targetVy;
-      } else {
-        cat.vx += dvx / dvLen * maxDeltaV;
-        cat.vy += dvy / dvLen * maxDeltaV;
-      }
-      if (forceDirX !== 0 || forceDirY !== 0) {
-        const forceLen = Math.hypot(forceDirX, forceDirY);
-        const normFx = forceDirX / forceLen;
-        const normFy = forceDirY / forceLen;
-        cat.vx += normFx * cat.acceleration * dtSeconds;
-        cat.vy += normFy * cat.acceleration * dtSeconds;
-      }
-      if (Math.abs(cat.vx) > 2) {
-        cat.facing = cat.vx < 0 ? "left" : "right";
-      } else if (Math.abs(dx) > 0.5) {
-        cat.facing = dx > 0 ? "left" : "right";
-      }
-    } else {
-      if (cat.wallForceDirX !== 0 || cat.wallForceDirY !== 0) {
-        debugLog(
-          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (0, 0)`
-        );
-        cat.wallForceDirX = 0;
-        cat.wallForceDirY = 0;
-      }
-      const speed = Math.hypot(cat.vx, cat.vy);
-      const maxDrop = cat.deceleration * dtSeconds;
-      if (speed <= maxDrop) {
-        cat.vx = 0;
-        cat.vy = 0;
-      } else {
-        cat.vx -= cat.vx / speed * maxDrop;
-        cat.vy -= cat.vy / speed * maxDrop;
+    return list;
+  }
+  function findNearbyInteractable(player, interactables, maxGapPx = INTERACTION_MAX_GAP_PX) {
+    let closest = null;
+    let bestDist = Infinity;
+    for (const item of interactables) {
+      const dist = rectEdgeDistance(player, item.bounds);
+      if (dist <= maxGapPx && dist < bestDist) {
+        bestDist = dist;
+        closest = item;
       }
     }
-    if (cat.vx !== 0 || cat.vy !== 0) {
-      if (Math.hypot(cat.vx, cat.vy) > 0.5) {
-        cat.yaw = Math.atan2(cat.vy, cat.vx);
-      }
-      cat.animTimer += dtSeconds;
-      const nextX = cat.x + cat.vx * dtSeconds;
-      if (!collidesAt(nextX, cat.y)) {
-        cat.x = nextX;
-      } else {
-        cat.vx = 0;
-      }
-      const nextY = cat.y + cat.vy * dtSeconds;
-      if (!collidesAt(cat.x, nextY)) {
-        cat.y = nextY;
-      } else {
-        cat.vy = 0;
-      }
-    }
+    return closest;
   }
 
   // src/world/pathfinding.ts
@@ -2197,6 +1926,532 @@
       moved = true;
     }
     npc.isMoving = moved;
+  }
+
+  // src/entities/sight.ts
+  var DEFAULT_CONE_OF_SIGHT_DISTANCE = 15 * TILE_SIZE;
+  var DEFAULT_LINE_OF_SIGHT_POINTS = 20;
+  var DEFAULT_CONE_OF_SIGHT_FOV = 45 * Math.PI / 180;
+  var LineOfSight = class {
+    constructor(position, direction, distance, map, maxPoints = DEFAULT_LINE_OF_SIGHT_POINTS, ignoreTilePred) {
+      __publicField(this, "position");
+      __publicField(this, "direction");
+      __publicField(this, "distance");
+      __publicField(this, "map");
+      __publicField(this, "maxPoints");
+      __publicField(this, "boxes", []);
+      __publicField(this, "ignoreTilePred");
+      __publicField(this, "callbacks", []);
+      this.position = { ...position };
+      this.direction = direction;
+      this.distance = distance;
+      this.map = map;
+      this.maxPoints = Math.max(1, Math.floor(maxPoints));
+      this.ignoreTilePred = ignoreTilePred;
+      this.recomputeBoxes();
+    }
+    /**
+     * Number of bounding boxes that were spawned (getter `n`).
+     */
+    get n() {
+      return this.boxes.length;
+    }
+    /**
+     * Returns the point (center of the box) of the i-th box.
+     */
+    points(i) {
+      if (i < 0 || i >= this.boxes.length) {
+        return { ...this.position };
+      }
+      const b = this.boxes[i];
+      return {
+        x: b.x + b.width / 2,
+        y: b.y + b.height / 2
+      };
+    }
+    onDetection(cb) {
+      this.callbacks.push(cb);
+      return () => {
+        const idx = this.callbacks.indexOf(cb);
+        if (idx !== -1) {
+          this.callbacks.splice(idx, 1);
+        }
+      };
+    }
+    recomputeBoxes() {
+      this.boxes = [];
+      const dirX = Math.cos(this.direction);
+      const dirY = Math.sin(this.direction);
+      const distanceVector = {
+        x: dirX * this.distance,
+        y: dirY * this.distance
+      };
+      for (let i = 0; i < this.maxPoints; i++) {
+        const px = this.position.x + distanceVector.x / this.maxPoints * i;
+        const py = this.position.y + distanceVector.y / this.maxPoints * i;
+        const box = {
+          x: px,
+          y: py,
+          width: 4,
+          height: 4
+        };
+        this.boxes.push(box);
+        if (this.map && isRectCollidingWithMap(
+          this.map,
+          box.x,
+          box.y,
+          box.width,
+          box.height,
+          false,
+          this.ignoreTilePred
+        )) {
+          break;
+        }
+      }
+    }
+    checkDetection(player) {
+      for (const box of this.boxes) {
+        if (rectsIntersect(player, box)) {
+          for (const cb of this.callbacks) {
+            cb(player);
+          }
+          return true;
+        }
+      }
+      return false;
+    }
+  };
+  var _ConeOfSight = class _ConeOfSight {
+    constructor(position, direction, distance = DEFAULT_CONE_OF_SIGHT_DISTANCE, fovOrMap = DEFAULT_CONE_OF_SIGHT_FOV, mapOrFov) {
+      __publicField(this, "position");
+      __publicField(this, "direction");
+      __publicField(this, "distance");
+      __publicField(this, "fieldOfView");
+      __publicField(this, "map");
+      __publicField(this, "lines", []);
+      __publicField(this, "sightPolygon", []);
+      __publicField(this, "callbacks", []);
+      this.position = { ...position };
+      this.direction = direction;
+      this.distance = distance;
+      if (typeof fovOrMap === "number") {
+        this.fieldOfView = fovOrMap;
+        this.map = typeof mapOrFov === "object" ? mapOrFov : void 0;
+      } else {
+        this.map = fovOrMap;
+        this.fieldOfView = typeof mapOrFov === "number" ? mapOrFov : DEFAULT_CONE_OF_SIGHT_FOV;
+      }
+      this.recomputeLines();
+    }
+    onDetection(cb) {
+      this.callbacks.push(cb);
+      return () => {
+        const idx = this.callbacks.indexOf(cb);
+        if (idx !== -1) {
+          this.callbacks.splice(idx, 1);
+        }
+      };
+    }
+    recomputeLines() {
+      const angles = [
+        this.direction - this.fieldOfView / 2,
+        this.direction - this.fieldOfView / 4,
+        this.direction,
+        this.direction + this.fieldOfView / 4,
+        this.direction + this.fieldOfView / 2
+      ];
+      this.lines = angles.map(
+        (ang) => new LineOfSight(this.position, ang, this.distance, this.map)
+      );
+      this.sightPolygon = [
+        { ...this.position },
+        ...this.lines.map((line) => line.points(line.n - 1))
+      ];
+    }
+    getAllBoxes() {
+      const all = [];
+      for (const line of this.lines) {
+        all.push(...line.boxes);
+      }
+      return all;
+    }
+    checkDetection(player) {
+      if (_ConeOfSight.cheatMode) {
+        return false;
+      }
+      let detected = false;
+      for (const line of this.lines) {
+        if (line.checkDetection(player)) {
+          detected = true;
+        }
+      }
+      if (detected) {
+        for (const cb of this.callbacks) {
+          cb(player);
+        }
+      }
+      return detected;
+    }
+  };
+  __publicField(_ConeOfSight, "cheatMode", false);
+  var ConeOfSight = _ConeOfSight;
+
+  // src/core/debugConsole.ts
+  var DebugConsole = class {
+    constructor(maxLines = 50) {
+      __publicField(this, "lines", []);
+      __publicField(this, "maxLines");
+      __publicField(this, "element", null);
+      this.maxLines = maxLines;
+    }
+    log(message) {
+      this.lines.push(message);
+      if (this.lines.length > this.maxLines) {
+        this.lines.splice(0, this.lines.length - this.maxLines);
+      }
+      this.render();
+    }
+    getLines() {
+      return this.lines;
+    }
+    clear() {
+      this.lines = [];
+      this.render();
+    }
+    attach(frame) {
+      if (!frame || typeof document === "undefined") {
+        return () => {
+        };
+      }
+      frame.classList.add("debug");
+      const el = document.createElement("pre");
+      el.id = "viewport-debug-text";
+      frame.appendChild(el);
+      this.element = el;
+      this.render();
+      return () => {
+        if (this.element === el) {
+          this.element = null;
+        }
+        el.remove();
+        frame.classList.remove("debug");
+      };
+    }
+    render() {
+      if (this.element) {
+        this.element.textContent = this.lines.join("\n");
+      }
+    }
+  };
+  var debugConsole = new DebugConsole();
+  function debugLog(message) {
+    debugConsole.log(message);
+  }
+  function attachDebugConsole(frame) {
+    return debugConsole.attach(frame);
+  }
+  if (typeof globalThis !== "undefined") {
+    globalThis.debugLog = debugLog;
+  }
+
+  // src/entities/cat.ts
+  var CAT_START_X = 26.5 * TILE_SIZE;
+  var CAT_START_Y = 17 * TILE_SIZE;
+  var CAT_MAX_SPEED = 60;
+  var CAT_ACCELERATION = 120;
+  var CAT_DECELERATION = 100;
+  var EXTRA_ROOM_BOUNDS = {
+    x: 25.5 * TILE_SIZE,
+    y: 11 * TILE_SIZE,
+    width: 2.5 * TILE_SIZE,
+    height: 7 * TILE_SIZE
+  };
+  var CAT_STOP_FLEE_DISTANCE = 5 * TILE_SIZE;
+  var CAT_RETRIGGER_FLEE_DISTANCE = 2 * TILE_SIZE;
+  var MAX_CAT_HEALTH = 500;
+  var CAT_ARMOR_DAMAGE_MULTIPLIER = 1;
+  var CAT_HOSTILE_JUMP_SPEED = 95;
+  var CAT_JUMP_CYCLE_SECONDS = 0.55;
+  var CAT_JUMP_PEAK_Z = 13.5;
+  var CAT_LATCH_DURATION_SECONDS = 10;
+  var CAT_LATCH_DAMAGE_PER_SECOND = 5;
+  var CAT_LATCH_TICK_INTERVAL_SECONDS = 1;
+  var CAT_DELAYED_HEALTH_RATE = 40;
+  function createCat(x = CAT_START_X, y = CAT_START_Y) {
+    return {
+      x,
+      y,
+      width: 10,
+      height: 10,
+      vx: 0,
+      vy: 0,
+      maxSpeed: CAT_MAX_SPEED,
+      acceleration: CAT_ACCELERATION,
+      deceleration: CAT_DECELERATION,
+      mode: "standing",
+      facing: "left",
+      yaw: Math.PI / 2,
+      animTimer: 0,
+      hasBeenActivated: false,
+      wallForceDirX: 0,
+      wallForceDirY: 0,
+      health: MAX_CAT_HEALTH,
+      delayedHealth: MAX_CAT_HEALTH,
+      delayedHealthRate: CAT_DELAYED_HEALTH_RATE,
+      jumpZ: 0,
+      jumpPhase: 0,
+      latchTimer: 0,
+      latchDamageAccum: 0,
+      blinkRedTimer: 0
+    };
+  }
+  function applyCatDamage(cat, rawDamage) {
+    if (cat.mode === "dead" || rawDamage <= 0) {
+      return false;
+    }
+    const prevMode = cat.mode;
+    const armorDamage = rawDamage * CAT_ARMOR_DAMAGE_MULTIPLIER;
+    cat.health = Math.max(0, cat.health - armorDamage);
+    cat.blinkRedTimer = Math.max(cat.blinkRedTimer, 0.35);
+    if (cat.health <= 0) {
+      cat.mode = "dead";
+      cat.vx = 0;
+      cat.vy = 0;
+      cat.jumpZ = 0;
+      cat.latchTimer = 0;
+      cat.latchDamageAccum = 0;
+      debugLog(`Cat state changed: ${prevMode} -> dead`);
+      return true;
+    }
+    if (cat.mode !== "latched") {
+      cat.hasBeenActivated = true;
+      cat.mode = "hostile";
+      if (prevMode !== "hostile") {
+        cat.jumpPhase = 0;
+        debugLog(`Cat state changed: ${prevMode} -> hostile`);
+      }
+    }
+    return true;
+  }
+  function updateCat(cat, player, dtSeconds, map, solidObstacles = [], onDamagePlayer) {
+    if (cat.delayedHealth > cat.health) {
+      cat.delayedHealth = Math.max(
+        cat.health,
+        cat.delayedHealth - cat.delayedHealthRate * dtSeconds
+      );
+    } else if (cat.delayedHealth < cat.health) {
+      cat.delayedHealth = cat.health;
+    }
+    if (cat.mode === "dead") {
+      cat.vx = 0;
+      cat.vy = 0;
+      cat.jumpZ = 0;
+      return;
+    }
+    const catCenterX = cat.x + cat.width / 2;
+    const catCenterY = cat.y + cat.height / 2;
+    const playerCenterX = player.x + player.width / 2;
+    const playerCenterY = player.y + player.height / 2;
+    const dx = playerCenterX - catCenterX;
+    const dy = playerCenterY - catCenterY;
+    const dist = Math.hypot(dx, dy);
+    const collidesAt = (testX, testY) => {
+      if (isRectCollidingWithMap(map, testX, testY, cat.width, cat.height)) {
+        return true;
+      }
+      const testRect = {
+        x: testX,
+        y: testY,
+        width: cat.width,
+        height: cat.height
+      };
+      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
+    };
+    if (cat.mode === "latched") {
+      cat.blinkRedTimer += dtSeconds;
+      cat.animTimer += dtSeconds;
+      const playerYaw = typeof player.yaw === "number" ? player.yaw : player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
+      const faceOffset = 3.2;
+      cat.x = playerCenterX + Math.cos(playerYaw) * faceOffset - cat.width * 0.5;
+      cat.y = playerCenterY + Math.sin(playerYaw) * faceOffset - cat.height * 0.5;
+      cat.vx = 0;
+      cat.vy = 0;
+      cat.yaw = playerYaw + Math.PI;
+      cat.facing = Math.cos(cat.yaw) < 0 ? "left" : "right";
+      cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
+      const step = Math.min(dtSeconds, cat.latchTimer);
+      cat.latchTimer = Math.max(0, cat.latchTimer - dtSeconds);
+      cat.latchDamageAccum += step;
+      while (cat.latchDamageAccum >= CAT_LATCH_TICK_INTERVAL_SECONDS - 1e-6) {
+        cat.latchDamageAccum -= CAT_LATCH_TICK_INTERVAL_SECONDS;
+        onDamagePlayer?.(CAT_LATCH_DAMAGE_PER_SECOND);
+      }
+      if (cat.latchTimer <= 1e-6) {
+        cat.mode = "flee";
+        cat.hasBeenActivated = true;
+        cat.jumpZ = 0;
+        cat.jumpPhase = 0;
+        cat.latchTimer = 0;
+        cat.latchDamageAccum = 0;
+        cat.blinkRedTimer = 0;
+        const awayYaw = playerYaw;
+        const fleeKickX = Math.cos(awayYaw) * 8;
+        const fleeKickY = Math.sin(awayYaw) * 8;
+        if (!collidesAt(cat.x + fleeKickX, cat.y + fleeKickY)) {
+          cat.x += fleeKickX;
+          cat.y += fleeKickY;
+        }
+        cat.vx = Math.cos(awayYaw) * cat.maxSpeed;
+        cat.vy = Math.sin(awayYaw) * cat.maxSpeed;
+        cat.yaw = awayYaw;
+        cat.facing = cat.vx < 0 ? "left" : "right";
+        debugLog("Cat state changed: latched -> flee");
+      }
+      return;
+    }
+    if (cat.mode === "hostile") {
+      cat.blinkRedTimer += dtSeconds;
+      cat.animTimer += dtSeconds;
+      cat.jumpPhase = (cat.jumpPhase + dtSeconds / CAT_JUMP_CYCLE_SECONDS) % 1;
+      cat.jumpZ = 4 * CAT_JUMP_PEAK_Z * cat.jumpPhase * (1 - cat.jumpPhase);
+      const ux = dist > 1e-3 ? dx / dist : 1;
+      const uy = dist > 1e-3 ? dy / dist : 0;
+      cat.vx = ux * CAT_HOSTILE_JUMP_SPEED;
+      cat.vy = uy * CAT_HOSTILE_JUMP_SPEED;
+      cat.yaw = Math.atan2(uy, ux);
+      cat.facing = ux < 0 ? "left" : "right";
+      const stepDist = Math.min(dist, CAT_HOSTILE_JUMP_SPEED * dtSeconds);
+      const nextX = cat.x + ux * stepDist;
+      if (!collidesAt(nextX, cat.y)) {
+        cat.x = nextX;
+      } else {
+        cat.vx = 0;
+      }
+      const nextY = cat.y + uy * stepDist;
+      if (!collidesAt(cat.x, nextY)) {
+        cat.y = nextY;
+      } else {
+        cat.vy = 0;
+      }
+      const newDist = Math.hypot(
+        playerCenterX - (cat.x + cat.width * 0.5),
+        playerCenterY - (cat.y + cat.height * 0.5)
+      );
+      if (rectsIntersect(cat, player) || newDist <= 12) {
+        cat.mode = "latched";
+        cat.latchTimer = CAT_LATCH_DURATION_SECONDS;
+        cat.latchDamageAccum = 0;
+        cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
+        cat.vx = 0;
+        cat.vy = 0;
+        debugLog("Cat state changed: hostile -> latched");
+      }
+      return;
+    }
+    cat.jumpZ = 0;
+    cat.blinkRedTimer = 0;
+    const prevMode = cat.mode;
+    if (!cat.hasBeenActivated) {
+      if (rectsIntersect(player, EXTRA_ROOM_BOUNDS)) {
+        cat.hasBeenActivated = true;
+        cat.mode = "flee";
+      }
+    } else {
+      if (cat.mode === "flee") {
+        if (dist > CAT_STOP_FLEE_DISTANCE) {
+          cat.mode = "standing";
+        }
+      } else if (cat.mode === "standing") {
+        if (dist <= CAT_RETRIGGER_FLEE_DISTANCE) {
+          cat.mode = "flee";
+        }
+      }
+    }
+    if (cat.mode !== prevMode) {
+      debugLog(`Cat state changed: ${prevMode} -> ${cat.mode}`);
+    }
+    if (cat.mode === "flee") {
+      const lookDist = 8;
+      const wallWest = collidesAt(cat.x - lookDist, cat.y);
+      const wallEast = collidesAt(cat.x + lookDist, cat.y);
+      const wallNorth = collidesAt(cat.x, cat.y - lookDist);
+      const wallSouth = collidesAt(cat.x, cat.y + lookDist);
+      let forceDirX = 0;
+      let forceDirY = 0;
+      if (wallWest) forceDirX += 1;
+      if (wallEast) forceDirX -= 1;
+      if (wallNorth) forceDirY += 1;
+      if (wallSouth) forceDirY -= 1;
+      if (forceDirX !== cat.wallForceDirX || forceDirY !== cat.wallForceDirY) {
+        debugLog(
+          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (${forceDirX}, ${forceDirY})`
+        );
+        cat.wallForceDirX = forceDirX;
+        cat.wallForceDirY = forceDirY;
+      }
+      let ux = dist > 1e-3 ? -dx / dist : -1;
+      let uy = dist > 1e-3 ? -dy / dist : 0;
+      const targetVx = ux * cat.maxSpeed;
+      const targetVy = uy * cat.maxSpeed;
+      const dvx = targetVx - cat.vx;
+      const dvy = targetVy - cat.vy;
+      const dvLen = Math.hypot(dvx, dvy);
+      const maxDeltaV = cat.acceleration * dtSeconds;
+      if (dvLen <= maxDeltaV || dvLen === 0) {
+        cat.vx = targetVx;
+        cat.vy = targetVy;
+      } else {
+        cat.vx += dvx / dvLen * maxDeltaV;
+        cat.vy += dvy / dvLen * maxDeltaV;
+      }
+      if (forceDirX !== 0 || forceDirY !== 0) {
+        const forceLen = Math.hypot(forceDirX, forceDirY);
+        const normFx = forceDirX / forceLen;
+        const normFy = forceDirY / forceLen;
+        cat.vx += normFx * cat.acceleration * dtSeconds;
+        cat.vy += normFy * cat.acceleration * dtSeconds;
+      }
+      if (Math.abs(cat.vx) > 2) {
+        cat.facing = cat.vx < 0 ? "left" : "right";
+      } else if (Math.abs(dx) > 0.5) {
+        cat.facing = dx > 0 ? "left" : "right";
+      }
+    } else {
+      if (cat.wallForceDirX !== 0 || cat.wallForceDirY !== 0) {
+        debugLog(
+          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (0, 0)`
+        );
+        cat.wallForceDirX = 0;
+        cat.wallForceDirY = 0;
+      }
+      const speed = Math.hypot(cat.vx, cat.vy);
+      const maxDrop = cat.deceleration * dtSeconds;
+      if (speed <= maxDrop) {
+        cat.vx = 0;
+        cat.vy = 0;
+      } else {
+        cat.vx -= cat.vx / speed * maxDrop;
+        cat.vy -= cat.vy / speed * maxDrop;
+      }
+    }
+    if (cat.vx !== 0 || cat.vy !== 0) {
+      if (Math.hypot(cat.vx, cat.vy) > 0.5) {
+        cat.yaw = Math.atan2(cat.vy, cat.vx);
+      }
+      cat.animTimer += dtSeconds;
+      const nextX = cat.x + cat.vx * dtSeconds;
+      if (!collidesAt(nextX, cat.y)) {
+        cat.x = nextX;
+      } else {
+        cat.vx = 0;
+      }
+      const nextY = cat.y + cat.vy * dtSeconds;
+      if (!collidesAt(cat.x, nextY)) {
+        cat.y = nextY;
+      } else {
+        cat.vy = 0;
+      }
+    }
   }
 
   // src/world/levels/levelUpstairs.ts
@@ -3494,879 +3749,6 @@
     }
   };
 
-  // src/rendering/math3d.ts
-  var MAIN_HOUSE_WALL_HEIGHT = 34;
-  var MAIN_HOUSE_ROOF_PEAK_ADD = 16;
-  var MAIN_HOUSE_ROOF_WALK_HEIGHT = 36;
-  var INDOOR_WALL_HEIGHT = 2 * TILE_SIZE;
-  function sub3(a, b) {
-    return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
-  }
-  function dot3(a, b) {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-  }
-  function cross3(a, b) {
-    return {
-      x: a.y * b.z - a.z * b.y,
-      y: a.z * b.x - a.x * b.z,
-      z: a.x * b.y - a.y * b.x
-    };
-  }
-  function length3(v) {
-    return Math.hypot(v.x, v.y, v.z);
-  }
-  function normalize3(v) {
-    const len = Math.hypot(v.x, v.y, v.z);
-    if (len < 1e-6) return { x: 0, y: 1, z: 0 };
-    return { x: v.x / len, y: v.y / len, z: v.z / len };
-  }
-  function wrapAngle(angle) {
-    let a = (angle + Math.PI) % (Math.PI * 2);
-    if (a < 0) a += Math.PI * 2;
-    return a - Math.PI;
-  }
-  function lerpAngle2(from, to, t) {
-    const diff = wrapAngle(to - from);
-    return wrapAngle(from + diff * Math.max(0, Math.min(1, t)));
-  }
-  function directionToYaw(facing) {
-    switch (facing) {
-      case "up":
-        return -Math.PI / 2;
-      case "down":
-        return Math.PI / 2;
-      case "left":
-        return Math.PI;
-      case "right":
-        return 0;
-    }
-  }
-  function yawToDirection(yaw) {
-    const dx = Math.cos(yaw);
-    const dy = Math.sin(yaw);
-    if (Math.abs(dy) >= Math.abs(dx)) {
-      return dy < 0 ? "up" : "down";
-    }
-    return dx < 0 ? "left" : "right";
-  }
-  function mat4Perspective(fovYRadians, aspect, near, far) {
-    const f = 1 / Math.tan(fovYRadians / 2);
-    const rangeInv = 1 / (near - far);
-    const out = new Float32Array(16);
-    out[0] = f / Math.max(0.01, aspect);
-    out[5] = f;
-    out[10] = far * rangeInv;
-    out[11] = -1;
-    out[14] = near * far * rangeInv;
-    out[15] = 0;
-    return out;
-  }
-  function mat4LookAt(eye, target, up) {
-    const zAxis = normalize3(sub3(eye, target));
-    let xAxis = cross3(up, zAxis);
-    if (length3(xAxis) < 1e-5) {
-      xAxis = { x: 1, y: 0, z: 0 };
-    } else {
-      xAxis = normalize3(xAxis);
-    }
-    const yAxis = cross3(zAxis, xAxis);
-    const out = new Float32Array(16);
-    out[0] = xAxis.x;
-    out[1] = yAxis.x;
-    out[2] = zAxis.x;
-    out[3] = 0;
-    out[4] = xAxis.y;
-    out[5] = yAxis.y;
-    out[6] = zAxis.y;
-    out[7] = 0;
-    out[8] = xAxis.z;
-    out[9] = yAxis.z;
-    out[10] = zAxis.z;
-    out[11] = 0;
-    out[12] = -dot3(xAxis, eye);
-    out[13] = -dot3(yAxis, eye);
-    out[14] = -dot3(zAxis, eye);
-    out[15] = 1;
-    return out;
-  }
-  function mat4Multiply(a, b) {
-    const out = new Float32Array(16);
-    for (let col = 0; col < 4; col++) {
-      const b0 = b[col * 4 + 0];
-      const b1 = b[col * 4 + 1];
-      const b2 = b[col * 4 + 2];
-      const b3 = b[col * 4 + 3];
-      out[col * 4 + 0] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
-      out[col * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
-      out[col * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
-      out[col * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
-    }
-    return out;
-  }
-  function projectWorldToScreen(pt, viewProj, viewportW, viewportH) {
-    const x = pt.x;
-    const y = pt.y;
-    const z = pt.z;
-    const cx = viewProj[0] * x + viewProj[4] * y + viewProj[8] * z + viewProj[12];
-    const cy = viewProj[1] * x + viewProj[5] * y + viewProj[9] * z + viewProj[13];
-    const cz = viewProj[2] * x + viewProj[6] * y + viewProj[10] * z + viewProj[14];
-    const cw = viewProj[3] * x + viewProj[7] * y + viewProj[11] * z + viewProj[15];
-    if (cw <= 0.05) {
-      return { x: 0, y: 0, z: cz, w: cw, visible: false };
-    }
-    const invW = 1 / cw;
-    const ndcX = cx * invW;
-    const ndcY = cy * invW;
-    const ndcZ = cz * invW;
-    return {
-      x: (ndcX * 0.5 + 0.5) * viewportW,
-      y: (0.5 - ndcY * 0.5) * viewportH,
-      z: ndcZ,
-      w: cw,
-      visible: ndcZ >= -0.1 && ndcZ <= 1.05 && Math.abs(ndcX) <= 1.6 && Math.abs(ndcY) <= 1.6
-    };
-  }
-  function smoothPlateauWeight(x, z, minX, maxX, minZ, maxZ, margin) {
-    const dx = Math.max(0, minX - x, x - maxX);
-    const dz = Math.max(0, minZ - z, z - maxZ);
-    const dist = Math.hypot(dx, dz);
-    if (dist >= margin) return 0;
-    const t = 1 - dist / margin;
-    return t * t * (3 - 2 * t);
-  }
-  function getTerrainHeight(x, z, levelId = "level-outside") {
-    if (levelId !== "level-outside") {
-      return 0;
-    }
-    const northProgress = Math.max(0, Math.min(1, (432 - z) / 384));
-    let h = Math.pow(northProgress, 1.08) * 24;
-    const hills = Math.sin(x * 0.016 + z * 0.012) * 2.2 + Math.cos(x * 0.024 - z * 0.019) * 1.6 + Math.sin((x - 240) * 0.01) * 1.8;
-    h += hills;
-    const eastHill = smoothPlateauWeight(x, z, 18 * 16, 30 * 16, 3 * 16, 11 * 16, 56);
-    h += eastHill * 5.5;
-    if (z < 4.5 * 16) {
-      const ridgeT = Math.max(0, (4.5 * 16 - z) / (4.5 * 16));
-      h += ridgeT * ridgeT * 14;
-    }
-    const nwCliff = smoothPlateauWeight(x, z, 0, 4.2 * 16, 0, 3.8 * 16, 36);
-    h += nwCliff * 9;
-    const wHouse = smoothPlateauWeight(x, z, 3.6 * 16, 17.2 * 16, 3 * 16, 11.2 * 16, 28);
-    h = h * (1 - wHouse) + 21.5 * wHouse;
-    const wStuga1 = smoothPlateauWeight(x, z, 19 * 16, 23 * 16, 5 * 16, 9 * 16, 20);
-    h = h * (1 - wStuga1) + 25 * wStuga1;
-    const wStuga2 = smoothPlateauWeight(x, z, 25 * 16, 29 * 16, 5 * 16, 9 * 16, 20);
-    h = h * (1 - wStuga2) + 26.5 * wStuga2;
-    const wPatio = smoothPlateauWeight(x, z, 7 * 16, 9 * 16, 14 * 16, 16 * 16, 18);
-    h = h * (1 - wPatio) + 14 * wPatio;
-    const wShed = smoothPlateauWeight(x, z, 25 * 16, 30 * 16, 16 * 16, 20 * 16, 22);
-    h = h * (1 - wShed) + 11.5 * wShed;
-    const wGarage = smoothPlateauWeight(x, z, 2 * 16, 9 * 16, 21 * 16, 26 * 16, 24);
-    h = h * (1 - wGarage) + 5.5 * wGarage;
-    return h;
-  }
-  function getTerrainNormal(x, z, levelId = "level-outside") {
-    if (levelId !== "level-outside") {
-      return { x: 0, y: 1, z: 0 };
-    }
-    const eps = 2;
-    const hL = getTerrainHeight(x - eps, z, levelId);
-    const hR = getTerrainHeight(x + eps, z, levelId);
-    const hD = getTerrainHeight(x, z - eps, levelId);
-    const hU = getTerrainHeight(x, z + eps, levelId);
-    return normalize3({
-      x: hL - hR,
-      y: 2 * eps,
-      z: hD - hU
-    });
-  }
-  function getMainHouseRoofElevation(_px, pz) {
-    const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
-    const roofBaseY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
-    const zCenter = 6.5 * TILE_SIZE;
-    const zHalfSpan = 3.75 * TILE_SIZE;
-    const slopeT = Math.max(0, 1 - Math.abs(pz - zCenter) / zHalfSpan);
-    return roofBaseY + MAIN_HOUSE_ROOF_PEAK_ADD * slopeT;
-  }
-  function getPlayerElevation(state) {
-    const px = state.player.x + state.player.width / 2;
-    const pz = state.player.y + state.player.height / 2;
-    const jumpOffset = state.player.jumpOffset ?? 0;
-    if (state.currentLevelId === "level-outside") {
-      if (state.climbing) {
-        const groundY = getTerrainHeight(px, LADDER_BOTTOM_Y + 6, "level-outside");
-        const roofEdgeY = getMainHouseRoofElevation(px, ROOF_WALK_Y + 6);
-        const t = Math.max(0, Math.min(1, state.climbing.progress));
-        return state.climbing.direction === "up" ? groundY + (roofEdgeY - groundY) * t : roofEdgeY + (groundY - roofEdgeY) * t;
-      }
-      if (state.isOnRoof) {
-        return getMainHouseRoofElevation(px, pz) + jumpOffset;
-      }
-      return getTerrainHeight(px, pz, "level-outside") + jumpOffset;
-    }
-    if (state.currentLevelId === "level-basement") {
-      if (px >= 18 * TILE_SIZE && px <= 22 * TILE_SIZE && pz >= 15 * TILE_SIZE && pz <= 19 * TILE_SIZE) {
-        const stairProgress = Math.max(0, Math.min(1, (px - 18 * TILE_SIZE) / (3 * TILE_SIZE)));
-        return stairProgress * 12 + jumpOffset;
-      }
-      return jumpOffset;
-    }
-    if (state.currentLevelId === "level-upstairs") {
-      if (px >= 15 * TILE_SIZE && px <= 19 * TILE_SIZE && pz >= 13 * TILE_SIZE && pz <= 18 * TILE_SIZE) {
-        const stairProgress = Math.max(0, Math.min(1, (pz - 13.5 * TILE_SIZE) / (4 * TILE_SIZE)));
-        return -stairProgress * 10 + jumpOffset;
-      }
-      return jumpOffset;
-    }
-    return jumpOffset;
-  }
-  var DEFAULT_CAMERA_PITCH = 0.42;
-  var MIN_CAMERA_PITCH = 0.08;
-  var MAX_CAMERA_PITCH = 1.18;
-  function createCamera3D(initialYaw = -Math.PI / 2) {
-    const eye = { x: 232, y: 28, z: 450 };
-    const target = { x: 232, y: 12, z: 408 };
-    const up = { x: 0, y: 1, z: 0 };
-    const viewMatrix = mat4LookAt(eye, target, up);
-    const projMatrix = mat4Perspective(55 * Math.PI / 180, 256 / 224, 2, 900);
-    const viewProjMatrix = mat4Multiply(projMatrix, viewMatrix);
-    return {
-      yaw: initialYaw,
-      pitch: DEFAULT_CAMERA_PITCH,
-      distance: 52,
-      eye,
-      target,
-      up,
-      fovY: 55 * Math.PI / 180,
-      near: 2,
-      far: 900,
-      viewMatrix,
-      projMatrix,
-      viewProjMatrix,
-      lastLevelId: null,
-      wasOnRoof: false,
-      shoulderOffset: 0,
-      equippedDistanceScale: 1
-    };
-  }
-  function computeUnobstructedCameraDistance(originX, originZ, cameraYaw, cameraPitch, maxDistance, map) {
-    const CAMERA_LOS_POINTS = 30;
-    const oppositeYaw = cameraYaw + Math.PI;
-    const cosPitch = Math.max(0.2, Math.cos(cameraPitch));
-    const horizontalMaxDistance = maxDistance * cosPitch;
-    const lineOfSightDistance = horizontalMaxDistance * CAMERA_LOS_POINTS / (CAMERA_LOS_POINTS - 1);
-    const isCameraIgnoredTile = (col, row) => {
-      if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
-        return false;
-      }
-      return CAMERA_NON_BLOCKING_TILES.has(map.tiles[row][col]);
-    };
-    let lineOfSight = new LineOfSight(
-      { x: originX, y: originZ },
-      oppositeYaw,
-      lineOfSightDistance,
-      map,
-      CAMERA_LOS_POINTS,
-      isCameraIgnoredTile
-    );
-    let furthestValidIndex = -1;
-    for (let i = lineOfSight.n - 1; i >= 0; i--) {
-      const box = lineOfSight.boxes[i];
-      if (!isRectCollidingWithMap(
-        map,
-        box.x,
-        box.y,
-        box.width,
-        box.height,
-        false,
-        isCameraIgnoredTile
-      )) {
-        furthestValidIndex = i;
-        break;
-      }
-    }
-    let unobstructedDistance = 0;
-    if (furthestValidIndex >= 0) {
-      const furthestPoint = lineOfSight.points(furthestValidIndex);
-      const horizontalDist = Math.hypot(
-        furthestPoint.x - originX,
-        furthestPoint.y - originZ
-      );
-      const paddedHorizontalDist = furthestValidIndex < CAMERA_LOS_POINTS - 1 ? Math.max(0, horizontalDist - 4) : horizontalDist;
-      unobstructedDistance = Math.min(
-        maxDistance,
-        Math.max(0, paddedHorizontalDist / cosPitch)
-      );
-    }
-    lineOfSight = null;
-    return unobstructedDistance;
-  }
-  function updateCamera3D(cam, state, input, dtSeconds, aspect = 256 / 224) {
-    const player = state.player;
-    if (cam.lastLevelId !== state.currentLevelId) {
-      cam.lastLevelId = state.currentLevelId;
-      const spawnYaw = directionToYaw(player.facing);
-      cam.yaw = spawnYaw;
-      player.yaw = spawnYaw;
-      player.renderYaw = spawnYaw;
-      if (input.cameraYaw !== null && input.cameraYaw !== void 0) {
-        input.cameraYaw = spawnYaw;
-      }
-    }
-    if (state.isOnRoof && !cam.wasOnRoof) {
-      cam.yaw = -Math.PI / 2;
-      player.yaw = -Math.PI / 2;
-      if (input.cameraYaw !== null && input.cameraYaw !== void 0) {
-        input.cameraYaw = -Math.PI / 2;
-      }
-    }
-    cam.wasOnRoof = state.isOnRoof;
-    if (typeof input.cameraYaw === "number" && dtSeconds > 0) {
-      const yawSpeed = 2.2;
-      const pitchSpeed = 1.5;
-      if (input.camLeft) {
-        input.cameraYaw = wrapAngle(input.cameraYaw - yawSpeed * dtSeconds);
-      }
-      if (input.camRight) {
-        input.cameraYaw = wrapAngle(input.cameraYaw + yawSpeed * dtSeconds);
-      }
-      if (input.dualJoystickMode) {
-        if (input.cameraLookVector && Math.abs(input.cameraLookVector.x) > 1e-3) {
-          input.cameraYaw = wrapAngle(
-            input.cameraYaw + input.cameraLookVector.x * yawSpeed * dtSeconds
-          );
-        }
-      } else if (input.moveVector && Math.abs(input.moveVector.x) > 1e-3) {
-        input.cameraYaw = wrapAngle(
-          input.cameraYaw + input.moveVector.x * yawSpeed * dtSeconds
-        );
-      }
-      const basePitch = typeof input.cameraPitch === "number" ? input.cameraPitch : DEFAULT_CAMERA_PITCH;
-      if (input.camUp) {
-        input.cameraPitch = Math.max(
-          MIN_CAMERA_PITCH,
-          basePitch - pitchSpeed * dtSeconds
-        );
-      }
-      if (input.camDown) {
-        input.cameraPitch = Math.min(
-          MAX_CAMERA_PITCH,
-          (typeof input.cameraPitch === "number" ? input.cameraPitch : basePitch) + pitchSpeed * dtSeconds
-        );
-      }
-    }
-    const isCutsceneOrSpecialLock = state.currentLevelId === "level-outside" && (state.motorcycle.status === "driving" || state.climbing !== null) || state.currentLevelId === "level-upstairs" && (state.levels["level-upstairs"].rosannaCutscene?.active === true || state.levels["level-upstairs"].tableRoomAmbushCutscene?.active === true) || state.currentLevelId === "level-basement" && state.levels["level-basement"].toiletCutscene?.active === true;
-    if (typeof input.cameraYaw === "number" && player.equippedItem !== "empty" && !isCutsceneOrSpecialLock) {
-      player.yaw = wrapAngle(input.cameraYaw);
-      player.facing = yawToDirection(player.yaw);
-      if (dtSeconds > 0) {
-        const turnBlend = Math.min(1, dtSeconds * 16);
-        player.renderYaw = lerpAngle2(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
-      }
-    }
-    if (typeof input.cameraYaw === "number") {
-      cam.yaw = wrapAngle(input.cameraYaw);
-    } else if (player.isMoving && dtSeconds > 0) {
-      const targetYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
-      cam.yaw = lerpAngle2(cam.yaw, targetYaw, Math.min(1, dtSeconds * 6));
-    }
-    if (typeof input.cameraPitch === "number") {
-      cam.pitch = Math.max(
-        MIN_CAMERA_PITCH,
-        Math.min(MAX_CAMERA_PITCH, input.cameraPitch)
-      );
-    }
-    if (state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") {
-      cam.yaw = 0;
-      if (typeof input.cameraYaw === "number") {
-        input.cameraYaw = 0;
-      }
-    }
-    const px = player.x + player.width / 2;
-    let pz = player.y + player.height / 2;
-    if (state.climbing && state.currentLevelId === "level-outside") {
-      pz = LADDER_BOTTOM_Y + player.height / 2;
-    }
-    const py = getPlayerElevation(state);
-    const isOutdoor = state.currentLevelId === "level-outside";
-    const maxCameraDistance = isOutdoor ? state.isOnRoof ? 44 : 52 : 38;
-    const targetHeightOffset = isOutdoor ? 13.5 : 12.5;
-    cam.target = {
-      x: px,
-      y: py + targetHeightOffset,
-      z: pz
-    };
-    const rosannaCutscene = state.currentLevelId === "level-upstairs" ? state.levels["level-upstairs"].rosannaCutscene : null;
-    const tableRoomAmbush = state.currentLevelId === "level-upstairs" ? state.levels["level-upstairs"].tableRoomAmbushCutscene : null;
-    const toiletCutscene = state.currentLevelId === "level-basement" ? state.levels["level-basement"].toiletCutscene : null;
-    let zoomEase = 0;
-    if (rosannaCutscene?.active || tableRoomAmbush?.active || toiletCutscene?.active) {
-      let targetYaw = -Math.PI / 2;
-      let elapsed = 0;
-      let targetOffsetX = 0;
-      let targetOffsetY = 3;
-      let targetOffsetZ = -12;
-      if (toiletCutscene?.active) {
-        const toiletNpc = state.levels["level-basement"].toiletNpc;
-        const tx = toiletNpc.x + toiletNpc.width * 0.5;
-        const tz = toiletNpc.y + toiletNpc.height * 0.5;
-        targetYaw = Math.atan2(tz - pz, tx - px);
-        elapsed = toiletCutscene.timer;
-        targetOffsetX = (tx - px) * 0.45;
-        targetOffsetY = 1.5;
-        targetOffsetZ = (tz - pz) * 0.45;
-      } else if (tableRoomAmbush?.active) {
-        const doorX = UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.x + UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.width * 0.5;
-        const doorZ = UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.y + UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.height * 0.5;
-        targetYaw = Math.atan2(doorZ - pz, doorX - px);
-        elapsed = tableRoomAmbush.timer;
-        targetOffsetX = (doorX - px) * 0.45;
-        targetOffsetY = 1.5;
-        targetOffsetZ = (doorZ - pz) * 0.45;
-      } else if (rosannaCutscene?.active) {
-        const winX = rosannaCutscene.santaX + 8;
-        const winZ = 4 * TILE_SIZE;
-        targetYaw = Math.atan2(winZ - pz, winX - px);
-        elapsed = rosannaCutscene.elapsed;
-        targetOffsetX = (winX - px) * 0.45;
-        targetOffsetY = 2;
-        targetOffsetZ = (winZ - pz) * 0.45;
-      }
-      const turnBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 6) : 1;
-      cam.yaw = lerpAngle2(cam.yaw, targetYaw, turnBlend);
-      if (typeof input.cameraYaw === "number") {
-        input.cameraYaw = cam.yaw;
-      }
-      cam.pitch = cam.pitch + (0.16 - cam.pitch) * turnBlend;
-      if (typeof input.cameraPitch === "number") {
-        input.cameraPitch = cam.pitch;
-      }
-      const zoomT = Math.min(1, elapsed / 1.1);
-      zoomEase = zoomT * zoomT * (3 - 2 * zoomT);
-      cam.fovY = (55 - 23 * zoomEase) * Math.PI / 180;
-      cam.target.x += targetOffsetX * zoomEase;
-      cam.target.y += targetOffsetY * zoomEase;
-      cam.target.z += targetOffsetZ * zoomEase;
-    } else {
-      cam.fovY = 55 * Math.PI / 180;
-    }
-    const cosPitch = Math.cos(cam.pitch);
-    const sinPitch = Math.sin(cam.pitch);
-    const backX = -Math.cos(cam.yaw) * cosPitch;
-    const backZ = -Math.sin(cam.yaw) * cosPitch;
-    const backY = sinPitch;
-    const wantsShoulderOffset = player.equippedItem !== "empty" && !rosannaCutscene?.active && !tableRoomAmbush?.active && !toiletCutscene?.active && !(state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") && !state.climbing;
-    const desiredShoulder = wantsShoulderOffset ? 10.3125 : 0;
-    const shoulderBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 10) : 1;
-    cam.shoulderOffset = (cam.shoulderOffset ?? 0) + (desiredShoulder - (cam.shoulderOffset ?? 0)) * shoulderBlend;
-    const targetDistanceScale = wantsShoulderOffset ? 0.55 : 1;
-    cam.equippedDistanceScale = (cam.equippedDistanceScale ?? 1) + (targetDistanceScale - (cam.equippedDistanceScale ?? 1)) * shoulderBlend;
-    const scaledMaxDistance = maxCameraDistance * cam.equippedDistanceScale;
-    const maxSafeShoulder = state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01 ? cam.shoulderOffset : computeUnobstructedCameraDistance(
-      cam.target.x,
-      cam.target.z,
-      cam.yaw - Math.PI / 2,
-      0,
-      cam.shoulderOffset,
-      state.map
-    );
-    if (maxSafeShoulder > 0.01) {
-      const rightX = -Math.sin(cam.yaw);
-      const rightZ = Math.cos(cam.yaw);
-      cam.target.x += rightX * maxSafeShoulder;
-      cam.target.z += rightZ * maxSafeShoulder;
-    }
-    const equippedVerticalRatio = Math.max(
-      0,
-      Math.min(1, (cam.shoulderOffset ?? 0) / 10.3125)
-    );
-    cam.target.y += 1.3 * equippedVerticalRatio;
-    const baseEffectiveDistance = state.isOnRoof || state.climbing ? scaledMaxDistance : computeUnobstructedCameraDistance(
-      cam.target.x,
-      cam.target.z,
-      cam.yaw,
-      cam.pitch,
-      scaledMaxDistance,
-      state.map
-    );
-    const effectiveDistance = baseEffectiveDistance * (1 - 0.42 * zoomEase);
-    cam.distance = effectiveDistance;
-    let eyeX = cam.target.x + backX * effectiveDistance;
-    let eyeY = cam.target.y + backY * effectiveDistance;
-    let eyeZ = cam.target.z + backZ * effectiveDistance;
-    if (isOutdoor) {
-      const groundAtEye = getTerrainHeight(eyeX, eyeZ, "level-outside");
-      if (eyeY < groundAtEye + 8) {
-        eyeY = groundAtEye + 8;
-      }
-    } else {
-      eyeY = Math.min(eyeY, INDOOR_WALL_HEIGHT - 3.2);
-    }
-    cam.eye = { x: eyeX, y: eyeY, z: eyeZ };
-    cam.viewMatrix = mat4LookAt(cam.eye, cam.target, cam.up);
-    cam.projMatrix = mat4Perspective(cam.fovY, aspect, cam.near, cam.far);
-    cam.viewProjMatrix = mat4Multiply(cam.projMatrix, cam.viewMatrix);
-  }
-
-  // src/entities/dog.ts
-  var DOG_START_X = 26.5 * TILE_SIZE;
-  var DOG_START_Y = 12.5 * TILE_SIZE;
-  var DOG_MAX_SPEED = 37;
-  var DOG_ACCELERATION = 95;
-  var DOG_DECELERATION = 90;
-  var DOG_AGGRO_DISTANCE = 6.5 * TILE_SIZE;
-  var DOG_DEAGGRO_DISTANCE = 10.5 * TILE_SIZE;
-  function createDog(x = DOG_START_X, y = DOG_START_Y) {
-    return {
-      x,
-      y,
-      width: 12,
-      height: 12,
-      vx: 0,
-      vy: 0,
-      maxSpeed: DOG_MAX_SPEED,
-      acceleration: DOG_ACCELERATION,
-      deceleration: DOG_DECELERATION,
-      mode: "waiting",
-      facing: "left",
-      yaw: Math.PI,
-      animTimer: 0,
-      heartSpawnTimer: 0,
-      hearts: []
-    };
-  }
-  function updateDog(dog, player, dtSeconds, map, solidObstacles = [], speedMultiplier = 1) {
-    const dogCenterX = dog.x + dog.width / 2;
-    const dogCenterY = dog.y + dog.height / 2;
-    const playerCenterX = player.x + player.width / 2;
-    const playerCenterY = player.y + player.height / 2;
-    const dx = playerCenterX - dogCenterX;
-    const dy = playerCenterY - dogCenterY;
-    const dist = Math.hypot(dx, dy);
-    if (dog.mode === "waiting" && dist <= DOG_AGGRO_DISTANCE) {
-      dog.mode = "chasing";
-      dog.heartSpawnTimer = 0;
-    } else if (dog.mode === "chasing" && dist >= DOG_DEAGGRO_DISTANCE) {
-      dog.mode = "waiting";
-    }
-    const effectiveMaxSpeed = dog.maxSpeed * speedMultiplier;
-    if (dog.mode === "chasing") {
-      const ux = dist > 1e-3 ? dx / dist : 0;
-      const uy = dist > 1e-3 ? dy / dist : 0;
-      const targetVx = ux * effectiveMaxSpeed;
-      const targetVy = uy * effectiveMaxSpeed;
-      const dvx = targetVx - dog.vx;
-      const dvy = targetVy - dog.vy;
-      const dvLen = Math.hypot(dvx, dvy);
-      const maxDeltaV = dog.acceleration * dtSeconds;
-      if (dvLen <= maxDeltaV || dvLen === 0) {
-        dog.vx = targetVx;
-        dog.vy = targetVy;
-      } else {
-        dog.vx += dvx / dvLen * maxDeltaV;
-        dog.vy += dvy / dvLen * maxDeltaV;
-      }
-      if (Math.abs(dog.vx) > 2) {
-        dog.facing = dog.vx < 0 ? "left" : "right";
-      } else if (Math.abs(dx) > 0.5) {
-        dog.facing = dx < 0 ? "left" : "right";
-      }
-    } else {
-      const speed = Math.hypot(dog.vx, dog.vy);
-      const maxDrop = dog.deceleration * dtSeconds;
-      if (speed <= maxDrop) {
-        dog.vx = 0;
-        dog.vy = 0;
-      } else {
-        dog.vx -= dog.vx / speed * maxDrop;
-        dog.vy -= dog.vy / speed * maxDrop;
-      }
-    }
-    const collidesAt = (testX, testY) => {
-      if (isRectCollidingWithMap(map, testX, testY, dog.width, dog.height)) {
-        return true;
-      }
-      const testRect = {
-        x: testX,
-        y: testY,
-        width: dog.width,
-        height: dog.height
-      };
-      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
-    };
-    if (dog.vx !== 0 || dog.vy !== 0) {
-      if (Math.hypot(dog.vx, dog.vy) > 0.5) {
-        dog.yaw = Math.atan2(dog.vy, dog.vx);
-      }
-      dog.animTimer += dtSeconds;
-      const nextX = dog.x + dog.vx * dtSeconds;
-      if (!collidesAt(nextX, dog.y)) {
-        dog.x = nextX;
-      } else {
-        dog.vx = 0;
-      }
-      const nextY = dog.y + dog.vy * dtSeconds;
-      if (!collidesAt(dog.x, nextY)) {
-        dog.y = nextY;
-      } else {
-        dog.vy = 0;
-      }
-    }
-    for (let i = dog.hearts.length - 1; i >= 0; i--) {
-      const h = dog.hearts[i];
-      h.age += dtSeconds;
-      h.x += h.vx * dtSeconds;
-      h.y += h.vy * dtSeconds;
-      if (h.age >= h.maxAge) {
-        dog.hearts.splice(i, 1);
-      }
-    }
-    if (dog.mode === "chasing") {
-      dog.heartSpawnTimer -= dtSeconds;
-      while (dog.heartSpawnTimer <= 0) {
-        const phase = dog.hearts.length + Math.floor(dog.animTimer * 10);
-        const offsetX = (phase % 3 - 1) * 4;
-        dog.hearts.push({
-          x: dog.x + dog.width / 2 + offsetX,
-          y: dog.y - 2,
-          vx: offsetX * 2.5,
-          vy: -16,
-          age: 0,
-          maxAge: 0.85
-        });
-        dog.heartSpawnTimer += 0.22;
-      }
-    }
-    return rectsIntersect(dog, player);
-  }
-
-  // src/entities/snowball.ts
-  var SNOWBALL_SPEED = 110;
-  var THROW_INTERVAL_SECONDS = 2.4;
-  var HIT_BLINK_DURATION_SECONDS = 2;
-  function createDrivewayThrowers() {
-    const rowY = 16 * TILE_SIZE + 2;
-    const leftX = 12 * TILE_SIZE + 2;
-    const rightX = 18 * TILE_SIZE + 2;
-    return [
-      {
-        id: "thrower-sylvester",
-        name: "Sylvester",
-        x: leftX,
-        y: rowY,
-        width: 12,
-        height: 12,
-        facing: "right",
-        targetX: rightX,
-        throwInterval: THROW_INTERVAL_SECONDS,
-        // Throw shortly after level starts/resets
-        throwTimer: 0.6
-      },
-      {
-        id: "thrower-annelotte",
-        name: "Annelotte",
-        x: rightX,
-        y: rowY,
-        width: 12,
-        height: 12,
-        facing: "left",
-        targetX: leftX,
-        throwInterval: THROW_INTERVAL_SECONDS,
-        // Staggered so they alternate throwing back and forth across the driveway
-        throwTimer: 1.8
-      }
-    ];
-  }
-  function spawnSnowballFromThrower(thrower) {
-    const dir = thrower.facing === "right" ? 1 : -1;
-    return {
-      x: thrower.facing === "right" ? thrower.x + thrower.width : thrower.x - 6,
-      y: thrower.y + 3,
-      width: 6,
-      height: 6,
-      vx: dir * SNOWBALL_SPEED,
-      vy: 0,
-      targetX: thrower.targetX
-    };
-  }
-  function updateSnowballFight(throwers, snowballs, player, dtSeconds) {
-    for (const thrower of throwers) {
-      thrower.throwTimer -= dtSeconds;
-      if (thrower.throwTimer <= 0) {
-        thrower.throwTimer += thrower.throwInterval;
-        snowballs.push(spawnSnowballFromThrower(thrower));
-      }
-    }
-    for (let i = snowballs.length - 1; i >= 0; i--) {
-      const sb = snowballs[i];
-      sb.x += sb.vx * dtSeconds;
-      sb.y += sb.vy * dtSeconds;
-      if (rectsIntersect(sb, player)) {
-        return true;
-      }
-      if (sb.vx > 0 && sb.x >= sb.targetX || sb.vx < 0 && sb.x + sb.width <= sb.targetX + 12) {
-        snowballs.splice(i, 1);
-      }
-    }
-    return false;
-  }
-
-  // src/world/interaction.ts
-  var INTERACTION_MAX_GAP_PX = 6;
-  function rectEdgeDistance(a, b) {
-    const dx = Math.max(0, b.x - (a.x + a.width), a.x - (b.x + b.width));
-    const dy = Math.max(0, b.y - (a.y + a.height), a.y - (b.y + b.height));
-    return Math.hypot(dx, dy);
-  }
-  function buildInteractables(throwers, options = {}) {
-    const {
-      hasLadder = false,
-      ladderPlaced = false,
-      isOnRoof = false,
-      motorcycleStatus = "parked",
-      alexNpc
-    } = options;
-    if (isOnRoof) {
-      return [
-        {
-          id: "roof-ladder",
-          bounds: { ...ROOF_LADDER_BOUNDS },
-          promptText: "Climb down ladder",
-          dialogueLines: []
-        },
-        {
-          id: "roof-chimney",
-          bounds: { ...ROOF_CHIMNEY_BOUNDS },
-          promptText: "Climb down chimney",
-          dialogueLines: []
-        },
-        {
-          id: "roof-rudolph",
-          bounds: { ...ROOF_RUDOLPH_BOUNDS },
-          promptText: "Inspect Rudolph",
-          dialogueLines: []
-        }
-      ];
-    }
-    const list = throwers.map((t) => {
-      if (t.id === "thrower-sylvester") {
-        return {
-          id: t.id,
-          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-          promptText: "Talk to Sylvester",
-          dialogueLines: ["Watch out! Annelotte is crazy!"],
-          speakerPortrait: "Sylvester"
-        };
-      }
-      if (t.id === "thrower-annelotte") {
-        return {
-          id: t.id,
-          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-          promptText: "Talk to Annelotte",
-          dialogueLines: [
-            "It's good to talk about your feelings... how does a snowball in your face feel?"
-          ],
-          speakerPortrait: "Annelotte"
-        };
-      }
-      return {
-        id: t.id,
-        bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-        promptText: "Talk to",
-        dialogueLines: ["Watch out!"]
-      };
-    });
-    list.push({
-      id: "house-double-door",
-      bounds: {
-        x: 9 * TILE_SIZE + 8,
-        y: HOUSE_DOOR_ROW * TILE_SIZE,
-        width: TILE_SIZE * 2,
-        height: TILE_SIZE
-      },
-      promptText: "Open door",
-      dialogueLines: ["It's locked."]
-    });
-    list.push({
-      id: "house-door",
-      bounds: {
-        x: HOUSE_DOOR_COL * TILE_SIZE,
-        y: HOUSE_DOOR_ROW * TILE_SIZE,
-        width: TILE_SIZE,
-        height: TILE_SIZE
-      },
-      promptText: "Open door",
-      dialogueLines: [
-        "It's locked.",
-        "There has to be another way into the house..."
-      ]
-    });
-    if (motorcycleStatus === "parked") {
-      list.push({
-        id: "motorcycle",
-        bounds: {
-          x: MOTORCYCLE_START_X,
-          y: MOTORCYCLE_START_Y,
-          width: TILE_SIZE * 2,
-          height: TILE_SIZE
-        },
-        promptText: "Drive",
-        dialogueLines: []
-      });
-    }
-    if (!hasLadder && !ladderPlaced) {
-      list.push({
-        id: "ground-ladder",
-        bounds: { ...GROUND_LADDER_BOUNDS },
-        promptText: "Pick up",
-        dialogueLines: []
-      });
-      list.push({
-        id: "house-west-inspect",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Inspect",
-        dialogueLines: [
-          "Hmm.. looks like there is a chimney up there, but I can't reach it"
-        ]
-      });
-    } else if (hasLadder && !ladderPlaced) {
-      list.push({
-        id: "house-west-place-ladder",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Place ladder",
-        dialogueLines: []
-      });
-    } else if (ladderPlaced) {
-      list.push({
-        id: "house-west-climb-ladder",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Climb ladder",
-        dialogueLines: []
-      });
-    }
-    if (alexNpc) {
-      list.push({
-        id: "outside-alex",
-        bounds: { ...alexNpc },
-        promptText: "Talk to Alex",
-        dialogueLines: ["Just practicing my swings..."],
-        speakerPortrait: "Alex"
-      });
-    }
-    return list;
-  }
-  function findNearbyInteractable(player, interactables, maxGapPx = INTERACTION_MAX_GAP_PX) {
-    let closest = null;
-    let bestDist = Infinity;
-    for (const item of interactables) {
-      const dist = rectEdgeDistance(player, item.bounds);
-      if (dist <= maxGapPx && dist < bestDist) {
-        bestDist = dist;
-        closest = item;
-      }
-    }
-    return closest;
-  }
-
   // src/world/levels/levelBasement.ts
   var V2 = 20 /* VoidBlack */;
   var W2 = 21 /* InteriorWall */;
@@ -5310,6 +4692,2149 @@
       return false;
     }
   };
+
+  // src/core/audio.ts
+  function midiToHz(midi) {
+    return 440 * Math.pow(2, (midi - 69) / 12);
+  }
+  var PEACEFUL_LEAD_NOTES = [
+    // Bar 1: E5 E5 E5 - | E5 E5 E5 - | E5 G5 C5 D5 | E5 - - -
+    76,
+    null,
+    76,
+    null,
+    76,
+    null,
+    null,
+    null,
+    76,
+    null,
+    76,
+    null,
+    76,
+    null,
+    null,
+    null,
+    76,
+    null,
+    79,
+    null,
+    72,
+    null,
+    74,
+    null,
+    76,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    // Bar 2: F5 F5 F5 F5 | F5 E5 E5 E5 | E5 D5 D5 E5 | D5 - G5 -
+    77,
+    null,
+    77,
+    null,
+    77,
+    null,
+    77,
+    null,
+    77,
+    null,
+    76,
+    null,
+    76,
+    null,
+    76,
+    76,
+    76,
+    null,
+    74,
+    null,
+    74,
+    null,
+    76,
+    null,
+    74,
+    null,
+    null,
+    null,
+    79,
+    null,
+    null,
+    null,
+    // Bar 3: E5 E5 E5 - | E5 E5 E5 - | E5 G5 C5 D5 | E5 - - -
+    76,
+    null,
+    76,
+    null,
+    76,
+    null,
+    null,
+    null,
+    76,
+    null,
+    76,
+    null,
+    76,
+    null,
+    null,
+    null,
+    76,
+    null,
+    79,
+    null,
+    72,
+    null,
+    74,
+    null,
+    76,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    // Bar 4: F5 F5 F5 F5 | F5 E5 E5 E5 | G5 G5 F5 D5 | C5 - - -
+    77,
+    null,
+    77,
+    null,
+    77,
+    null,
+    77,
+    null,
+    77,
+    null,
+    76,
+    null,
+    76,
+    null,
+    76,
+    76,
+    79,
+    null,
+    79,
+    null,
+    77,
+    null,
+    74,
+    null,
+    72,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ];
+  var PEACEFUL_BASS_NOTES = [
+    48,
+    null,
+    null,
+    null,
+    55,
+    null,
+    null,
+    null,
+    48,
+    null,
+    null,
+    null,
+    55,
+    null,
+    null,
+    null,
+    48,
+    null,
+    null,
+    null,
+    52,
+    null,
+    55,
+    null,
+    48,
+    null,
+    null,
+    null,
+    55,
+    null,
+    null,
+    null,
+    53,
+    null,
+    null,
+    null,
+    57,
+    null,
+    null,
+    null,
+    48,
+    null,
+    null,
+    null,
+    52,
+    null,
+    null,
+    null,
+    50,
+    null,
+    null,
+    null,
+    54,
+    null,
+    null,
+    null,
+    55,
+    null,
+    null,
+    null,
+    43,
+    null,
+    null,
+    null,
+    48,
+    null,
+    null,
+    null,
+    55,
+    null,
+    null,
+    null,
+    48,
+    null,
+    null,
+    null,
+    55,
+    null,
+    null,
+    null,
+    48,
+    null,
+    null,
+    null,
+    52,
+    null,
+    55,
+    null,
+    48,
+    null,
+    null,
+    null,
+    55,
+    null,
+    null,
+    null,
+    53,
+    null,
+    null,
+    null,
+    57,
+    null,
+    null,
+    null,
+    48,
+    null,
+    null,
+    null,
+    52,
+    null,
+    null,
+    null,
+    55,
+    null,
+    null,
+    null,
+    43,
+    null,
+    null,
+    null,
+    48,
+    null,
+    55,
+    null,
+    60,
+    null,
+    null,
+    null
+  ];
+  var PEACEFUL_HARMONY_NOTES = [
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    65,
+    69,
+    72,
+    69,
+    65,
+    69,
+    72,
+    69,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    62,
+    66,
+    69,
+    66,
+    62,
+    66,
+    69,
+    66,
+    67,
+    71,
+    74,
+    71,
+    67,
+    71,
+    74,
+    71,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    65,
+    69,
+    72,
+    69,
+    65,
+    69,
+    72,
+    69,
+    60,
+    64,
+    67,
+    64,
+    60,
+    64,
+    67,
+    64,
+    67,
+    71,
+    74,
+    71,
+    67,
+    71,
+    74,
+    71,
+    60,
+    64,
+    67,
+    72,
+    null,
+    null,
+    null,
+    null
+  ];
+  var ACTION_OSTINATO_NOTES = [
+    // G5 - F#5 G5 E5 - repeated driving motif, then Bb5 - A5 Bb5 G5 -
+    79,
+    null,
+    78,
+    79,
+    76,
+    null,
+    79,
+    null,
+    78,
+    79,
+    76,
+    null,
+    79,
+    null,
+    78,
+    79,
+    76,
+    null,
+    79,
+    null,
+    78,
+    79,
+    76,
+    null,
+    82,
+    null,
+    81,
+    82,
+    79,
+    null,
+    82,
+    null,
+    81,
+    82,
+    79,
+    null,
+    83,
+    null,
+    82,
+    83,
+    79,
+    null,
+    78,
+    null,
+    76,
+    null,
+    75,
+    null,
+    76,
+    null,
+    78,
+    79,
+    81,
+    null,
+    79,
+    78,
+    76,
+    null,
+    75,
+    null,
+    76,
+    null,
+    null,
+    null
+  ];
+  var ACTION_BASS_NOTES = [
+    40,
+    40,
+    52,
+    40,
+    43,
+    43,
+    55,
+    43,
+    45,
+    45,
+    57,
+    45,
+    47,
+    47,
+    59,
+    47,
+    40,
+    40,
+    52,
+    40,
+    43,
+    43,
+    55,
+    43,
+    46,
+    46,
+    58,
+    46,
+    43,
+    43,
+    55,
+    43,
+    45,
+    45,
+    57,
+    45,
+    47,
+    47,
+    59,
+    47,
+    48,
+    48,
+    60,
+    48,
+    47,
+    47,
+    59,
+    47,
+    40,
+    43,
+    47,
+    52,
+    50,
+    47,
+    45,
+    43,
+    40,
+    null,
+    40,
+    null,
+    52,
+    null,
+    null,
+    null
+  ];
+  var ACTION_COUNTER_NOTES = [
+    64,
+    null,
+    null,
+    null,
+    67,
+    null,
+    null,
+    null,
+    66,
+    null,
+    null,
+    null,
+    64,
+    null,
+    null,
+    null,
+    71,
+    null,
+    null,
+    null,
+    69,
+    null,
+    null,
+    null,
+    67,
+    null,
+    null,
+    null,
+    66,
+    null,
+    null,
+    null,
+    64,
+    null,
+    67,
+    null,
+    71,
+    null,
+    74,
+    null,
+    72,
+    null,
+    71,
+    null,
+    69,
+    null,
+    66,
+    null,
+    64,
+    null,
+    null,
+    null,
+    63,
+    null,
+    null,
+    null,
+    64,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ];
+  var VICTORY_LEAD_NOTES = [
+    72,
+    null,
+    76,
+    null,
+    79,
+    null,
+    84,
+    null,
+    83,
+    null,
+    84,
+    null,
+    86,
+    null,
+    84,
+    null,
+    79,
+    null,
+    84,
+    null,
+    88,
+    null,
+    91,
+    null,
+    84,
+    null,
+    null,
+    null,
+    84,
+    null,
+    null,
+    null
+  ];
+  var SoundManager = class {
+    constructor() {
+      __publicField(this, "ctx", null);
+      __publicField(this, "masterGain", null);
+      __publicField(this, "masterFilter", null);
+      __publicField(this, "delaySend", null);
+      __publicField(this, "noiseBuffer", null);
+      __publicField(this, "recentEvents", []);
+      __publicField(this, "lastPlayedAt", /* @__PURE__ */ new Map());
+      __publicField(this, "clockSeconds", 0);
+      __publicField(this, "currentTrack", "peaceful_xmas");
+      __publicField(this, "musicStep", 0);
+      __publicField(this, "musicStepAccum", 0);
+    }
+    unlock() {
+      if (typeof window === "undefined") return;
+      if (!this.ctx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        try {
+          this.ctx = new AudioCtx();
+          this.setupMasterChain();
+        } catch {
+          this.ctx = null;
+        }
+      }
+      if (this.ctx && this.ctx.state === "suspended") {
+        this.ctx.resume().catch(() => {
+        });
+      }
+    }
+    setupMasterChain() {
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -14;
+      compressor.knee.value = 18;
+      compressor.ratio.value = 4;
+      compressor.attack.value = 4e-3;
+      compressor.release.value = 0.16;
+      compressor.connect(ctx.destination);
+      this.masterFilter = ctx.createBiquadFilter();
+      this.masterFilter.type = "lowpass";
+      this.masterFilter.frequency.value = 10500;
+      this.masterFilter.Q.value = 0.7;
+      this.masterFilter.connect(compressor);
+      this.masterGain = ctx.createGain();
+      this.masterGain.gain.value = 0.42;
+      this.masterGain.connect(this.masterFilter);
+      const delay = ctx.createDelay(0.5);
+      delay.delayTime.value = 0.135;
+      const feedback = ctx.createGain();
+      feedback.gain.value = 0.22;
+      const delayFilter = ctx.createBiquadFilter();
+      delayFilter.type = "lowpass";
+      delayFilter.frequency.value = 3400;
+      const wetGain = ctx.createGain();
+      wetGain.gain.value = 0.18;
+      this.delaySend = ctx.createGain();
+      this.delaySend.gain.value = 1;
+      this.delaySend.connect(delay);
+      delay.connect(delayFilter);
+      delayFilter.connect(feedback);
+      feedback.connect(delay);
+      delayFilter.connect(wetGain);
+      wetGain.connect(this.masterFilter);
+      const sampleRate = ctx.sampleRate;
+      const length = Math.floor(sampleRate * 1.5);
+      this.noiseBuffer = ctx.createBuffer(1, length, sampleRate);
+      const data = this.noiseBuffer.getChannelData(0);
+      for (let i = 0; i < length; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+    }
+    getRecentEvents() {
+      return this.recentEvents;
+    }
+    clearRecentEvents() {
+      this.recentEvents.length = 0;
+      this.lastPlayedAt.clear();
+    }
+    getCurrentMusicTrack() {
+      return this.currentTrack;
+    }
+    setMusicTrack(track) {
+      if (this.currentTrack !== track) {
+        this.currentTrack = track;
+        this.musicStep = 0;
+        this.musicStepAccum = 0;
+      }
+    }
+    stepMusic(dtSeconds) {
+      if (dtSeconds <= 0) return;
+      this.clockSeconds += dtSeconds;
+      const stepDuration = this.currentTrack === "action_xmas" ? 0.105 : this.currentTrack === "victory_xmas" ? 0.115 : 0.12;
+      this.musicStepAccum += dtSeconds;
+      let stepsTriggered = 0;
+      while (this.musicStepAccum >= stepDuration && stepsTriggered < 4) {
+        this.musicStepAccum -= stepDuration;
+        this.triggerMusicStep(this.musicStep, stepDuration);
+        this.musicStep += 1;
+        stepsTriggered += 1;
+      }
+      if (this.musicStepAccum > stepDuration * 4) {
+        this.musicStepAccum = 0;
+      }
+    }
+    triggerMusicStep(step, stepDur) {
+      if (!this.ctx || !this.masterGain || this.ctx.state !== "running") {
+        return;
+      }
+      if (this.currentTrack === "peaceful_xmas") {
+        const idx = step % PEACEFUL_LEAD_NOTES.length;
+        const lead = PEACEFUL_LEAD_NOTES[idx];
+        const bass = PEACEFUL_BASS_NOTES[idx];
+        const harm = PEACEFUL_HARMONY_NOTES[idx];
+        if (lead !== null) {
+          this.playN64BellNote(midiToHz(lead), stepDur * 1.9, 0.085);
+        }
+        if (harm !== null) {
+          this.playTone({
+            type: "square",
+            freq: midiToHz(harm),
+            duration: stepDur * 0.9,
+            gain: 0.025,
+            filterFreq: 1800,
+            sendEcho: true
+          });
+        }
+        if (bass !== null) {
+          this.playTone({
+            type: "triangle",
+            freq: midiToHz(bass),
+            duration: stepDur * 2.6,
+            gain: 0.095,
+            filterFreq: 900
+          });
+        }
+        if (idx % 4 === 0) {
+          this.playSleighBell(0.032);
+        } else if (idx % 4 === 2) {
+          this.playSleighBell(0.015);
+        }
+      } else if (this.currentTrack === "action_xmas") {
+        const idx = step % ACTION_OSTINATO_NOTES.length;
+        const ost = ACTION_OSTINATO_NOTES[idx];
+        const bass = ACTION_BASS_NOTES[idx];
+        const counter = ACTION_COUNTER_NOTES[idx];
+        if (ost !== null) {
+          this.playN64BellNote(midiToHz(ost), stepDur * 1.45, 0.075);
+        }
+        if (counter !== null) {
+          this.playTone({
+            type: "sawtooth",
+            freq: midiToHz(counter),
+            duration: stepDur * 2.8,
+            gain: 0.045,
+            filterFreq: 2100,
+            sendEcho: true
+          });
+        }
+        if (bass !== null) {
+          this.playTone({
+            type: "sawtooth",
+            freq: midiToHz(bass),
+            duration: stepDur * 0.85,
+            gain: 0.08,
+            filterFreq: 680
+          });
+        }
+        if (idx % 4 === 0) {
+          this.playDrumKick(0.11);
+        } else if (idx % 4 === 2) {
+          this.playDrumSnare(0.055);
+        }
+        if (idx % 2 === 0) {
+          this.playSleighBell(0.018);
+        }
+      } else {
+        const idx = step % VICTORY_LEAD_NOTES.length;
+        const lead = VICTORY_LEAD_NOTES[idx];
+        if (lead !== null) {
+          this.playN64BellNote(midiToHz(lead), stepDur * 1.8, 0.09);
+        }
+        if (idx % 4 === 0) {
+          this.playSleighBell(0.035);
+        }
+      }
+    }
+    play(id, minIntervalSeconds = 0.025) {
+      const prev = this.lastPlayedAt.get(id);
+      if (prev !== void 0 && this.clockSeconds - prev >= 0 && this.clockSeconds - prev < minIntervalSeconds) {
+        return;
+      }
+      this.lastPlayedAt.set(id, this.clockSeconds);
+      this.recentEvents.push(id);
+      if (this.recentEvents.length > 128) {
+        this.recentEvents.shift();
+      }
+      if (!this.ctx || !this.masterGain || this.ctx.state !== "running") {
+        return;
+      }
+      switch (id) {
+        case "dialogue_open":
+          this.playTone({ type: "square", freq: 659.25, freqEnd: 880, duration: 0.075, gain: 0.12, filterFreq: 2800, sendEcho: true });
+          break;
+        case "dialogue_advance":
+          this.playTone({ type: "square", freq: 880, freqEnd: 1174.66, duration: 0.048, gain: 0.11, filterFreq: 3200 });
+          break;
+        case "achievement":
+          [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
+            this.playN64BellNote(freq, 0.28, 0.13, i * 0.075);
+          });
+          break;
+        case "footstep_snow":
+          this.playNoise({ duration: 0.065, gain: 0.085, filterType: "bandpass", freq: 950, freqEnd: 460, q: 1.6 });
+          this.playTone({ type: "sine", freq: 145, freqEnd: 68, duration: 0.045, gain: 0.05 });
+          break;
+        case "footstep_indoor":
+          this.playTone({ type: "triangle", freq: 210, freqEnd: 82, duration: 0.038, gain: 0.065, filterFreq: 800 });
+          this.playNoise({ duration: 0.025, gain: 0.035, filterType: "bandpass", freq: 1100, q: 2 });
+          break;
+        case "jump":
+          this.playTone({ type: "triangle", freq: 185, freqEnd: 540, duration: 0.16, gain: 0.14, sendEcho: true });
+          break;
+        case "dog_bark":
+          for (const offset of [0, 0.14]) {
+            this.playTone({
+              type: "sawtooth",
+              freq: 280,
+              freqMid: 520,
+              freqEnd: 195,
+              duration: 0.1,
+              gain: 0.15,
+              filterFreq: 1450,
+              delaySeconds: offset,
+              sendEcho: true
+            });
+            this.playNoise({
+              duration: 0.075,
+              gain: 0.06,
+              filterType: "bandpass",
+              freq: 900,
+              q: 2.2,
+              delaySeconds: offset
+            });
+          }
+          break;
+        case "cat_meow":
+          this.playTone({
+            type: "sawtooth",
+            freq: 520,
+            freqMid: 960,
+            freqEnd: 430,
+            duration: 0.28,
+            gain: 0.14,
+            filterFreq: 2200,
+            sendEcho: true
+          });
+          this.playTone({
+            type: "triangle",
+            freq: 1040,
+            freqMid: 1880,
+            freqEnd: 860,
+            duration: 0.26,
+            gain: 0.06,
+            filterFreq: 2800
+          });
+          break;
+        case "cat_angry":
+          this.playNoise({ duration: 0.22, gain: 0.14, filterType: "highpass", freq: 2800, q: 1.2 });
+          this.playTone({
+            type: "sawtooth",
+            freq: 640,
+            freqMid: 1420,
+            freqEnd: 510,
+            duration: 0.32,
+            gain: 0.16,
+            filterFreq: 3100,
+            delaySeconds: 0.04,
+            sendEcho: true
+          });
+          break;
+        case "door_locked":
+          this.playTone({ type: "square", freq: 1450, freqEnd: 620, duration: 0.025, gain: 0.14 });
+          this.playNoise({ duration: 0.035, gain: 0.11, filterType: "bandpass", freq: 1800, q: 3 });
+          this.playTone({ type: "triangle", freq: 180, freqEnd: 110, duration: 0.055, gain: 0.14, delaySeconds: 0.065 });
+          this.playTone({ type: "square", freq: 1220, freqEnd: 480, duration: 0.03, gain: 0.14, delaySeconds: 0.135 });
+          this.playNoise({ duration: 0.04, gain: 0.11, filterType: "bandpass", freq: 1550, q: 3, delaySeconds: 0.135 });
+          break;
+        case "door_open":
+          this.playTone({ type: "square", freq: 980, freqEnd: 540, duration: 0.025, gain: 0.1 });
+          this.playTone({ type: "sawtooth", freq: 195, freqMid: 310, freqEnd: 240, duration: 0.22, gain: 0.11, filterFreq: 950, delaySeconds: 0.03 });
+          break;
+        case "pickup_item":
+          [587.33, 783.99, 1174.66].forEach((freq, i) => {
+            this.playN64BellNote(freq, 0.16, 0.13, i * 0.055);
+          });
+          break;
+        case "pickup_whiskey":
+          this.playTone({ type: "sine", freq: 320, freqEnd: 680, duration: 0.06, gain: 0.15 });
+          this.playTone({ type: "sine", freq: 240, freqMid: 420, freqEnd: 280, duration: 0.09, gain: 0.14, delaySeconds: 0.09 });
+          this.playTone({ type: "sine", freq: 260, freqMid: 460, freqEnd: 300, duration: 0.09, gain: 0.14, delaySeconds: 0.2 });
+          break;
+        case "pickup_armor":
+          this.playNoise({ duration: 0.11, gain: 0.12, filterType: "bandpass", freq: 1400, freqEnd: 2600, q: 2 });
+          this.playTone({ type: "sawtooth", freq: 220, freqEnd: 440, duration: 0.22, gain: 0.15, filterFreq: 1600, delaySeconds: 0.08, sendEcho: true });
+          break;
+        case "weapon_switch":
+          this.playTone({ type: "square", freq: 1320, freqEnd: 660, duration: 0.022, gain: 0.1 });
+          this.playNoise({ duration: 0.03, gain: 0.09, filterType: "highpass", freq: 2200, delaySeconds: 0.025 });
+          break;
+        case "uzi_fire":
+          this.playTone({ type: "sawtooth", freq: 210, freqEnd: 58, duration: 0.055, gain: 0.2, filterFreq: 1800 });
+          this.playNoise({ duration: 0.05, gain: 0.18, filterType: "bandpass", freq: 1900, freqEnd: 750, q: 1.1 });
+          break;
+        case "uzi_reload":
+          this.playTone({ type: "square", freq: 920, freqEnd: 480, duration: 0.03, gain: 0.12 });
+          this.playTone({ type: "square", freq: 540, freqEnd: 1120, duration: 0.035, gain: 0.13, delaySeconds: 0.22 });
+          this.playNoise({ duration: 0.055, gain: 0.12, filterType: "bandpass", freq: 2400, q: 2, delaySeconds: 0.42 });
+          break;
+        case "no_ammo":
+          this.playTone({ type: "square", freq: 2400, freqEnd: 1100, duration: 0.02, gain: 0.11 });
+          break;
+        case "flamethrower_fire":
+          this.playNoise({ duration: 0.16, gain: 0.16, filterType: "bandpass", freq: 680, freqEnd: 260, q: 0.9 });
+          this.playTone({ type: "sawtooth", freq: 115, freqEnd: 65, duration: 0.14, gain: 0.09, filterFreq: 360 });
+          break;
+        case "fire_ember":
+          this.playNoise({ duration: 0.14, gain: 0.055, filterType: "bandpass", freq: 420, q: 1.2 });
+          this.playNoise({ duration: 0.022, gain: 0.09, filterType: "highpass", freq: 3600, delaySeconds: 0.03 });
+          break;
+        case "katana_swing":
+          this.playNoise({ duration: 0.15, gain: 0.18, filterType: "bandpass", freq: 2400, freqEnd: 450, q: 1.8 });
+          this.playTone({ type: "sine", freq: 3400, freqEnd: 1400, duration: 0.09, gain: 0.06, sendEcho: true });
+          break;
+        case "punch_swing":
+          this.playNoise({ duration: 0.09, gain: 0.13, filterType: "bandpass", freq: 520, freqEnd: 180, q: 1.4 });
+          this.playTone({ type: "triangle", freq: 160, freqEnd: 62, duration: 0.07, gain: 0.14 });
+          break;
+        case "bazooka_fire":
+          this.playTone({ type: "sawtooth", freq: 145, freqEnd: 38, duration: 0.24, gain: 0.24, filterFreq: 720, sendEcho: true });
+          this.playNoise({ duration: 0.22, gain: 0.2, filterType: "bandpass", freq: 820, freqEnd: 240, q: 0.9 });
+          break;
+        case "rocket_flight":
+          this.playNoise({ duration: 0.11, gain: 0.075, filterType: "bandpass", freq: 1250, freqEnd: 980, q: 2.4 });
+          this.playTone({ type: "sawtooth", freq: 240, freqEnd: 215, duration: 0.1, gain: 0.04, filterFreq: 600 });
+          break;
+        case "explosion":
+          this.playTone({ type: "sine", freq: 98, freqEnd: 22, duration: 0.52, gain: 0.32 });
+          this.playTone({ type: "sawtooth", freq: 135, freqEnd: 28, duration: 0.38, gain: 0.22, filterFreq: 380 });
+          this.playNoise({ duration: 0.58, gain: 0.28, filterType: "lowpass", freq: 2400, freqEnd: 130, q: 0.8, sendEcho: true });
+          break;
+        case "mine_beep":
+          this.playTone({ type: "square", freq: 2450, duration: 0.045, gain: 0.12, filterFreq: 4e3 });
+          break;
+        case "wall_crumble":
+          this.playNoise({ duration: 0.38, gain: 0.2, filterType: "lowpass", freq: 620, freqEnd: 140, q: 1 });
+          this.playTone({ type: "triangle", freq: 110, freqEnd: 36, duration: 0.32, gain: 0.18 });
+          break;
+        case "c4_plant":
+          [1850, 1850, 2650].forEach((freq, i) => {
+            this.playTone({ type: "square", freq, duration: 0.055, gain: 0.15, delaySeconds: i * 0.085, sendEcho: true });
+          });
+          break;
+        case "window_break":
+          this.playNoise({ duration: 0.28, gain: 0.24, filterType: "highpass", freq: 2200, q: 1.1, sendEcho: true });
+          [3200, 4400, 2750, 5100, 3850, 5800].forEach((freq, i) => {
+            this.playTone({
+              type: "triangle",
+              freq,
+              freqEnd: freq * 0.72,
+              duration: 0.075,
+              gain: 0.11,
+              delaySeconds: 0.02 + i * 0.038,
+              sendEcho: true
+            });
+          });
+          break;
+        case "npc_alert":
+          this.playTone({ type: "sawtooth", freq: 1174.66, freqEnd: 1567.98, duration: 0.14, gain: 0.16, filterFreq: 3800, sendEcho: true });
+          break;
+        case "player_hurt":
+          this.playTone({ type: "sawtooth", freq: 240, freqEnd: 92, duration: 0.14, gain: 0.2, filterFreq: 950 });
+          this.playNoise({ duration: 0.08, gain: 0.14, filterType: "lowpass", freq: 680 });
+          break;
+        case "npc_hit":
+          this.playTone({ type: "triangle", freq: 310, freqEnd: 115, duration: 0.07, gain: 0.14 });
+          this.playNoise({ duration: 0.045, gain: 0.11, filterType: "bandpass", freq: 1200, q: 1.5 });
+          break;
+        case "npc_death":
+          this.playTone({ type: "sawtooth", freq: 380, freqEnd: 88, duration: 0.28, gain: 0.18, filterFreq: 1100, sendEcho: true });
+          break;
+        case "snowball_throw":
+          this.playNoise({ duration: 0.085, gain: 0.08, filterType: "bandpass", freq: 780, freqEnd: 320, q: 1.4 });
+          break;
+        case "electrocution":
+          this.playTone({ type: "sawtooth", freq: 120, freqMid: 960, freqEnd: 180, duration: 0.1, gain: 0.16, filterFreq: 3200 });
+          this.playNoise({ duration: 0.08, gain: 0.14, filterType: "highpass", freq: 2400 });
+          break;
+        case "motorcycle_engine":
+          this.playTone({ type: "sawtooth", freq: 72, freqEnd: 96, duration: 0.11, gain: 0.12, filterFreq: 420 });
+          break;
+        case "motorcycle_crash":
+          this.playNoise({ duration: 0.32, gain: 0.22, filterType: "bandpass", freq: 950, freqEnd: 210, q: 0.9, sendEcho: true });
+          this.playTone({ type: "sawtooth", freq: 150, freqEnd: 42, duration: 0.26, gain: 0.2, filterFreq: 600 });
+          break;
+        case "computer_boot":
+          this.playTone({ type: "square", freq: 1e3, duration: 0.09, gain: 0.12 });
+          this.playTone({ type: "square", freq: 1480, duration: 0.07, gain: 0.11, delaySeconds: 0.12 });
+          break;
+        case "game_over":
+          [392, 349.23, 329.63, 261.63].forEach((freq, i) => {
+            this.playTone({
+              type: "sawtooth",
+              freq,
+              duration: 0.22,
+              gain: 0.14,
+              filterFreq: 1200,
+              delaySeconds: i * 0.16,
+              sendEcho: true
+            });
+          });
+          break;
+      }
+    }
+    playN64BellNote(freq, duration, gain, delaySeconds = 0) {
+      this.playTone({
+        type: "triangle",
+        freq,
+        duration,
+        gain,
+        filterFreq: 4200,
+        delaySeconds,
+        sendEcho: true
+      });
+      this.playTone({
+        type: "sine",
+        freq: freq * 2,
+        duration: duration * 0.55,
+        gain: gain * 0.42,
+        delaySeconds
+      });
+    }
+    playSleighBell(gain) {
+      this.playNoise({
+        duration: 0.055,
+        gain,
+        filterType: "highpass",
+        freq: 4800,
+        q: 1.8
+      });
+      this.playTone({
+        type: "sine",
+        freq: 5200,
+        freqEnd: 4600,
+        duration: 0.04,
+        gain: gain * 0.65
+      });
+    }
+    playDrumKick(gain) {
+      this.playTone({
+        type: "sine",
+        freq: 135,
+        freqEnd: 42,
+        duration: 0.09,
+        gain
+      });
+    }
+    playDrumSnare(gain) {
+      this.playNoise({
+        duration: 0.07,
+        gain,
+        filterType: "highpass",
+        freq: 1400
+      });
+      this.playTone({
+        type: "triangle",
+        freq: 190,
+        freqEnd: 95,
+        duration: 0.045,
+        gain: gain * 0.7
+      });
+    }
+    playTone(opts) {
+      const ctx = this.ctx;
+      const master = this.masterGain;
+      if (!ctx || !master) return;
+      const start = ctx.currentTime + (opts.delaySeconds ?? 0);
+      const end = start + Math.max(0.01, opts.duration);
+      const osc = ctx.createOscillator();
+      osc.type = opts.type;
+      osc.frequency.setValueAtTime(Math.max(16, opts.freq), start);
+      if (typeof opts.freqMid === "number") {
+        osc.frequency.exponentialRampToValueAtTime(
+          Math.max(16, opts.freqMid),
+          start + opts.duration * 0.45
+        );
+      }
+      if (typeof opts.freqEnd === "number") {
+        osc.frequency.exponentialRampToValueAtTime(
+          Math.max(16, opts.freqEnd),
+          end
+        );
+      }
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(1e-4, start);
+      env.gain.linearRampToValueAtTime(opts.gain, start + 6e-3);
+      env.gain.exponentialRampToValueAtTime(1e-4, end);
+      if (typeof opts.filterFreq === "number") {
+        const filter = ctx.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.setValueAtTime(opts.filterFreq, start);
+        osc.connect(filter);
+        filter.connect(env);
+      } else {
+        osc.connect(env);
+      }
+      env.connect(master);
+      if (opts.sendEcho && this.delaySend) {
+        env.connect(this.delaySend);
+      }
+      osc.start(start);
+      osc.stop(end + 0.01);
+    }
+    playNoise(opts) {
+      const ctx = this.ctx;
+      const master = this.masterGain;
+      const buffer = this.noiseBuffer;
+      if (!ctx || !master || !buffer) return;
+      const start = ctx.currentTime + (opts.delaySeconds ?? 0);
+      const end = start + Math.max(0.01, opts.duration);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      const filter = ctx.createBiquadFilter();
+      filter.type = opts.filterType;
+      filter.frequency.setValueAtTime(Math.max(20, opts.freq), start);
+      if (typeof opts.freqEnd === "number") {
+        filter.frequency.exponentialRampToValueAtTime(
+          Math.max(20, opts.freqEnd),
+          end
+        );
+      }
+      if (typeof opts.q === "number") {
+        filter.Q.setValueAtTime(opts.q, start);
+      }
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(1e-4, start);
+      env.gain.linearRampToValueAtTime(opts.gain, start + 5e-3);
+      env.gain.exponentialRampToValueAtTime(1e-4, end);
+      src.connect(filter);
+      filter.connect(env);
+      env.connect(master);
+      if (opts.sendEcho && this.delaySend) {
+        env.connect(this.delaySend);
+      }
+      src.start(start, Math.random() * Math.max(0, 1.4 - opts.duration));
+      src.stop(end + 0.01);
+    }
+  };
+  var soundManager = new SoundManager();
+  function playSound(id, minIntervalSeconds) {
+    soundManager.play(id, minIntervalSeconds);
+  }
+  function attachAudioUnlockListeners(target) {
+    const unlock = () => {
+      soundManager.unlock();
+    };
+    target.addEventListener("pointerdown", unlock, { passive: true });
+    target.addEventListener("keydown", unlock, { passive: true });
+    target.addEventListener("touchstart", unlock, { passive: true });
+  }
+  var snapshots = /* @__PURE__ */ new WeakMap();
+  function getOrCreateSnapshot(state) {
+    let snap = snapshots.get(state);
+    if (!snap) {
+      snap = {
+        initialized: false,
+        dialogueRef: state.activeDialogue,
+        dialogueIndex: state.activeDialogue?.currentIndex ?? -1,
+        footprintCount: state.footprints.length,
+        lastFootprintRef: state.footprints[state.footprints.length - 1],
+        indoorStepTimer: 0,
+        prevJumpVelocity: state.player.jumpVelocity ?? 0,
+        dogMode: state.dog.mode,
+        dogBarkTimer: 0,
+        catMode: state.levels["level-upstairs"].cat.mode,
+        catHealth: state.levels["level-upstairs"].cat.health,
+        catSoundTimer: 0,
+        basementOpenedDoors: state.levels["level-basement"].openedDoors.length,
+        upstairsOpenedDoors: state.levels["level-upstairs"].openedDoors.length,
+        equippedItem: state.player.equippedItem,
+        playerHealth: state.player.health,
+        unlockedUzi: state.player.unlockedUzi,
+        unlockedFlamethrower: state.player.unlockedFlamethrower,
+        unlockedKatana: state.player.unlockedKatana,
+        unlockedBazooka: state.player.unlockedBazooka,
+        hasLadder: state.hasLadder,
+        ladderPlaced: state.ladderPlaced,
+        seenProjectiles: /* @__PURE__ */ new WeakSet(),
+        snowballCount: state.snowballs.length,
+        uziReloadActive: state.player.uziReloadTimer > 0,
+        katanaSwingActive: state.player.katanaSwingTimer > 0,
+        punchActive: state.player.punchTimer > 0,
+        rocketFlightTimer: 0,
+        explosionCount: state.explosions.length,
+        mineState: state.levels["level-basement"].mineState,
+        mineBeepTimer: 0,
+        destroyingWallCount: state.destroyingWalls.length,
+        destroyingDoorCount: state.destroyingDoors.length,
+        emberTimer: 0,
+        rosannaPhase: state.levels["level-upstairs"].rosannaCutscene?.phase ?? null,
+        electrocutionTimer: 0,
+        motorcycleStatus: state.motorcycle.status,
+        motorcycleTimer: 0,
+        npcHealthMap: /* @__PURE__ */ new Map()
+      };
+      for (const p of state.projectiles) {
+        snap.seenProjectiles.add(p);
+      }
+      const allNpcs = [
+        ...state.levels["level-basement"].getArmedNpcs(),
+        ...state.levels["level-upstairs"].getArmedNpcs()
+      ];
+      for (const { state: npc } of allNpcs) {
+        snap.npcHealthMap.set(npc.key, {
+          health: npc.health,
+          mode: npc.mode,
+          alerting: npc.hostileAlertTimer > 0,
+          reloading: npc.reloadTimer > 0
+        });
+      }
+      snap.initialized = true;
+      snapshots.set(state, snap);
+    }
+    return snap;
+  }
+  function primeGameAudioSnapshot(state) {
+    getOrCreateSnapshot(state);
+  }
+  function updateGameAudio(state, input, dtSeconds) {
+    const snap = getOrCreateSnapshot(state);
+    const desiredTrack = state.houseExploding ? "victory_xmas" : state.currentLevelId !== "level-outside" || state.player.unlockedUzi || Boolean(state.player.states.get(RUDOLPH_INSPECTED_KEY)) ? "action_xmas" : "peaceful_xmas";
+    soundManager.setMusicTrack(desiredTrack);
+    soundManager.stepMusic(dtSeconds);
+    if (state.activeDialogue !== snap.dialogueRef) {
+      if (state.activeDialogue) {
+        const firstLine = state.activeDialogue.lines[0] ?? "";
+        if (state.activeDialogue.variant === "achievement") {
+          playSound("achievement", 0.01);
+        } else if (state.activeDialogue.variant === "gameover") {
+          playSound("game_over", 0.01);
+        } else {
+          if (firstLine.toLowerCase().includes("it's locked")) {
+            playSound("door_locked", 0.01);
+          } else if (firstLine.includes("whiskey")) {
+            playSound("pickup_whiskey", 0.01);
+          } else if (firstLine.includes("body armor")) {
+            playSound("pickup_armor", 0.01);
+          } else if (firstLine.includes("pretends to work")) {
+            playSound("computer_boot", 0.01);
+          } else if (firstLine.startsWith("KABOOM!")) {
+            playSound("c4_plant", 0.01);
+          }
+          playSound("dialogue_open", 0.01);
+        }
+        snap.dialogueIndex = state.activeDialogue.currentIndex;
+      } else if (snap.dialogueRef) {
+        playSound("dialogue_advance", 0.01);
+        snap.dialogueIndex = -1;
+      }
+      snap.dialogueRef = state.activeDialogue;
+    } else if (state.activeDialogue && state.activeDialogue.currentIndex !== snap.dialogueIndex) {
+      playSound("dialogue_advance", 0.01);
+      snap.dialogueIndex = state.activeDialogue.currentIndex;
+    }
+    const lastFp = state.footprints[state.footprints.length - 1];
+    if (state.footprints.length > snap.footprintCount || lastFp && lastFp !== snap.lastFootprintRef) {
+      playSound("footstep_snow", 0.06);
+    }
+    snap.footprintCount = state.footprints.length;
+    snap.lastFootprintRef = lastFp;
+    if (state.currentLevelId !== "level-outside" && state.player.isMoving && !state.activeDialogue) {
+      snap.indoorStepTimer += dtSeconds;
+      if (snap.indoorStepTimer >= 0.24) {
+        snap.indoorStepTimer = 0;
+        playSound("footstep_indoor", 0.08);
+      }
+    } else {
+      snap.indoorStepTimer = 0.18;
+    }
+    const jv = state.player.jumpVelocity ?? 0;
+    if (jv > 0 && snap.prevJumpVelocity <= 0) {
+      playSound("jump", 0.05);
+    }
+    snap.prevJumpVelocity = jv;
+    if (state.currentLevelId === "level-outside" && state.dog.mode === "chasing") {
+      if (snap.dogMode !== "chasing") {
+        playSound("dog_bark", 0.05);
+        snap.dogBarkTimer = 0;
+      } else {
+        snap.dogBarkTimer += dtSeconds;
+        if (snap.dogBarkTimer >= 0.65) {
+          snap.dogBarkTimer -= 0.65;
+          playSound("dog_bark", 0.1);
+        }
+      }
+    } else {
+      snap.dogBarkTimer = 0;
+    }
+    snap.dogMode = state.dog.mode;
+    const cat = state.levels["level-upstairs"].cat;
+    if (state.currentLevelId === "level-upstairs") {
+      if (cat.mode !== snap.catMode) {
+        if (cat.mode === "hostile" || cat.mode === "latched") {
+          playSound("cat_angry", 0.02);
+          playSound("cat_meow", 0.02);
+        } else if (cat.mode === "flee") {
+          playSound("cat_meow", 0.02);
+        } else if (cat.mode === "dead") {
+          playSound("npc_death", 0.02);
+        }
+        snap.catSoundTimer = 0;
+      } else if (cat.health < snap.catHealth) {
+        playSound("cat_angry", 0.05);
+      } else if (cat.mode === "flee" || cat.mode === "hostile" || cat.mode === "latched") {
+        snap.catSoundTimer += dtSeconds;
+        const interval = cat.mode === "flee" ? 1.6 : 1.1;
+        if (snap.catSoundTimer >= interval) {
+          snap.catSoundTimer -= interval;
+          playSound(cat.mode === "flee" ? "cat_meow" : "cat_angry", 0.1);
+        }
+      }
+    }
+    snap.catMode = cat.mode;
+    snap.catHealth = cat.health;
+    const baseOpened = state.levels["level-basement"].openedDoors.length;
+    const upOpened = state.levels["level-upstairs"].openedDoors.length;
+    if (baseOpened > snap.basementOpenedDoors || upOpened > snap.upstairsOpenedDoors) {
+      playSound("door_open", 0.02);
+    }
+    snap.basementOpenedDoors = baseOpened;
+    snap.upstairsOpenedDoors = upOpened;
+    if (state.player.equippedItem !== snap.equippedItem) {
+      playSound("weapon_switch", 0.01);
+      snap.equippedItem = state.player.equippedItem;
+    }
+    if (state.player.health < snap.playerHealth) {
+      playSound("player_hurt", 0.02);
+    } else if (state.player.health > snap.playerHealth) {
+      playSound("pickup_item", 0.02);
+    }
+    snap.playerHealth = state.player.health;
+    if (state.player.unlockedUzi && !snap.unlockedUzi || state.player.unlockedFlamethrower && !snap.unlockedFlamethrower || state.player.unlockedKatana && !snap.unlockedKatana || state.player.unlockedBazooka && !snap.unlockedBazooka || state.hasLadder && !snap.hasLadder || state.ladderPlaced && !snap.ladderPlaced) {
+      playSound("pickup_item", 0.02);
+    }
+    snap.unlockedUzi = state.player.unlockedUzi;
+    snap.unlockedFlamethrower = state.player.unlockedFlamethrower;
+    snap.unlockedKatana = state.player.unlockedKatana;
+    snap.unlockedBazooka = state.player.unlockedBazooka;
+    snap.hasLadder = state.hasLadder;
+    snap.ladderPlaced = state.ladderPlaced;
+    let hasRocketInFlight = false;
+    let hasFireballInFlight = false;
+    for (const p of state.projectiles) {
+      if (p.kind === "rocket") hasRocketInFlight = true;
+      if (p.kind === "fireball") hasFireballInFlight = true;
+      if (!snap.seenProjectiles.has(p)) {
+        snap.seenProjectiles.add(p);
+        if (p.kind === "rocket") {
+          playSound("bazooka_fire", 0.02);
+        } else if (p.kind === "fireball") {
+          playSound("flamethrower_fire", 0.03);
+        } else {
+          playSound("uzi_fire", 0.025);
+        }
+      }
+    }
+    if (state.snowballs.length > snap.snowballCount) {
+      playSound("snowball_throw", 0.05);
+    }
+    snap.snowballCount = state.snowballs.length;
+    if (hasRocketInFlight) {
+      snap.rocketFlightTimer += dtSeconds;
+      if (snap.rocketFlightTimer >= 0.11) {
+        snap.rocketFlightTimer -= 0.11;
+        playSound("rocket_flight", 0.05);
+      }
+    } else {
+      snap.rocketFlightTimer = 0.11;
+    }
+    const uziReloadNow = state.player.uziReloadTimer > 0;
+    if (uziReloadNow && !snap.uziReloadActive) {
+      playSound("uzi_reload", 0.02);
+    }
+    snap.uziReloadActive = uziReloadNow;
+    const katanaSwingNow = state.player.katanaSwingTimer > 0;
+    if (katanaSwingNow && !snap.katanaSwingActive) {
+      playSound("katana_swing", 0.02);
+    }
+    snap.katanaSwingActive = katanaSwingNow;
+    const punchNow = state.player.punchTimer > 0;
+    if (punchNow && !snap.punchActive) {
+      playSound("punch_swing", 0.02);
+    }
+    snap.punchActive = punchNow;
+    if (state.player.equippedItem === "flamethrower" && state.player.flamethrowerAmmo <= 0 && !state.activeDialogue && (input.action || input.attack)) {
+      playSound("no_ammo", 0.22);
+    }
+    const basement = state.levels["level-basement"];
+    if (state.explosions.length > snap.explosionCount || basement.mineState === "exploded" && snap.mineState !== "exploded") {
+      playSound("explosion", 0.02);
+    }
+    snap.explosionCount = state.explosions.length;
+    if (state.currentLevelId === "level-basement" && basement.mineState === "blinking") {
+      snap.mineBeepTimer += dtSeconds;
+      if (snap.mineBeepTimer >= 0.25) {
+        snap.mineBeepTimer -= 0.25;
+        playSound("mine_beep", 0.08);
+      }
+    } else {
+      snap.mineBeepTimer = 0.25;
+    }
+    snap.mineState = basement.mineState;
+    if (state.destroyingWalls.length > snap.destroyingWallCount || state.destroyingDoors.length > snap.destroyingDoorCount) {
+      playSound("wall_crumble", 0.04);
+    }
+    snap.destroyingWallCount = state.destroyingWalls.length;
+    snap.destroyingDoorCount = state.destroyingDoors.length;
+    const woodBurning = state.currentLevelId === "level-basement" && basement.stairsWoodTiles.some((t) => t.burning && !t.burned);
+    const anyOnFire = woodBurning || state.burningNpcs.size > 0 || hasFireballInFlight;
+    if (anyOnFire) {
+      snap.emberTimer += dtSeconds;
+      if (snap.emberTimer >= 0.18) {
+        snap.emberTimer -= 0.18;
+        playSound("fire_ember", 0.08);
+      }
+    } else {
+      snap.emberTimer = 0.18;
+    }
+    const upstairs = state.levels["level-upstairs"];
+    const rosannaPhase = upstairs.rosannaCutscene?.phase ?? null;
+    if (rosannaPhase === "jumping" && snap.rosannaPhase !== "jumping") {
+      playSound("window_break", 0.01);
+    }
+    snap.rosannaPhase = rosannaPhase;
+    const activeNpcs = state.currentLevelId === "level-basement" ? basement.getArmedNpcs() : state.currentLevelId === "level-upstairs" ? upstairs.getArmedNpcs() : [];
+    for (const { state: npc } of activeNpcs) {
+      const prev = snap.npcHealthMap.get(npc.key);
+      const isAlerting = npc.hostileAlertTimer > 0;
+      const isReloading = npc.reloadTimer > 0;
+      if (prev) {
+        if (isAlerting && !prev.alerting) {
+          playSound("npc_alert", 0.04);
+        }
+        if (isReloading && !prev.reloading) {
+          playSound("uzi_reload", 0.04);
+        }
+        if (npc.health < prev.health) {
+          if (npc.health <= 0 || npc.mode === "dead") {
+            playSound("npc_death", 0.02);
+          } else {
+            playSound("npc_hit", 0.03);
+          }
+        }
+      }
+      snap.npcHealthMap.set(npc.key, {
+        health: npc.health,
+        mode: npc.mode,
+        alerting: isAlerting,
+        reloading: isReloading
+      });
+    }
+    if (state.electrocutionTimer > 0) {
+      snap.electrocutionTimer += dtSeconds;
+      if (snap.electrocutionTimer >= 0.12) {
+        snap.electrocutionTimer -= 0.12;
+        playSound("electrocution", 0.05);
+      }
+    } else {
+      snap.electrocutionTimer = 0.12;
+    }
+    if (state.motorcycle.status === "driving") {
+      snap.motorcycleTimer += dtSeconds;
+      if (snap.motorcycleTimer >= 0.11) {
+        snap.motorcycleTimer -= 0.11;
+        playSound("motorcycle_engine", 0.05);
+      }
+    } else if (state.motorcycle.status === "crashed" && snap.motorcycleStatus === "driving") {
+      playSound("motorcycle_crash", 0.02);
+    }
+    snap.motorcycleStatus = state.motorcycle.status;
+  }
+
+  // src/core/secretSantaDB.ts
+  var SecretSantaDB = class {
+    constructor(content, playerId = null) {
+      __publicField(this, "giverToReceiver", /* @__PURE__ */ new Map());
+      __publicField(this, "playerId", null);
+      this.playerId = playerId;
+      if (content) {
+        this.loadFromText(content);
+      }
+    }
+    /**
+     * Base64 decodes the playerId. Returns atob(playerId) if playerId is non-null, null otherwise.
+     */
+    get playerName() {
+      if (!this.playerId) {
+        return null;
+      }
+      try {
+        return atob(this.playerId);
+      } catch {
+        return null;
+      }
+    }
+    /**
+     * Base64 encodes a name string using btoa.
+     */
+    toPlayerId(name) {
+      return btoa(name);
+    }
+    /**
+     * Parses non-empty lines formatted as "Name1 -> Name2" and populates the map.
+     */
+    loadFromText(content) {
+      this.giverToReceiver.clear();
+      const lines = content.split(/\r?\n/);
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const parts = line.split("->");
+        if (parts.length === 2) {
+          const giftGiver = parts[0].trim();
+          const giftReceiver = parts[1].trim();
+          if (giftGiver && giftReceiver) {
+            this.giverToReceiver.set(giftGiver, giftReceiver);
+          }
+        }
+      }
+    }
+    /**
+     * Returns a list of all gift givers in insertion order.
+     */
+    get giftGivers() {
+      return Array.from(this.giverToReceiver.keys());
+    }
+    /**
+     * Looks up the gift receiver for a given gift giver name.
+     */
+    getGiftReceiverOf(giftGiver) {
+      return this.giverToReceiver.get(giftGiver);
+    }
+    /**
+     * Debug logs each gift giver's name and who they give presents to according to this map
+     * in the format: "Gift Giver (PlayerID) -> Gift Receiver"
+     * Followed by:
+     * "Based on pid, the current player is <playerName> who should give a gift to <receiver>"
+     */
+    debugLogAll() {
+      for (const giver of this.giftGivers) {
+        const receiver = this.getGiftReceiverOf(giver);
+        const pid = this.toPlayerId(giver);
+        debugLog(`${giver} (${pid}) -> ${receiver}`);
+      }
+      const currentName = this.playerName;
+      const receiverOfPlayer = currentName ? this.getGiftReceiverOf(currentName) : void 0;
+      debugLog(
+        `Based on pid, the current player is ${currentName ?? "null"} who should give a gift to ${receiverOfPlayer ?? "null"}`
+      );
+    }
+  };
+  async function initSecretSantaDB(initialContent, playerId) {
+    let content = initialContent;
+    if (content === void 0 && typeof fetch === "function") {
+      try {
+        const res = await fetch("./secret.txt");
+        if (res.ok) {
+          content = await res.text();
+        }
+      } catch {
+      }
+    }
+    let pid = playerId;
+    if (pid === void 0) {
+      if (typeof window !== "undefined" && window.location?.search) {
+        pid = new URLSearchParams(window.location.search).get("pid");
+      } else {
+        pid = null;
+      }
+    }
+    const db = new SecretSantaDB(content, pid);
+    return db;
+  }
+
+  // inspiration/secret.txt
+  var secret_default = "Alex -> Anne Marie\nAnne Marie -> Olexa\nAnnelotte -> Rosanna\nArjan -> Hanneloes\nDiana -> Alex\nHanneloes -> Annelotte\nHenrik -> Albin\nOlexa -> Arjan\nRosanna -> Simon\nSimon -> Diana\nSylvester -> Henrik\nTanja -> Sylvester\nAlbin -> Tanja\n";
+
+  // src/rendering/math3d.ts
+  var MAIN_HOUSE_WALL_HEIGHT = 34;
+  var MAIN_HOUSE_ROOF_PEAK_ADD = 16;
+  var MAIN_HOUSE_ROOF_WALK_HEIGHT = 36;
+  var INDOOR_WALL_HEIGHT = 2 * TILE_SIZE;
+  function sub3(a, b) {
+    return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+  }
+  function dot3(a, b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+  }
+  function cross3(a, b) {
+    return {
+      x: a.y * b.z - a.z * b.y,
+      y: a.z * b.x - a.x * b.z,
+      z: a.x * b.y - a.y * b.x
+    };
+  }
+  function length3(v) {
+    return Math.hypot(v.x, v.y, v.z);
+  }
+  function normalize3(v) {
+    const len = Math.hypot(v.x, v.y, v.z);
+    if (len < 1e-6) return { x: 0, y: 1, z: 0 };
+    return { x: v.x / len, y: v.y / len, z: v.z / len };
+  }
+  function wrapAngle(angle) {
+    let a = (angle + Math.PI) % (Math.PI * 2);
+    if (a < 0) a += Math.PI * 2;
+    return a - Math.PI;
+  }
+  function lerpAngle2(from, to, t) {
+    const diff = wrapAngle(to - from);
+    return wrapAngle(from + diff * Math.max(0, Math.min(1, t)));
+  }
+  function directionToYaw(facing) {
+    switch (facing) {
+      case "up":
+        return -Math.PI / 2;
+      case "down":
+        return Math.PI / 2;
+      case "left":
+        return Math.PI;
+      case "right":
+        return 0;
+    }
+  }
+  function yawToDirection(yaw) {
+    const dx = Math.cos(yaw);
+    const dy = Math.sin(yaw);
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      return dy < 0 ? "up" : "down";
+    }
+    return dx < 0 ? "left" : "right";
+  }
+  function mat4Perspective(fovYRadians, aspect, near, far) {
+    const f = 1 / Math.tan(fovYRadians / 2);
+    const rangeInv = 1 / (near - far);
+    const out = new Float32Array(16);
+    out[0] = f / Math.max(0.01, aspect);
+    out[5] = f;
+    out[10] = far * rangeInv;
+    out[11] = -1;
+    out[14] = near * far * rangeInv;
+    out[15] = 0;
+    return out;
+  }
+  function mat4LookAt(eye, target, up) {
+    const zAxis = normalize3(sub3(eye, target));
+    let xAxis = cross3(up, zAxis);
+    if (length3(xAxis) < 1e-5) {
+      xAxis = { x: 1, y: 0, z: 0 };
+    } else {
+      xAxis = normalize3(xAxis);
+    }
+    const yAxis = cross3(zAxis, xAxis);
+    const out = new Float32Array(16);
+    out[0] = xAxis.x;
+    out[1] = yAxis.x;
+    out[2] = zAxis.x;
+    out[3] = 0;
+    out[4] = xAxis.y;
+    out[5] = yAxis.y;
+    out[6] = zAxis.y;
+    out[7] = 0;
+    out[8] = xAxis.z;
+    out[9] = yAxis.z;
+    out[10] = zAxis.z;
+    out[11] = 0;
+    out[12] = -dot3(xAxis, eye);
+    out[13] = -dot3(yAxis, eye);
+    out[14] = -dot3(zAxis, eye);
+    out[15] = 1;
+    return out;
+  }
+  function mat4Multiply(a, b) {
+    const out = new Float32Array(16);
+    for (let col = 0; col < 4; col++) {
+      const b0 = b[col * 4 + 0];
+      const b1 = b[col * 4 + 1];
+      const b2 = b[col * 4 + 2];
+      const b3 = b[col * 4 + 3];
+      out[col * 4 + 0] = a[0] * b0 + a[4] * b1 + a[8] * b2 + a[12] * b3;
+      out[col * 4 + 1] = a[1] * b0 + a[5] * b1 + a[9] * b2 + a[13] * b3;
+      out[col * 4 + 2] = a[2] * b0 + a[6] * b1 + a[10] * b2 + a[14] * b3;
+      out[col * 4 + 3] = a[3] * b0 + a[7] * b1 + a[11] * b2 + a[15] * b3;
+    }
+    return out;
+  }
+  function projectWorldToScreen(pt, viewProj, viewportW, viewportH) {
+    const x = pt.x;
+    const y = pt.y;
+    const z = pt.z;
+    const cx = viewProj[0] * x + viewProj[4] * y + viewProj[8] * z + viewProj[12];
+    const cy = viewProj[1] * x + viewProj[5] * y + viewProj[9] * z + viewProj[13];
+    const cz = viewProj[2] * x + viewProj[6] * y + viewProj[10] * z + viewProj[14];
+    const cw = viewProj[3] * x + viewProj[7] * y + viewProj[11] * z + viewProj[15];
+    if (cw <= 0.05) {
+      return { x: 0, y: 0, z: cz, w: cw, visible: false };
+    }
+    const invW = 1 / cw;
+    const ndcX = cx * invW;
+    const ndcY = cy * invW;
+    const ndcZ = cz * invW;
+    return {
+      x: (ndcX * 0.5 + 0.5) * viewportW,
+      y: (0.5 - ndcY * 0.5) * viewportH,
+      z: ndcZ,
+      w: cw,
+      visible: ndcZ >= -0.1 && ndcZ <= 1.05 && Math.abs(ndcX) <= 1.6 && Math.abs(ndcY) <= 1.6
+    };
+  }
+  function smoothPlateauWeight(x, z, minX, maxX, minZ, maxZ, margin) {
+    const dx = Math.max(0, minX - x, x - maxX);
+    const dz = Math.max(0, minZ - z, z - maxZ);
+    const dist = Math.hypot(dx, dz);
+    if (dist >= margin) return 0;
+    const t = 1 - dist / margin;
+    return t * t * (3 - 2 * t);
+  }
+  function getTerrainHeight(x, z, levelId = "level-outside") {
+    if (levelId !== "level-outside") {
+      return 0;
+    }
+    const northProgress = Math.max(0, Math.min(1, (432 - z) / 384));
+    let h = Math.pow(northProgress, 1.08) * 24;
+    const hills = Math.sin(x * 0.016 + z * 0.012) * 2.2 + Math.cos(x * 0.024 - z * 0.019) * 1.6 + Math.sin((x - 240) * 0.01) * 1.8;
+    h += hills;
+    const eastHill = smoothPlateauWeight(x, z, 18 * 16, 30 * 16, 3 * 16, 11 * 16, 56);
+    h += eastHill * 5.5;
+    if (z < 4.5 * 16) {
+      const ridgeT = Math.max(0, (4.5 * 16 - z) / (4.5 * 16));
+      h += ridgeT * ridgeT * 14;
+    }
+    const nwCliff = smoothPlateauWeight(x, z, 0, 4.2 * 16, 0, 3.8 * 16, 36);
+    h += nwCliff * 9;
+    const wHouse = smoothPlateauWeight(x, z, 3.6 * 16, 17.2 * 16, 3 * 16, 11.2 * 16, 28);
+    h = h * (1 - wHouse) + 21.5 * wHouse;
+    const wStuga1 = smoothPlateauWeight(x, z, 19 * 16, 23 * 16, 5 * 16, 9 * 16, 20);
+    h = h * (1 - wStuga1) + 25 * wStuga1;
+    const wStuga2 = smoothPlateauWeight(x, z, 25 * 16, 29 * 16, 5 * 16, 9 * 16, 20);
+    h = h * (1 - wStuga2) + 26.5 * wStuga2;
+    const wPatio = smoothPlateauWeight(x, z, 7 * 16, 9 * 16, 14 * 16, 16 * 16, 18);
+    h = h * (1 - wPatio) + 14 * wPatio;
+    const wShed = smoothPlateauWeight(x, z, 25 * 16, 30 * 16, 16 * 16, 20 * 16, 22);
+    h = h * (1 - wShed) + 11.5 * wShed;
+    const wGarage = smoothPlateauWeight(x, z, 2 * 16, 9 * 16, 21 * 16, 26 * 16, 24);
+    h = h * (1 - wGarage) + 5.5 * wGarage;
+    return h;
+  }
+  function getTerrainNormal(x, z, levelId = "level-outside") {
+    if (levelId !== "level-outside") {
+      return { x: 0, y: 1, z: 0 };
+    }
+    const eps = 2;
+    const hL = getTerrainHeight(x - eps, z, levelId);
+    const hR = getTerrainHeight(x + eps, z, levelId);
+    const hD = getTerrainHeight(x, z - eps, levelId);
+    const hU = getTerrainHeight(x, z + eps, levelId);
+    return normalize3({
+      x: hL - hR,
+      y: 2 * eps,
+      z: hD - hU
+    });
+  }
+  function getMainHouseRoofElevation(_px, pz) {
+    const houseGroundY = getTerrainHeight(5 * TILE_SIZE, 9 * TILE_SIZE, "level-outside");
+    const roofBaseY = houseGroundY + MAIN_HOUSE_ROOF_WALK_HEIGHT;
+    const zCenter = 6.5 * TILE_SIZE;
+    const zHalfSpan = 3.75 * TILE_SIZE;
+    const slopeT = Math.max(0, 1 - Math.abs(pz - zCenter) / zHalfSpan);
+    return roofBaseY + MAIN_HOUSE_ROOF_PEAK_ADD * slopeT;
+  }
+  function getPlayerElevation(state) {
+    const px = state.player.x + state.player.width / 2;
+    const pz = state.player.y + state.player.height / 2;
+    const jumpOffset = state.player.jumpOffset ?? 0;
+    if (state.currentLevelId === "level-outside") {
+      if (state.climbing) {
+        const groundY = getTerrainHeight(px, LADDER_BOTTOM_Y + 6, "level-outside");
+        const roofEdgeY = getMainHouseRoofElevation(px, ROOF_WALK_Y + 6);
+        const t = Math.max(0, Math.min(1, state.climbing.progress));
+        return state.climbing.direction === "up" ? groundY + (roofEdgeY - groundY) * t : roofEdgeY + (groundY - roofEdgeY) * t;
+      }
+      if (state.isOnRoof) {
+        return getMainHouseRoofElevation(px, pz) + jumpOffset;
+      }
+      return getTerrainHeight(px, pz, "level-outside") + jumpOffset;
+    }
+    if (state.currentLevelId === "level-basement") {
+      if (px >= 18 * TILE_SIZE && px <= 22 * TILE_SIZE && pz >= 15 * TILE_SIZE && pz <= 19 * TILE_SIZE) {
+        const stairProgress = Math.max(0, Math.min(1, (px - 18 * TILE_SIZE) / (3 * TILE_SIZE)));
+        return stairProgress * 12 + jumpOffset;
+      }
+      return jumpOffset;
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      if (px >= 15 * TILE_SIZE && px <= 19 * TILE_SIZE && pz >= 13 * TILE_SIZE && pz <= 18 * TILE_SIZE) {
+        const stairProgress = Math.max(0, Math.min(1, (pz - 13.5 * TILE_SIZE) / (4 * TILE_SIZE)));
+        return -stairProgress * 10 + jumpOffset;
+      }
+      return jumpOffset;
+    }
+    return jumpOffset;
+  }
+  var DEFAULT_CAMERA_PITCH = 0.42;
+  var MIN_CAMERA_PITCH = 0.08;
+  var MAX_CAMERA_PITCH = 1.18;
+  function createCamera3D(initialYaw = -Math.PI / 2) {
+    const eye = { x: 232, y: 28, z: 450 };
+    const target = { x: 232, y: 12, z: 408 };
+    const up = { x: 0, y: 1, z: 0 };
+    const viewMatrix = mat4LookAt(eye, target, up);
+    const projMatrix = mat4Perspective(55 * Math.PI / 180, 256 / 224, 2, 900);
+    const viewProjMatrix = mat4Multiply(projMatrix, viewMatrix);
+    return {
+      yaw: initialYaw,
+      pitch: DEFAULT_CAMERA_PITCH,
+      distance: 52,
+      eye,
+      target,
+      up,
+      fovY: 55 * Math.PI / 180,
+      near: 2,
+      far: 900,
+      viewMatrix,
+      projMatrix,
+      viewProjMatrix,
+      lastLevelId: null,
+      wasOnRoof: false,
+      shoulderOffset: 0,
+      equippedDistanceScale: 1
+    };
+  }
+  function computeUnobstructedCameraDistance(originX, originZ, cameraYaw, cameraPitch, maxDistance, map) {
+    const CAMERA_LOS_POINTS = 30;
+    const oppositeYaw = cameraYaw + Math.PI;
+    const cosPitch = Math.max(0.2, Math.cos(cameraPitch));
+    const horizontalMaxDistance = maxDistance * cosPitch;
+    const lineOfSightDistance = horizontalMaxDistance * CAMERA_LOS_POINTS / (CAMERA_LOS_POINTS - 1);
+    const isCameraIgnoredTile = (col, row) => {
+      if (col < 0 || col >= map.cols || row < 0 || row >= map.rows) {
+        return false;
+      }
+      return CAMERA_NON_BLOCKING_TILES.has(map.tiles[row][col]);
+    };
+    let lineOfSight = new LineOfSight(
+      { x: originX, y: originZ },
+      oppositeYaw,
+      lineOfSightDistance,
+      map,
+      CAMERA_LOS_POINTS,
+      isCameraIgnoredTile
+    );
+    let furthestValidIndex = -1;
+    for (let i = lineOfSight.n - 1; i >= 0; i--) {
+      const box = lineOfSight.boxes[i];
+      if (!isRectCollidingWithMap(
+        map,
+        box.x,
+        box.y,
+        box.width,
+        box.height,
+        false,
+        isCameraIgnoredTile
+      )) {
+        furthestValidIndex = i;
+        break;
+      }
+    }
+    let unobstructedDistance = 0;
+    if (furthestValidIndex >= 0) {
+      const furthestPoint = lineOfSight.points(furthestValidIndex);
+      const horizontalDist = Math.hypot(
+        furthestPoint.x - originX,
+        furthestPoint.y - originZ
+      );
+      const paddedHorizontalDist = furthestValidIndex < CAMERA_LOS_POINTS - 1 ? Math.max(0, horizontalDist - 4) : horizontalDist;
+      unobstructedDistance = Math.min(
+        maxDistance,
+        Math.max(0, paddedHorizontalDist / cosPitch)
+      );
+    }
+    lineOfSight = null;
+    return unobstructedDistance;
+  }
+  function updateCamera3D(cam, state, input, dtSeconds, aspect = 256 / 224) {
+    const player = state.player;
+    if (cam.lastLevelId !== state.currentLevelId) {
+      cam.lastLevelId = state.currentLevelId;
+      const spawnYaw = directionToYaw(player.facing);
+      cam.yaw = spawnYaw;
+      player.yaw = spawnYaw;
+      player.renderYaw = spawnYaw;
+      if (input.cameraYaw !== null && input.cameraYaw !== void 0) {
+        input.cameraYaw = spawnYaw;
+      }
+    }
+    if (state.isOnRoof && !cam.wasOnRoof) {
+      cam.yaw = -Math.PI / 2;
+      player.yaw = -Math.PI / 2;
+      if (input.cameraYaw !== null && input.cameraYaw !== void 0) {
+        input.cameraYaw = -Math.PI / 2;
+      }
+    }
+    cam.wasOnRoof = state.isOnRoof;
+    if (typeof input.cameraYaw === "number" && dtSeconds > 0) {
+      const yawSpeed = 2.2;
+      const pitchSpeed = 1.5;
+      if (input.camLeft) {
+        input.cameraYaw = wrapAngle(input.cameraYaw - yawSpeed * dtSeconds);
+      }
+      if (input.camRight) {
+        input.cameraYaw = wrapAngle(input.cameraYaw + yawSpeed * dtSeconds);
+      }
+      if (input.dualJoystickMode) {
+        if (input.cameraLookVector && Math.abs(input.cameraLookVector.x) > 1e-3) {
+          input.cameraYaw = wrapAngle(
+            input.cameraYaw + input.cameraLookVector.x * yawSpeed * dtSeconds
+          );
+        }
+      } else if (input.moveVector && Math.abs(input.moveVector.x) > 1e-3) {
+        input.cameraYaw = wrapAngle(
+          input.cameraYaw + input.moveVector.x * yawSpeed * dtSeconds
+        );
+      }
+      const basePitch = typeof input.cameraPitch === "number" ? input.cameraPitch : DEFAULT_CAMERA_PITCH;
+      if (input.camUp) {
+        input.cameraPitch = Math.max(
+          MIN_CAMERA_PITCH,
+          basePitch - pitchSpeed * dtSeconds
+        );
+      }
+      if (input.camDown) {
+        input.cameraPitch = Math.min(
+          MAX_CAMERA_PITCH,
+          (typeof input.cameraPitch === "number" ? input.cameraPitch : basePitch) + pitchSpeed * dtSeconds
+        );
+      }
+    }
+    const isCutsceneOrSpecialLock = state.currentLevelId === "level-outside" && (state.motorcycle.status === "driving" || state.climbing !== null) || state.currentLevelId === "level-upstairs" && (state.levels["level-upstairs"].rosannaCutscene?.active === true || state.levels["level-upstairs"].tableRoomAmbushCutscene?.active === true) || state.currentLevelId === "level-basement" && state.levels["level-basement"].toiletCutscene?.active === true;
+    if (typeof input.cameraYaw === "number" && player.equippedItem !== "empty" && !isCutsceneOrSpecialLock) {
+      player.yaw = wrapAngle(input.cameraYaw);
+      player.facing = yawToDirection(player.yaw);
+      if (dtSeconds > 0) {
+        const turnBlend = Math.min(1, dtSeconds * 16);
+        player.renderYaw = lerpAngle2(player.renderYaw ?? player.yaw, player.yaw, turnBlend);
+      }
+    }
+    if (typeof input.cameraYaw === "number") {
+      cam.yaw = wrapAngle(input.cameraYaw);
+    } else if (player.isMoving && dtSeconds > 0) {
+      const targetYaw = typeof player.yaw === "number" ? player.yaw : directionToYaw(player.facing);
+      cam.yaw = lerpAngle2(cam.yaw, targetYaw, Math.min(1, dtSeconds * 6));
+    }
+    if (typeof input.cameraPitch === "number") {
+      cam.pitch = Math.max(
+        MIN_CAMERA_PITCH,
+        Math.min(MAX_CAMERA_PITCH, input.cameraPitch)
+      );
+    }
+    if (state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") {
+      cam.yaw = 0;
+      if (typeof input.cameraYaw === "number") {
+        input.cameraYaw = 0;
+      }
+    }
+    const px = player.x + player.width / 2;
+    let pz = player.y + player.height / 2;
+    if (state.climbing && state.currentLevelId === "level-outside") {
+      pz = LADDER_BOTTOM_Y + player.height / 2;
+    }
+    const py = getPlayerElevation(state);
+    const isOutdoor = state.currentLevelId === "level-outside";
+    const maxCameraDistance = isOutdoor ? state.isOnRoof ? 44 : 52 : 38;
+    const targetHeightOffset = isOutdoor ? 13.5 : 12.5;
+    cam.target = {
+      x: px,
+      y: py + targetHeightOffset,
+      z: pz
+    };
+    const rosannaCutscene = state.currentLevelId === "level-upstairs" ? state.levels["level-upstairs"].rosannaCutscene : null;
+    const tableRoomAmbush = state.currentLevelId === "level-upstairs" ? state.levels["level-upstairs"].tableRoomAmbushCutscene : null;
+    const toiletCutscene = state.currentLevelId === "level-basement" ? state.levels["level-basement"].toiletCutscene : null;
+    let zoomEase = 0;
+    if (rosannaCutscene?.active || tableRoomAmbush?.active || toiletCutscene?.active) {
+      let targetYaw = -Math.PI / 2;
+      let elapsed = 0;
+      let targetOffsetX = 0;
+      let targetOffsetY = 3;
+      let targetOffsetZ = -12;
+      if (toiletCutscene?.active) {
+        const toiletNpc = state.levels["level-basement"].toiletNpc;
+        const tx = toiletNpc.x + toiletNpc.width * 0.5;
+        const tz = toiletNpc.y + toiletNpc.height * 0.5;
+        targetYaw = Math.atan2(tz - pz, tx - px);
+        elapsed = toiletCutscene.timer;
+        targetOffsetX = (tx - px) * 0.45;
+        targetOffsetY = 1.5;
+        targetOffsetZ = (tz - pz) * 0.45;
+      } else if (tableRoomAmbush?.active) {
+        const doorX = UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.x + UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.width * 0.5;
+        const doorZ = UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.y + UPSTAIRS_TABLE_ROOM_DOOR_BOUNDS.height * 0.5;
+        targetYaw = Math.atan2(doorZ - pz, doorX - px);
+        elapsed = tableRoomAmbush.timer;
+        targetOffsetX = (doorX - px) * 0.45;
+        targetOffsetY = 1.5;
+        targetOffsetZ = (doorZ - pz) * 0.45;
+      } else if (rosannaCutscene?.active) {
+        const winX = rosannaCutscene.santaX + 8;
+        const winZ = 4 * TILE_SIZE;
+        targetYaw = Math.atan2(winZ - pz, winX - px);
+        elapsed = rosannaCutscene.elapsed;
+        targetOffsetX = (winX - px) * 0.45;
+        targetOffsetY = 2;
+        targetOffsetZ = (winZ - pz) * 0.45;
+      }
+      const turnBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 6) : 1;
+      cam.yaw = lerpAngle2(cam.yaw, targetYaw, turnBlend);
+      if (typeof input.cameraYaw === "number") {
+        input.cameraYaw = cam.yaw;
+      }
+      cam.pitch = cam.pitch + (0.16 - cam.pitch) * turnBlend;
+      if (typeof input.cameraPitch === "number") {
+        input.cameraPitch = cam.pitch;
+      }
+      const zoomT = Math.min(1, elapsed / 1.1);
+      zoomEase = zoomT * zoomT * (3 - 2 * zoomT);
+      cam.fovY = (55 - 23 * zoomEase) * Math.PI / 180;
+      cam.target.x += targetOffsetX * zoomEase;
+      cam.target.y += targetOffsetY * zoomEase;
+      cam.target.z += targetOffsetZ * zoomEase;
+    } else {
+      cam.fovY = 55 * Math.PI / 180;
+    }
+    const cosPitch = Math.cos(cam.pitch);
+    const sinPitch = Math.sin(cam.pitch);
+    const backX = -Math.cos(cam.yaw) * cosPitch;
+    const backZ = -Math.sin(cam.yaw) * cosPitch;
+    const backY = sinPitch;
+    const wantsShoulderOffset = player.equippedItem !== "empty" && !rosannaCutscene?.active && !tableRoomAmbush?.active && !toiletCutscene?.active && !(state.currentLevelId === "level-outside" && state.motorcycle.status === "driving") && !state.climbing;
+    const desiredShoulder = wantsShoulderOffset ? 10.3125 : 0;
+    const shoulderBlend = dtSeconds > 0 ? Math.min(1, dtSeconds * 10) : 1;
+    cam.shoulderOffset = (cam.shoulderOffset ?? 0) + (desiredShoulder - (cam.shoulderOffset ?? 0)) * shoulderBlend;
+    const targetDistanceScale = wantsShoulderOffset ? 0.55 : 1;
+    cam.equippedDistanceScale = (cam.equippedDistanceScale ?? 1) + (targetDistanceScale - (cam.equippedDistanceScale ?? 1)) * shoulderBlend;
+    const scaledMaxDistance = maxCameraDistance * cam.equippedDistanceScale;
+    const maxSafeShoulder = state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01 ? cam.shoulderOffset : computeUnobstructedCameraDistance(
+      cam.target.x,
+      cam.target.z,
+      cam.yaw - Math.PI / 2,
+      0,
+      cam.shoulderOffset,
+      state.map
+    );
+    if (maxSafeShoulder > 0.01) {
+      const rightX = -Math.sin(cam.yaw);
+      const rightZ = Math.cos(cam.yaw);
+      cam.target.x += rightX * maxSafeShoulder;
+      cam.target.z += rightZ * maxSafeShoulder;
+    }
+    const equippedVerticalRatio = Math.max(
+      0,
+      Math.min(1, (cam.shoulderOffset ?? 0) / 10.3125)
+    );
+    cam.target.y += 1.3 * equippedVerticalRatio;
+    const baseEffectiveDistance = state.isOnRoof || state.climbing ? scaledMaxDistance : computeUnobstructedCameraDistance(
+      cam.target.x,
+      cam.target.z,
+      cam.yaw,
+      cam.pitch,
+      scaledMaxDistance,
+      state.map
+    );
+    const effectiveDistance = baseEffectiveDistance * (1 - 0.42 * zoomEase);
+    cam.distance = effectiveDistance;
+    let eyeX = cam.target.x + backX * effectiveDistance;
+    let eyeY = cam.target.y + backY * effectiveDistance;
+    let eyeZ = cam.target.z + backZ * effectiveDistance;
+    if (isOutdoor) {
+      const groundAtEye = getTerrainHeight(eyeX, eyeZ, "level-outside");
+      if (eyeY < groundAtEye + 8) {
+        eyeY = groundAtEye + 8;
+      }
+    } else {
+      eyeY = Math.min(eyeY, INDOOR_WALL_HEIGHT - 3.2);
+    }
+    cam.eye = { x: eyeX, y: eyeY, z: eyeZ };
+    cam.viewMatrix = mat4LookAt(cam.eye, cam.target, cam.up);
+    cam.projMatrix = mat4Perspective(cam.fovY, aspect, cam.near, cam.far);
+    cam.viewProjMatrix = mat4Multiply(cam.projMatrix, cam.viewMatrix);
+  }
 
   // src/world/levels/levelPeople.ts
   var V3 = 20 /* VoidBlack */;
@@ -7046,6 +8571,12 @@
   }
   function updateGameState(state, input, dtSeconds) {
     const safeDt = Math.max(0, dtSeconds);
+    primeGameAudioSnapshot(state);
+    updateGameStateCore(state, input, safeDt);
+    updateGameAudio(state, input, safeDt);
+  }
+  function updateGameStateCore(state, input, dtSeconds) {
+    const safeDt = Math.max(0, dtSeconds);
     state.elapsedTime += safeDt;
     dtSeconds = safeDt;
     const prevUziCooldown = state.player.uziFireCooldown;
@@ -7523,6 +9054,8 @@
           FLAMETHROWER_FIRE_INTERVAL_SECONDS - flameCooldownRemainder
         );
         fireFlamethrowerProjectile(state);
+      } else if (wantsToFire && state.player.flamethrowerAmmo <= 0) {
+        playSound("no_ammo", 0.18);
       }
     } else if (state.player.equippedItem === "bazooka") {
       const wantsToFire = attackPressed || Boolean(input.attack) || !state.nearbyInteractable && (actionPressed || Boolean(input.action));
@@ -15921,6 +17454,7 @@ fn fs_translucent(in: VertexOutput) -> @location(0) vec4<f32> {
       }
     }
     const secretSantaDB = await initSecretSantaDB(secret_default);
+    attachAudioUnlockListeners(window);
     attachKeyboardListeners(window, input, {
       onToggleJoystick: () => {
         joystickEnabled = !joystickEnabled;

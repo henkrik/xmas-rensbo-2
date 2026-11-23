@@ -85,6 +85,7 @@ import {
   USED_STAIRS_STATE_KEY,
 } from './levels/levelBasement';
 import {
+  ANNE_MARIE_DIALOGUE_DELAY_SECONDS,
   LevelUpstairs,
   UPSTAIRS_INTRO_STATE_KEY,
   UPSTAIRS_KITCHEN_MEDKIT_POS,
@@ -305,6 +306,7 @@ export interface GameState {
   interactables: Interactable[];
   nearbyInteractable: Interactable | null;
   activeDialogue: DialogueState | null;
+  pendingDialogue: { delay: number; dialogue: DialogueState } | null;
   gameOver: boolean;
   elapsedTime: number;
   debugMode: boolean;
@@ -312,6 +314,7 @@ export interface GameState {
   worldFadedToBlack: boolean;
   damageFlashTimer: number;
   fireFlashTimer: number;
+  playerCharredTimer: number;
   houseExploding: boolean;
   houseExplosionTimer: number;
   houseExplosionSpawnAccum: number;
@@ -421,6 +424,7 @@ export function loadLevel(state: GameState, levelId: LevelId): void {
   state.projectiles = [];
   state.nearbyInteractable = null;
   state.activeDialogue = null;
+  state.pendingDialogue = null;
 
   nextLevel.enter(state.player);
   refreshInteractables(state);
@@ -634,6 +638,7 @@ export function createGameState(
     interactables: activeLevel.getInteractables(player),
     nearbyInteractable: null,
     activeDialogue,
+    pendingDialogue: null,
     gameOver: false,
     elapsedTime: 0,
     debugMode,
@@ -641,6 +646,7 @@ export function createGameState(
     worldFadedToBlack,
     damageFlashTimer: 0,
     fireFlashTimer: 0,
+    playerCharredTimer: 0,
     houseExploding: false,
     houseExplosionTimer: 0,
     houseExplosionSpawnAccum: 0,
@@ -688,6 +694,8 @@ export function restartFromBasementCheckpoint(state: GameState): void {
 
 export const DAMAGE_FLASH_DURATION_SECONDS = 0.3;
 export const FIRE_FLASH_DURATION_SECONDS = 0.08;
+export const PLAYER_CHARRED_DURATION_SECONDS = 2.0;
+export const DIALOGUE_ADVANCE_LOCK_SECONDS = 0.5;
 export const BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 20;
 
 export function damagePlayer(state: GameState, amount: number): void {
@@ -701,6 +709,7 @@ export function damagePlayer(state: GameState, amount: number): void {
       state.currentLevelId === 'level-upstairs';
     state.gameOver = true;
     state.nearbyInteractable = null;
+    state.pendingDialogue = null;
     state.activeDialogue = {
       lines: ['Try again?'],
       currentIndex: 0,
@@ -749,6 +758,7 @@ export function resetAfterSnowballHit(state: GameState): void {
   state.climbing = null;
   state.electrocutionTimer = 0;
   state.activeDialogue = null;
+  state.pendingDialogue = null;
   syncOutsideToLevel(state);
   refreshInteractables(state);
   damagePlayer(state, 30);
@@ -1058,6 +1068,7 @@ function getArmedNpcByKey(state: GameState, key: string): ArmedNpcState | undefi
 }
 
 export const ROSANNA_DAMAGE_MULTIPLIER = 0.2; // Rosanna takes 1/5th damage
+export const ANNE_MARIE_DAMAGE_MULTIPLIER = 0.75; // Anne-Marie takes 25% less damage
 
 function damageArmedNpc(
   state: GameState,
@@ -1071,7 +1082,11 @@ function damageArmedNpc(
   if (!npc) return;
   const wasPassive = npc.mode === 'passive';
   const effectiveDamage =
-    key === 'upstairs:Rosanna' ? damage * ROSANNA_DAMAGE_MULTIPLIER : damage;
+    key === 'upstairs:Rosanna'
+      ? damage * ROSANNA_DAMAGE_MULTIPLIER
+      : key === 'upstairs:Anne-Marie'
+        ? damage * ANNE_MARIE_DAMAGE_MULTIPLIER
+        : damage;
   const died = applyNpcDamage(npc, effectiveDamage);
   if (wasPassive && (npc.mode as string) === 'hostile') {
     if (state.currentLevelId === 'level-basement') {
@@ -1101,9 +1116,12 @@ function damageArmedNpc(
         yaw: npc.aimYaw + 0.4,
       });
       if (key === 'upstairs:Anne-Marie') {
-        state.activeDialogue = {
-          lines: ["I guess it's my turn to...", 'Take out the trash.'],
-          currentIndex: 0,
+        state.pendingDialogue = {
+          delay: ANNE_MARIE_DIALOGUE_DELAY_SECONDS,
+          dialogue: {
+            lines: ["I guess it's my turn to...", 'Take out the trash.'],
+            currentIndex: 0,
+          },
         };
       }
     } else if (npc.weapon === 'flamethrower') {
@@ -1146,6 +1164,9 @@ function damageArmedNpc(
   }
 }
 
+export const NPC_UZI_YAW_SPREAD_RAD = (20 * Math.PI) / 180;
+export const NPC_UZI_PITCH_SPREAD_RAD = (10 * Math.PI) / 180;
+
 function fireNpcUziProjectile(
   state: GameState,
   npc: ArmedNpcState,
@@ -1156,9 +1177,9 @@ function fireNpcUziProjectile(
   const rightAngle = aimYaw + Math.PI / 2;
   const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
 
-  const yawSpread = (Math.random() * 2 - 1) * ((10 * Math.PI) / 180);
+  const yawSpread = (Math.random() * 2 - 1) * NPC_UZI_YAW_SPREAD_RAD;
   const shotYaw = aimYaw + yawSpread;
-  const pitchSpread = (Math.random() * 2 - 1) * ((5 * Math.PI) / 180);
+  const pitchSpread = (Math.random() * 2 - 1) * NPC_UZI_PITCH_SPREAD_RAD;
 
   const spawnX =
     originX + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
@@ -1704,7 +1725,10 @@ function checkPunchNpcHit(state: GameState): void {
 
   if (state.currentLevelId === 'level-upstairs') {
     const cat = state.levels['level-upstairs'].cat;
-    if (cat.mode !== 'dead' && rectsIntersect(punchRect, cat)) {
+    if (
+      cat.mode !== 'dead' &&
+      (cat.mode === 'latched' || rectsIntersect(punchRect, cat))
+    ) {
       damageUpstairsCat(state, PLAYER_PUNCH_NPC_DAMAGE);
     }
   }
@@ -1896,6 +1920,9 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
           if (isRocket) {
             detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, 'npc');
           } else {
+            if (isFireball) {
+              state.playerCharredTimer = PLAYER_CHARRED_DURATION_SECONDS;
+            }
             damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
           }
           removed = true;
@@ -1956,7 +1983,11 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         state.currentLevelId === 'level-upstairs'
       ) {
         const cat = state.levels['level-upstairs'].cat;
-        if (cat.mode !== 'dead' && rectsIntersect(projRect, cat)) {
+        if (
+          cat.mode !== 'dead' &&
+          cat.mode !== 'latched' &&
+          rectsIntersect(projRect, cat)
+        ) {
           if (isRocket) {
             detonateRocket(
               state,
@@ -2228,9 +2259,15 @@ function fireUziProjectile(state: GameState): void {
     ? getMainHouseRoofElevation(cx, cy)
     : getTerrainHeight(cx, cy, state.currentLevelId);
 
-  const yawSpread = (Math.random() * 2 - 1) * ((10 * Math.PI) / 180);
+  const isCatLatched =
+    state.currentLevelId === 'level-upstairs' &&
+    state.levels['level-upstairs'].cat.mode === 'latched';
+  const spreadMult = isCatLatched ? 4 : 1;
+  const yawSpread =
+    (Math.random() * 2 - 1) * ((10 * Math.PI) / 180) * spreadMult;
   const shotYaw = aimYaw + yawSpread;
-  const pitchSpread = (Math.random() * 2 - 1) * ((5 * Math.PI) / 180);
+  const pitchSpread =
+    (Math.random() * 2 - 1) * ((5 * Math.PI) / 180) * spreadMult;
 
   const spawnX =
     cx + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
@@ -2377,6 +2414,12 @@ function updateGameStateCore(
   if (state.fireFlashTimer > 0) {
     state.fireFlashTimer = Math.max(0, state.fireFlashTimer - dtSeconds);
   }
+  if (state.playerCharredTimer > 0) {
+    state.playerCharredTimer = Math.max(
+      0,
+      state.playerCharredTimer - dtSeconds
+    );
+  }
   if (
     state.cheatMode &&
     state.player.uziDepleted &&
@@ -2454,25 +2497,32 @@ function updateGameStateCore(
   }
 
   // If a dialogue box is currently open, pressing Space advances or closes it
+  // (ignoring advance presses for 0.5s whenever a dialogue starts or advances to the next line)
   if (state.activeDialogue) {
     state.player.isMoving = false;
+    const dlg = state.activeDialogue;
+    if (dlg.inputLockTimer === undefined) {
+      dlg.inputLockTimer = DIALOGUE_ADVANCE_LOCK_SECONDS;
+    }
+    if (dlg.inputLockTimer > 0) {
+      dlg.inputLockTimer = Math.max(0, dlg.inputLockTimer - dtSeconds);
+      return;
+    }
     if (actionPressed) {
       if (
-        state.activeDialogue.unclosable &&
-        state.activeDialogue.currentIndex >= state.activeDialogue.lines.length - 1
+        dlg.unclosable &&
+        dlg.currentIndex >= dlg.lines.length - 1
       ) {
         // Unclosable ending dialogue: stay on final line forever and do not close
         return;
       }
-      state.activeDialogue.currentIndex += 1;
-      if (state.houseExploding && state.activeDialogue.currentIndex >= 1) {
+      dlg.currentIndex += 1;
+      if (state.houseExploding && dlg.currentIndex >= 1) {
         state.worldFadedToBlack = true;
       }
-      if (
-        state.activeDialogue.currentIndex >= state.activeDialogue.lines.length
-      ) {
+      if (dlg.currentIndex >= dlg.lines.length) {
         const wasGameOver = state.gameOver;
-        const onClose = state.activeDialogue.onClose;
+        const onClose = dlg.onClose;
         const prevLevel = state.currentLevelId;
         state.activeDialogue = null;
         if (onClose) {
@@ -2485,9 +2535,24 @@ function updateGameStateCore(
           input.cameraYaw =
             state.player.yaw ?? directionToYaw(state.player.facing);
         }
+      } else {
+        dlg.inputLockTimer = DIALOGUE_ADVANCE_LOCK_SECONDS;
       }
     }
     return;
+  }
+
+  if (state.pendingDialogue) {
+    state.pendingDialogue.delay = Math.max(
+      0,
+      state.pendingDialogue.delay - dtSeconds
+    );
+    if (state.pendingDialogue.delay <= 0) {
+      state.activeDialogue = state.pendingDialogue.dialogue;
+      state.pendingDialogue = null;
+      state.player.isMoving = false;
+      return;
+    }
   }
 
   if (slotPressed !== null) {

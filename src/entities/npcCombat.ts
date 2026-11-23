@@ -9,7 +9,7 @@ import {
 
 export const MAX_NPC_HEALTH = 100;
 export const NPC_HOSTILE_LOSE_SIGHT_SECONDS = 5.0;
-export const NPC_HOSTILE_ALERT_SECONDS = 1.0;
+export const NPC_HOSTILE_ALERT_SECONDS = 0.5;
 export const NPC_HOSTILE_PROPAGATION_DELAY_SECONDS = 2.0;
 export const NPC_HOSTILE_PATH_RECALC_SECONDS = 1.0;
 export const NPC_HOSTILE_WALK_SPEED = 24; // pixels per second (slow menacing advance)
@@ -60,6 +60,7 @@ export interface ArmedNpcState {
   isMoving: boolean;
   burnDirYaw: number;
   burnDirTimer: number;
+  charred: boolean;
 }
 
 export function createArmedNpcState(
@@ -93,6 +94,7 @@ export function createArmedNpcState(
     isMoving: false,
     burnDirYaw: initialAimYaw,
     burnDirTimer: 0,
+    charred: false,
   };
 }
 
@@ -151,6 +153,7 @@ export function enterHostileMode(npc: ArmedNpcState): void {
 export function igniteNpc(npc: ArmedNpcState): void {
   if (npc.mode === 'dead') return;
   npc.mode = 'burning';
+  npc.charred = true;
   npc.hostileAlertTimer = 0;
   npc.pendingHostileAlertTimer = 0;
   npc.unseenTimer = 0;

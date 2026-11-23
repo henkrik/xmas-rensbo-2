@@ -2751,6 +2751,7 @@ export function addHumanoid3D(
       pants: rgb(18, 18, 22),
       skin: rgb(30, 26, 26),
       hair: rgb(14, 14, 16),
+      hat: style.hat ? rgb(22, 22, 26) : undefined,
     };
   }
 
@@ -2898,7 +2899,11 @@ export function addHumanoid3D(
 
   // 3. Articulated Shoulders, Arms & Rounded Mittens/Hands (Empty, Flailing Punch, Uzi, Drop, Flamethrower)
   const armSpread = 4.35;
-  const mittenColor: Color4 = isSanta ? rgb(224, 232, 245) : style.skin;
+  const mittenColor: Color4 = isSanta
+    ? style.isCharred
+      ? rgb(28, 28, 32)
+      : rgb(224, 232, 245)
+    : style.skin;
   const equippedItem: EquipmentId = style.equippedItem ?? 'empty';
   const isUnarmedPunch =
     equippedItem === 'unarmed' &&
@@ -3303,16 +3308,20 @@ export function addHumanoid3D(
   }
 
   if (style.hasBeard || isSanta) {
-    // Full sculpted white Santa beard + curly mustache lobes
-    mb.addSphere(cx + fx * 2.35, headY - 1.65, cz + fz * 2.35, 3.25, 2.75, 2.95, 10, 12, rgb(250, 252, 255), TexId.SNOW, 0.65);
-    mb.addSphere(cx + fx * 3.1, headY - 2.9, cz + fz * 3.1, 2.1, 1.8, 2.1, 8, 10, rgb(252, 254, 255), TexId.SNOW, 0.55);
+    // Full sculpted white Santa beard + curly mustache lobes (or charred soot when burned)
+    const beardMain = style.isCharred ? rgb(26, 26, 30) : rgb(250, 252, 255);
+    const beardTip = style.isCharred ? rgb(28, 28, 32) : rgb(252, 254, 255);
+    const mustacheCol = style.isCharred ? rgb(30, 30, 34) : rgb(255, 255, 255);
+    mb.addSphere(cx + fx * 2.35, headY - 1.65, cz + fz * 2.35, 3.25, 2.75, 2.95, 10, 12, beardMain, TexId.SNOW, 0.65);
+    mb.addSphere(cx + fx * 3.1, headY - 2.9, cz + fz * 3.1, 2.1, 1.8, 2.1, 8, 10, beardTip, TexId.SNOW, 0.55);
     // Mustache
-    mb.addSphere(cx + fx * 3.45 + rx * 0.95, headY - 0.65, cz + fz * 3.45 + rz * 0.95, 1.1, 0.65, 1.1, 6, 8, rgb(255, 255, 255), TexId.SNOW, 0.35);
-    mb.addSphere(cx + fx * 3.45 - rx * 0.95, headY - 0.65, cz + fz * 3.45 - rz * 0.95, 1.1, 0.65, 1.1, 6, 8, rgb(255, 255, 255), TexId.SNOW, 0.35);
+    mb.addSphere(cx + fx * 3.45 + rx * 0.95, headY - 0.65, cz + fz * 3.45 + rz * 0.95, 1.1, 0.65, 1.1, 6, 8, mustacheCol, TexId.SNOW, 0.35);
+    mb.addSphere(cx + fx * 3.45 - rx * 0.95, headY - 0.65, cz + fz * 3.45 - rz * 0.95, 1.1, 0.65, 1.1, 6, 8, mustacheCol, TexId.SNOW, 0.35);
   }
 
   if (style.hat || isSanta) {
-    const hatColor = style.hat ?? rgb(220, 36, 42);
+    const hatColor = style.isCharred ? rgb(22, 22, 26) : (style.hat ?? rgb(220, 36, 42));
+    const pomColor = style.isCharred ? rgb(32, 32, 36) : rgb(252, 254, 255);
     // Plush torus fur hat brim
     mb.addTorus(cx, headY + 2.25, cz, 3.35, 0.85, 14, 8, 'y', style.trim, TexId.SNOW, 0.55);
     // Curved multi-segment drooping Santa/winter hat
@@ -3328,7 +3337,7 @@ export function addHumanoid3D(
       1.55,
       8,
       10,
-      rgb(252, 254, 255),
+      pomColor,
       TexId.SNOW,
       0.6
     );
@@ -3940,6 +3949,7 @@ export function buildDynamicSceneMeshes(
           hair: rgb(250, 252, 255),
           hat: rgb(220, 36, 42),
           hasBeard: true,
+          isCharred: state.playerCharredTimer > 0,
           ...sharedWeaponFields,
         };
 
@@ -4191,7 +4201,7 @@ export function buildDynamicSceneMeshes(
         hair: hexToColor4('#4e433c'),
         equippedItem: 'uzi',
         uziReloadTimer: basement.arjanCombat.reloadTimer,
-        isCharred: basement.arjanCombat.mode === 'burning',
+        isCharred: basement.arjanCombat.mode === 'burning' || basement.arjanCombat.charred,
         weaponVibrationTimer: basement.arjanCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -4231,7 +4241,7 @@ export function buildDynamicSceneMeshes(
         hair: hexToColor4('#342618'),
         equippedItem: 'uzi',
         uziReloadTimer: basement.olexaCombat.reloadTimer,
-        isCharred: basement.olexaCombat.mode === 'burning',
+        isCharred: basement.olexaCombat.mode === 'burning' || basement.olexaCombat.charred,
         weaponVibrationTimer: basement.olexaCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -4279,7 +4289,7 @@ export function buildDynamicSceneMeshes(
           sitting: isSittingOnToilet,
           equippedItem: isSittingOnToilet ? 'empty' : 'uzi',
           uziReloadTimer: basement.hanneloesCombat.reloadTimer,
-          isCharred: basement.hanneloesCombat.mode === 'burning',
+          isCharred: basement.hanneloesCombat.mode === 'burning' || basement.hanneloesCombat.charred,
           weaponVibrationTimer: basement.hanneloesCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress:
@@ -4666,7 +4676,7 @@ export function buildDynamicSceneMeshes(
         hair: hexToColor4('#7a421c'),
         equippedItem: 'uzi',
         uziReloadTimer: upstairs.albinCombat.reloadTimer,
-        isCharred: upstairs.albinCombat.mode === 'burning',
+        isCharred: upstairs.albinCombat.mode === 'burning' || upstairs.albinCombat.charred,
         weaponVibrationTimer: upstairs.albinCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -4711,7 +4721,7 @@ export function buildDynamicSceneMeshes(
         hasPresentInLap: isDianaDistracted,
         equippedItem: 'uzi',
         uziReloadTimer: upstairs.dianaCombat.reloadTimer,
-        isCharred: upstairs.dianaCombat.mode === 'burning',
+        isCharred: upstairs.dianaCombat.mode === 'burning' || upstairs.dianaCombat.charred,
         weaponVibrationTimer: upstairs.dianaCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -4755,7 +4765,7 @@ export function buildDynamicSceneMeshes(
         hasPresentInLap: isSimonDistracted,
         equippedItem: 'uzi',
         uziReloadTimer: upstairs.simonCombat.reloadTimer,
-        isCharred: upstairs.simonCombat.mode === 'burning',
+        isCharred: upstairs.simonCombat.mode === 'burning' || upstairs.simonCombat.charred,
         weaponVibrationTimer: upstairs.simonCombat.weaponVibrationTimer,
         elapsedTime: t,
         deadFallProgress:
@@ -4795,7 +4805,7 @@ export function buildDynamicSceneMeshes(
           skin: rgb(248, 206, 174),
           hair: hexToColor4('#6e4624'),
           equippedItem: 'flamethrower',
-          isCharred: upstairs.henrikCombat.mode === 'burning',
+          isCharred: upstairs.henrikCombat.mode === 'burning' || upstairs.henrikCombat.charred,
           weaponVibrationTimer: upstairs.henrikCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress:
@@ -4833,7 +4843,7 @@ export function buildDynamicSceneMeshes(
           skin: rgb(250, 208, 176),
           hair: hexToColor4('#743c20'),
           equippedItem: 'flamethrower',
-          isCharred: upstairs.tanjaCombat.mode === 'burning',
+          isCharred: upstairs.tanjaCombat.mode === 'burning' || upstairs.tanjaCombat.charred,
           weaponVibrationTimer: upstairs.tanjaCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress:
@@ -4878,7 +4888,7 @@ export function buildDynamicSceneMeshes(
             (upstairs.anneMarieCombat.mode === 'hostile' &&
               upstairs.anneMarieCombat.hostileAlertTimer <= 0) ||
             upstairs.anneMarieCombat.mode === 'burning',
-          isCharred: upstairs.anneMarieCombat.mode === 'burning',
+          isCharred: upstairs.anneMarieCombat.mode === 'burning' || upstairs.anneMarieCombat.charred,
           elapsedTime: t,
           deadFallProgress:
             upstairs.anneMarieCombat.mode === 'dead'
@@ -4920,7 +4930,7 @@ export function buildDynamicSceneMeshes(
           hat: rgb(220, 36, 42),
           hasBeard: true,
           holdingBazooka: true,
-          isCharred: upstairs.rosannaCombat.mode === 'burning',
+          isCharred: upstairs.rosannaCombat.mode === 'burning' || upstairs.rosannaCombat.charred,
           weaponVibrationTimer: upstairs.rosannaCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress:

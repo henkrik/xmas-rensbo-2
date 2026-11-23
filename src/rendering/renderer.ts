@@ -1,5 +1,5 @@
 import { GameAssets } from '../assets';
-import { Cat } from '../entities/cat';
+import { Cat, isCatBillboardVisible, MAX_CAT_HEALTH } from '../entities/cat';
 import { Dog } from '../entities/dog';
 import {
   Direction,
@@ -205,6 +205,66 @@ const PORTRAIT_ORDER = [
   'arjan',
 ];
 
+const CAT_PIXEL_PORTRAIT_GRID: readonly string[] = [
+  '................',
+  '..BB........BB..',
+  '..BEB......BEB..',
+  '..BEBB....BBEB..',
+  '..BBHBBBBBBHBB..',
+  '..BBBBBBBBBBBB..',
+  '.BBHBBBBBBBBHBB.',
+  '.BBBRPBBBBPRBBB.',
+  '.BBBYPBBBBPYBBB.',
+  'W.BBBBBBBBBBBB.W',
+  '.WWBBBBNNBBBBWW.',
+  'W..BBBBBBBBBB..W',
+  '...BBBWBBWBBB...',
+  '....BBBBBBBB....',
+  '.....BBHHBB.....',
+  '................',
+];
+
+const CAT_PIXEL_PORTRAIT_PALETTE: Readonly<Record<string, string>> = {
+  '.': '#2c1d3e',
+  B: '#161822',
+  H: '#363b54',
+  E: '#e87aa4',
+  R: '#ff3a2a',
+  Y: '#ffdf40',
+  P: '#0b0c12',
+  N: '#ff8fab',
+  W: '#eef2f8',
+};
+
+function drawCatPixelPortrait(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number
+): void {
+  const grid = CAT_PIXEL_PORTRAIT_GRID;
+  const dim = grid.length;
+  ctx.fillStyle = CAT_PIXEL_PORTRAIT_PALETTE['.'];
+  ctx.fillRect(x, y, size, size);
+  for (let row = 0; row < dim; row++) {
+    const line = grid[row];
+    const py0 = y + Math.floor((row * size) / dim);
+    const py1 = y + Math.floor(((row + 1) * size) / dim);
+    const ph = Math.max(1, py1 - py0);
+    for (let col = 0; col < dim; col++) {
+      const ch = line[col];
+      if (ch === '.') continue;
+      const color = CAT_PIXEL_PORTRAIT_PALETTE[ch];
+      if (!color) continue;
+      const px0 = x + Math.floor((col * size) / dim);
+      const px1 = x + Math.floor(((col + 1) * size) / dim);
+      const pw = Math.max(1, px1 - px0);
+      ctx.fillStyle = color;
+      ctx.fillRect(px0, py0, pw, ph);
+    }
+  }
+}
+
 function drawPortrait(
   ctx: CanvasRenderingContext2D,
   speakerName: string,
@@ -214,7 +274,7 @@ function drawPortrait(
 ): void {
   const norm = speakerName.toLowerCase();
   const idx = PORTRAIT_ORDER.indexOf(norm);
-  if (idx === -1) return;
+  if (idx === -1 && norm !== 'cat') return;
 
   const portraitSize = 40;
   const frameWidth = portraitSize + 4;
@@ -224,18 +284,22 @@ function drawPortrait(
   // Draw SNES frame for portrait
   drawSnesFrame(ctx, x, y, frameWidth, frameHeight);
 
-  // Draw 40x40 pixel-art portrait image inside the frame
-  ctx.drawImage(
-    portraitsAtlas,
-    idx * portraitSize,
-    0,
-    portraitSize,
-    portraitSize,
-    x + 2,
-    y + 2,
-    portraitSize,
-    portraitSize
-  );
+  if (norm === 'cat') {
+    drawCatPixelPortrait(ctx, x + 2, y + 2, portraitSize);
+  } else {
+    // Draw 40x40 pixel-art portrait image inside the frame
+    ctx.drawImage(
+      portraitsAtlas,
+      idx * portraitSize,
+      0,
+      portraitSize,
+      portraitSize,
+      x + 2,
+      y + 2,
+      portraitSize,
+      portraitSize
+    );
+  }
 
   ctx.restore();
 }
@@ -408,43 +472,86 @@ function drawNpcBillboards3D(
   const canvasW = ctx.canvas.width;
   const canvasH = ctx.canvas.height;
   const projected: Array<{
-    npc: ArmedNpcState;
+    name: string;
+    health: number;
+    delayedHealth: number;
+    maxHealth: number;
     sx: number;
     sy: number;
     clipW: number;
     scale: number;
   }> = [];
 
-  for (const entry of entries) {
-    if (!entry.visible || !isNpcBillboardVisible(entry.state)) continue;
-    const wx = entry.bounds.x + entry.bounds.width * 0.5;
-    const wy = 20.5;
-    const wz = entry.bounds.y + entry.bounds.height * 0.5;
-
+  const pushBillboard = (
+    name: string,
+    health: number,
+    delayedHealth: number,
+    maxHealth: number,
+    wx: number,
+    wy: number,
+    wz: number
+  ): void => {
     const clipX = m[0] * wx + m[4] * wy + m[8] * wz + m[12];
     const clipY = m[1] * wx + m[5] * wy + m[9] * wz + m[13];
     const clipZ = m[2] * wx + m[6] * wy + m[10] * wz + m[14];
     const clipW = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
 
-    if (clipW <= 0.5) continue;
+    if (clipW <= 0.5) return;
     const ndcX = clipX / clipW;
     const ndcY = clipY / clipW;
     const ndcZ = clipZ / clipW;
     if (ndcZ < -1 || ndcZ > 1 || ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2) {
-      continue;
+      return;
     }
 
     const sx = (ndcX * 0.5 + 0.5) * canvasW;
     const sy = (1 - (ndcY * 0.5 + 0.5)) * canvasH;
     const scale = Math.max(0.55, Math.min(1.2, 46 / clipW));
-    projected.push({ npc: entry.state, sx, sy, clipW, scale });
+    projected.push({
+      name,
+      health,
+      delayedHealth,
+      maxHealth,
+      sx,
+      sy,
+      clipW,
+      scale,
+    });
+  };
+
+  for (const entry of entries) {
+    if (!entry.visible || !isNpcBillboardVisible(entry.state)) continue;
+    pushBillboard(
+      entry.state.name,
+      entry.state.health,
+      entry.state.delayedHealth,
+      entry.state.maxHealth || MAX_NPC_HEALTH,
+      entry.bounds.x + entry.bounds.width * 0.5,
+      20.5,
+      entry.bounds.y + entry.bounds.height * 0.5
+    );
+  }
+
+  if (state.currentLevelId === 'level-upstairs') {
+    const cat = state.levels['level-upstairs'].cat;
+    if (isCatBillboardVisible(cat)) {
+      pushBillboard(
+        'Cat',
+        cat.health,
+        cat.delayedHealth,
+        MAX_CAT_HEALTH,
+        cat.x + cat.width * 0.5,
+        10.5 + cat.jumpZ,
+        cat.y + cat.height * 0.5
+      );
+    }
   }
 
   // Draw farthest billboards first so nearer ones overlap cleanly
   projected.sort((a, b) => b.clipW - a.clipW);
 
   for (const item of projected) {
-    const { npc, sx, sy, scale } = item;
+    const { sx, sy, scale } = item;
     const portraitSize = Math.max(10, Math.round(16 * scale));
     const barInnerW = Math.max(22, Math.round(36 * scale));
     const barInnerH = Math.max(4, Math.round(6 * scale));
@@ -470,8 +577,11 @@ function drawNpcBillboards3D(
     // Portrait icon on left
     const px = cardX + pad;
     const py = cardY + Math.round((cardH - portraitSize) * 0.5);
-    const pIdx = PORTRAIT_ORDER.indexOf(npc.name.toLowerCase());
-    if (pIdx !== -1 && assets.portraitsAtlas) {
+    const normName = item.name.toLowerCase();
+    const pIdx = PORTRAIT_ORDER.indexOf(normName);
+    if (normName === 'cat') {
+      drawCatPixelPortrait(ctx, px, py, portraitSize);
+    } else if (pIdx !== -1 && assets.portraitsAtlas) {
       ctx.drawImage(
         assets.portraitsAtlas,
         pIdx * 40,
@@ -483,7 +593,7 @@ function drawNpcBillboards3D(
         portraitSize,
         portraitSize
       );
-    } else if (npc.name.toLowerCase() === 'rosanna') {
+    } else if (normName === 'rosanna') {
       // Santa portrait fallback for Rosanna billboard
       ctx.fillStyle = '#d62828';
       ctx.fillRect(px, py, portraitSize, portraitSize);
@@ -514,16 +624,16 @@ function drawNpcBillboards3D(
 
     const innerX = bx + 1;
     const innerY = by + 1;
-    const npcMaxHp = npc.maxHealth || MAX_NPC_HEALTH;
-    const healthRatio = Math.max(0, Math.min(1, npc.health / npcMaxHp));
+    const npcMaxHp = item.maxHealth || MAX_NPC_HEALTH;
+    const healthRatio = Math.max(0, Math.min(1, item.health / npcMaxHp));
     const delayedRatio = Math.max(
       0,
-      Math.min(1, npc.delayedHealth / npcMaxHp)
+      Math.min(1, item.delayedHealth / npcMaxHp)
     );
     const healthPx =
-      npc.health > 0 ? Math.max(1, Math.round(barInnerW * healthRatio)) : 0;
+      item.health > 0 ? Math.max(1, Math.round(barInnerW * healthRatio)) : 0;
     const delayedPx =
-      npc.delayedHealth > 0
+      item.delayedHealth > 0
         ? Math.max(1, Math.round(barInnerW * delayedRatio))
         : 0;
 
@@ -533,7 +643,7 @@ function drawNpcBillboards3D(
       ctx.fillStyle = '#ff6b6b';
       ctx.fillRect(innerX, innerY, healthPx, Math.max(1, Math.round(barInnerH * 0.25)));
     }
-    if (npc.delayedHealth !== npc.health) {
+    if (item.delayedHealth !== item.health) {
       const startPx = Math.min(healthPx, delayedPx);
       const endPx = Math.max(healthPx, delayedPx);
       const deltaW = Math.max(1, endPx - startPx);

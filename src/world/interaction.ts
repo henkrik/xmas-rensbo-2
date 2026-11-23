@@ -30,6 +30,8 @@ export interface DialogueState {
   speakerPortrait?: string;
   unclosable?: boolean;
   variant?: DialogueVariant;
+  /** Remaining seconds during which key presses/clicks to advance this line are ignored. */
+  inputLockTimer?: number;
 }
 
 export interface LadderInteractionOptions {

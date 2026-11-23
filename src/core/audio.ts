@@ -1,6 +1,6 @@
 import type { GameState } from '../world/gameState';
 import type { InputState } from './input';
-import { RUDOLPH_INSPECTED_KEY } from '../world/levels/levelOutside';
+import { ANNE_MARIE_HOSTILE_DIALOGUE_KEY } from '../world/levels/levelUpstairs';
 
 export type SoundEffectId =
   | 'dialogue_open'
@@ -937,11 +937,21 @@ export function updateGameAudio(
   const snap = getOrCreateSnapshot(state);
 
   // 1. Adaptive N64 Chiptune Christmas Music Track Selection & Stepping
+  // Reserve the high-intensity "action_xmas" track for boss fights:
+  //   - Other Santa (Rosanna): from when she appears until she is defeated
+  //   - Anne-Marie: from when she initiates her confession dialog until she is defeated
+  const upstairsLevel = state.levels['level-upstairs'];
+  const inRosannaBossFight =
+    state.currentLevelId === 'level-upstairs' &&
+    (Boolean(upstairsLevel.rosannaCutscene?.active) || upstairsLevel.rosannaSpawned) &&
+    upstairsLevel.rosannaCombat.mode !== 'dead';
+  const inAnneMarieBossFight =
+    state.currentLevelId === 'level-upstairs' &&
+    Boolean(state.player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)) &&
+    upstairsLevel.anneMarieCombat.mode !== 'dead';
   const desiredTrack: MusicTrackId = state.houseExploding
     ? 'victory_xmas'
-    : state.currentLevelId !== 'level-outside' ||
-        state.player.unlockedUzi ||
-        Boolean(state.player.states.get(RUDOLPH_INSPECTED_KEY))
+    : inRosannaBossFight || inAnneMarieBossFight
       ? 'action_xmas'
       : 'peaceful_xmas';
   soundManager.setMusicTrack(desiredTrack);

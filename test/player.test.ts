@@ -9,6 +9,7 @@ import {
   CAT_START_Y,
   createCat,
   EXTRA_ROOM_BOUNDS,
+  isCatBillboardVisible,
   MAX_CAT_HEALTH,
   updateCat,
 } from '../src/entities/cat';
@@ -194,6 +195,16 @@ import {
   OUTSIDE_ALEX_NPC,
   RUDOLPH_INSPECTED_KEY,
 } from '../src/world/levels/levelOutside';
+
+function advanceDialogue(state: ReturnType<typeof createGameState>, input: ReturnType<typeof createEmptyInput>): void {
+  if (state.activeDialogue) {
+    updateGameState(state, input, 0.55);
+  }
+  input.action = false;
+  applyKeyEvent(input, 'Space', true);
+  updateGameState(state, input, 0.02);
+  applyKeyEvent(input, 'Space', false);
+}
 
 describe('Player walking & 2x Rensbo map layout', () => {
   it('uses a 32x28 map (2x width and height) with a large 13x7 main house and parked black motorcycle', () => {
@@ -400,10 +411,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
       "Hmm.. looks like there is a chimney up there, but I can't reach it"
     );
 
-    // Close the inspection dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    // Close the inspection dialogue (after 0.5s anti-skip lock)
+    advanceDialogue(state, input);
     expect(state.activeDialogue).toBeNull();
 
     // 2. Walk over the ladder on the ground next to the dog (non-colliding) and pick it up with "Pick up"
@@ -528,9 +537,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.lines).toEqual([
       'You smell the stench of blood...',
     ]);
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).toBeNull();
 
     // After inspecting Rudolph, the chimney enters the basement
@@ -549,13 +556,9 @@ describe('Player walking & 2x Rensbo map layout', () => {
       'Press Space to fire your weapon (hold to keep firing).',
     ]);
 
-    // Press Space twice -> Closes dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    // Press Space twice (after 0.5s lock each) -> Closes dialogue
+    advanceDialogue(state, input);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).toBeNull();
   });
 
@@ -628,10 +631,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
       'Watch out! Annelotte is crazy!'
     );
 
-    // Press Z again to close the single-line dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    // Press Space again after 0.5s lock to close the single-line dialogue
+    advanceDialogue(state, input);
 
     expect(state.activeDialogue).toBeNull();
 
@@ -656,10 +657,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
       "It's good to talk about your feelings... how does a snowball in your face feel?"
     );
 
-    // Press Z again to close the dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    // Press Space again after 0.5s lock to close the dialogue
+    advanceDialogue(state, input);
 
     expect(state.activeDialogue).toBeNull();
 
@@ -685,10 +684,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
       'Just practicing my swings...'
     );
 
-    // Press Z again to close the dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    // Press Space again after 0.5s lock to close the dialogue
+    advanceDialogue(state, input);
 
     expect(state.activeDialogue).toBeNull();
   });
@@ -715,20 +712,28 @@ describe('Player walking & 2x Rensbo map layout', () => {
       "It's locked."
     );
 
-    // Press Z again -> Santa responds "There has to be another way into the house..."
+    // Pressing Space within 0.5s of opening is ignored (anti-skip lock)
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
+    expect(state.activeDialogue?.currentIndex).toBe(0);
+
+    // Press Space after 0.5s lock -> Santa responds "There has to be another way into the house..."
+    advanceDialogue(state, input);
 
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
       'There has to be another way into the house...'
     );
 
-    // Press Z a third time -> closes the dialogue box
+    // Pressing Space within 0.5s of advancing to the next line is also ignored
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'Space', false);
+    expect(state.activeDialogue?.currentIndex).toBe(1);
+
+    // Press Space after 0.5s lock -> closes the dialogue box
+    advanceDialogue(state, input);
 
     expect(state.activeDialogue).toBeNull();
   });
@@ -781,15 +786,11 @@ describe('Player walking & 2x Rensbo map layout', () => {
     applyKeyEvent(input, 'KeyZ', false);
     expect(state.activeDialogue?.currentIndex).toBe(0);
 
-    // Pressing Space advances and closes dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    // Pressing Space after 0.5s lock advances and closes dialogue
+    advanceDialogue(state, input);
     expect(state.activeDialogue?.currentIndex).toBe(1);
 
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).toBeNull();
   });
 
@@ -840,14 +841,12 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(desktopState.activeDialogue?.currentIndex).toBe(0);
 
     const input = createEmptyInput();
-    // Press Space to advance to line 2
-    input.actionJustPressed = true;
-    updateGameState(desktopState, input, 0.016);
+    // Press Space after 0.5s lock to advance to line 2
+    advanceDialogue(desktopState, input);
     expect(desktopState.activeDialogue?.currentIndex).toBe(1);
 
-    // Press Space again to close dialogue
-    input.actionJustPressed = true;
-    updateGameState(desktopState, input, 0.016);
+    // Press Space again after 0.5s lock to close dialogue
+    advanceDialogue(desktopState, input);
     expect(desktopState.activeDialogue).toBeNull();
 
     // Mobile initial state
@@ -860,13 +859,11 @@ describe('Player walking & 2x Rensbo map layout', () => {
       'Good luck!\nChristmas depends on you...'
     );
 
-    // Advance to line 2 and close with Space
-    input.actionJustPressed = true;
-    updateGameState(mobileState, input, 0.016);
+    // Advance to line 2 and close with Space after 0.5s lock
+    advanceDialogue(mobileState, input);
     expect(mobileState.activeDialogue?.currentIndex).toBe(1);
 
-    input.actionJustPressed = true;
-    updateGameState(mobileState, input, 0.016);
+    advanceDialogue(mobileState, input);
     expect(mobileState.activeDialogue).toBeNull();
 
     // When damage reset occurs, activeDialogue must remain null (not reset to intro dialogue)
@@ -1070,9 +1067,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.lines[0]).toBe("It's locked.");
 
     // Close dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).toBeNull();
 
     // Check front door on south wall of hallway
@@ -1086,9 +1081,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     applyKeyEvent(input, 'Space', false);
     expect(state.activeDialogue?.lines[0]).toBe("It's locked.");
 
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
 
     // 3. Bathroom door is initially closed and collidable (blocks walking into bathroom)
     state.player.x = BASEMENT_BATHROOM_DOOR_BOUNDS.x + 2;
@@ -1227,9 +1220,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
       "It's locked. Maybe I can blow it open."
     );
     // Dismiss dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(upstairs.doors.some((d) => d.id === 'upstairs-office-door')).toBe(true);
 
     // Dining cupboard no longer holds Arjan's key or an interactable
@@ -1255,9 +1246,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
       applyKeyEvent(input, 'Space', false);
       // Dismiss Anne-Marie's first-time hostile dialogue if triggered when opening bedroom door
       while (state.activeDialogue) {
-        applyKeyEvent(input, 'Space', true);
-        updateGameState(state, input, 0.01);
-        applyKeyEvent(input, 'Space', false);
+        advanceDialogue(state, input);
       }
     }
 
@@ -1276,9 +1265,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.lines[0]).toBe(
       'You picked up a block of military-grade C4 explosive! Now plant it under the Christmas tree...'
     );
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
 
     // Inspect PC in the office -> "Start PC" and 3 dialogue messages
     state.player.x = UPSTAIRS_COMPUTER_BOUNDS.x + 2;
@@ -1298,19 +1285,13 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.currentIndex).toBe(0);
 
     // Advance dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(state.activeDialogue?.currentIndex).toBe(1);
 
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(state.activeDialogue?.currentIndex).toBe(2);
 
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).toBeNull();
 
     // 2. Hallway connects directly to the Extra Room on the east without any wall or door blocking it
@@ -1692,12 +1673,12 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(basement.arjanCombat.mode).toBe('hostile');
     expect(basement.olexaCombat.mode).toBe('passive');
     expect(basement.olexaCombat.pendingHostileAlertTimer).toBeCloseTo(2.0, 1);
-    expect(basement.arjanCombat.hostileAlertTimer).toBeCloseTo(1.0, 2);
+    expect(basement.arjanCombat.hostileAlertTimer).toBeCloseTo(0.5, 2);
     expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(false);
     expect(PLAYER_UZI_NPC_DAMAGE).toBe(30);
-    // Does not shoot, move, or show health billboard during the 1-second blinking exclamation alert
+    // Does not shoot, move, or show health billboard during the 0.5-second blinking exclamation alert
     const arjanStartY = basement.windowNpc.y;
-    updateGameState(state, input, 0.5);
+    updateGameState(state, input, 0.25);
     expect(basement.windowNpc.y).toBe(arjanStartY);
     expect(basement.arjanCombat.isMoving).toBe(false);
     expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(false);
@@ -1707,7 +1688,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(isNpcBillboardVisible(basement.arjanCombat)).toBe(true);
     expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Arjan')).toBe(true);
     // After 2s total delay, Olexa also turns hostile!
-    updateGameState(state, input, 1.0);
+    updateGameState(state, input, 1.25);
     expect(basement.olexaCombat.mode).toBe('hostile');
   });
 
@@ -1749,9 +1730,7 @@ describe('Player walking & 2x Rensbo map layout', () => {
     expect(state.activeDialogue?.speakerPortrait).toBe('Henrik');
 
     // Dismiss dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).toBeNull();
 
     // 5. Test talking to Olexa
@@ -1794,8 +1773,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
     expect(state.activeDialogue).toBeNull();
     expect(basement.olexaCombat.mode).toBe('hostile');
-    expect(basement.olexaCombat.hostileAlertTimer).toBeCloseTo(1.0, 2);
-    updateGameState(state, input, 1.05);
+    expect(basement.olexaCombat.hostileAlertTimer).toBeCloseTo(0.5, 2);
+    updateGameState(state, input, 0.55);
     expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'basement:Olexa')).toBe(true);
   });
 
@@ -1824,8 +1803,8 @@ describe('Player walking & 2x Rensbo map layout', () => {
 
     expect(state.activeDialogue).toBeNull();
     expect(upstairs.albinCombat.mode).toBe('hostile');
-    expect(upstairs.albinCombat.hostileAlertTimer).toBeCloseTo(1.0, 2);
-    updateGameState(state, input, 1.05);
+    expect(upstairs.albinCombat.hostileAlertTimer).toBeCloseTo(0.5, 2);
+    updateGameState(state, input, 0.55);
     expect(state.projectiles.some((p) => p.owner === 'npc' && p.sourceNpcKey === 'upstairs:Albin')).toBe(true);
   });
 
@@ -2161,8 +2140,7 @@ Tanja -> Alex
     updateGameState(state, input, 0.016);
     expect(state.player.states.get(C4_TAKEN_STATE_KEY)).toBe(true);
     // Dismiss pickup dialogue
-    input.actionJustPressed = true;
-    updateGameState(state, input, 0.016);
+    advanceDialogue(state, input);
 
     // Now return to the Christmas tree -> "Place C4" prompt appears
     state.player.x = 4 * TILE_SIZE;
@@ -2187,8 +2165,7 @@ Tanja -> Alex
     // Dismiss naughty list dialogue
     const dismissNaughtyDialogue = () => {
       while (state.activeDialogue) {
-        input.actionJustPressed = true;
-        updateGameState(state, input, 0.016);
+        advanceDialogue(state, input);
       }
     };
     dismissNaughtyDialogue();
@@ -2237,8 +2214,7 @@ Tanja -> Alex
     expect(state.activeDialogue?.currentIndex).toBe(0);
 
     // Advance dialogue to line 1 (final line) -> world fades to black
-    input.actionJustPressed = true;
-    updateGameState(state, input, 0.016);
+    advanceDialogue(state, input);
     expect(state.activeDialogue?.currentIndex).toBe(1);
     expect(state.worldFadedToBlack).toBe(true);
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
@@ -2246,8 +2222,7 @@ Tanja -> Alex
     );
 
     // Attempting to advance beyond the final line must NOT close the dialogue box and must stay frozen
-    input.actionJustPressed = true;
-    updateGameState(state, input, 0.016);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.currentIndex).toBe(1);
     expect(state.activeDialogue?.lines[state.activeDialogue.currentIndex]).toBe(
@@ -2276,14 +2251,12 @@ Tanja -> Alex
 
     // Advance to final line
     const input = createEmptyInput();
-    input.actionJustPressed = true;
-    updateGameState(state, input, 0.016);
+    advanceDialogue(state, input);
     expect(state.activeDialogue?.currentIndex).toBe(1);
     expect(state.activeDialogue?.lines[1]).toBe('Arjan');
 
     // Attempting to advance beyond final line must remain unclosable
-    input.actionJustPressed = true;
-    updateGameState(state, input, 0.016);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).not.toBeNull();
     expect(state.activeDialogue?.currentIndex).toBe(1);
 
@@ -3279,9 +3252,7 @@ Tanja -> Alex
     expect(outsideRespawn.activeDialogue?.lines).toEqual(['Try again?']);
     // Advance Game Over dialog -> restarts from level-outside with full 100 hp
     const spaceInput = createEmptyInput();
-    applyKeyEvent(spaceInput, 'Space', true);
-    updateGameState(outsideRespawn, spaceInput, 0.01);
-    applyKeyEvent(spaceInput, 'Space', false);
+    advanceDialogue(outsideRespawn, spaceInput);
     expect(outsideRespawn.currentLevelId).toBe('level-outside');
     expect(outsideRespawn.player.health).toBe(MAX_PLAYER_HEALTH);
     expect(outsideRespawn.player.delayedHealth).toBe(MAX_PLAYER_HEALTH);
@@ -3346,9 +3317,7 @@ Tanja -> Alex
     ]);
 
     for (let i = 0; i < 5; i++) {
-      applyKeyEvent(input, 'Space', true);
-      updateGameState(state, input, 0.01);
-      applyKeyEvent(input, 'Space', false);
+      advanceDialogue(state, input);
     }
 
     // Special centered Achievement 1
@@ -3357,9 +3326,7 @@ Tanja -> Alex
       'ACHIEVEMENT UNLOCKED: Murder-mystery genre unlocked.',
     ]);
 
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
 
     // Regular dialogue: "I'm dreaming of a RED CHRISTMAS."
     expect(state.activeDialogue?.variant).toBeUndefined();
@@ -3367,9 +3334,7 @@ Tanja -> Alex
       "I'm dreaming of a RED CHRISTMAS.",
     ]);
 
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
 
     // Special centered Achievement 2
     expect(state.activeDialogue?.variant).toBe('achievement');
@@ -3378,9 +3343,7 @@ Tanja -> Alex
     ]);
 
     // Closing the second achievement unlocks & equips Uzi (slot 3) with 0.5s sky-to-forward animation
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
 
     expect(state.activeDialogue).toBeNull();
     expect(state.player.unlockedUzi).toBe(true);
@@ -3773,9 +3736,7 @@ Tanja -> Alex
     expect(state.activeDialogue?.lines).toEqual([
       'Use the number keys to change weapon.',
     ]);
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.01);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
     expect(state.activeDialogue).toBeNull();
 
     // Switch slot 1 (empty) and back to slot 4 (flamethrower)
@@ -4061,21 +4022,21 @@ Tanja -> Alex
     state.player.y = basement.windowNpc.y - 3 * TILE_SIZE;
     state.player.yaw = Math.PI / 2; // facing south toward Arjan
     applyKeyEvent(input, 'Space', true);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 6 && arjan.health === MAX_NPC_HEALTH; i++) {
       updateGameState(state, input, 0.05);
     }
     applyKeyEvent(input, 'Space', false);
-    // Advance bullets to hit Arjan (during 1s alert -> delayedHealth lags behind health)
-    for (let i = 0; i < 8; i++) {
+    // Advance bullets to hit Arjan (during 0.5s alert -> delayedHealth lags behind health)
+    for (let i = 0; i < 8 && arjan.health === MAX_NPC_HEALTH; i++) {
       state.player.health = MAX_PLAYER_HEALTH;
       updateGameState(state, input, 0.05);
     }
     expect(arjan.health).toBeLessThan(MAX_NPC_HEALTH);
     expect(arjan.delayedHealth).toBeGreaterThan(arjan.health);
     expect(arjan.mode).toBe('hostile');
-    expect(isNpcBillboardVisible(arjan)).toBe(false); // hidden during 1s alert
-    expect(basement.windowNpc.y).toBe(startArjanY); // does not run during 1s alert
-    // Advance past 1s alert so Arjan starts shooting, running, & showing billboard
+    expect(isNpcBillboardVisible(arjan)).toBe(false); // hidden during 0.5s alert
+    expect(basement.windowNpc.y).toBe(startArjanY); // does not run during 0.5s alert
+    // Advance past 0.5s alert so Arjan starts shooting, running, & showing billboard
     for (let i = 0; i < 16; i++) {
       state.player.health = MAX_PLAYER_HEALTH;
       updateGameState(state, input, 0.05);
@@ -4275,7 +4236,30 @@ Tanja -> Alex
       updateGameState(state, input, 0.1);
     }
     expect(basement.olexaCombat.mode).toBe('dead');
+    expect(basement.olexaCombat.charred).toBe(true);
     expect(state.medkits.some((m) => m.id === 'olexa-drop-medkit')).toBe(true);
+    expect(buildDynamicSceneMeshes(state, 40).opaque.vertexCount).toBeGreaterThan(0);
+
+    // Player hit by NPC flamethrower flame temporarily turns charred black, then returns to normal
+    expect(state.playerCharredTimer).toBe(0);
+    state.projectiles.push({
+      kind: 'fireball',
+      owner: 'npc',
+      sourceNpcKey: 'upstairs:Tanja',
+      x: state.player.x + state.player.width * 0.5,
+      y: state.player.y + state.player.height * 0.5,
+      z: 9.5,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      yaw: 0,
+      distanceTraveled: 0,
+    });
+    updateGameState(state, input, 0.02);
+    expect(state.playerCharredTimer).toBeGreaterThan(0);
+    expect(buildDynamicSceneMeshes(state, 40).opaque.vertexCount).toBeGreaterThan(0);
+    updateGameState(state, input, 2.1);
+    expect(state.playerCharredTimer).toBe(0);
 
     // 3. Defeating Anne-Marie (500 HP) upstairs drops her katana sword which the player picks up (slot 5) and can swing
     const upState = createGameState({
@@ -4295,9 +4279,7 @@ Tanja -> Alex
       upState.player.x = upstairs.anneMarieNpc.x - 4;
       upState.player.y = upstairs.anneMarieNpc.y + 2 * TILE_SIZE;
       if (upState.activeDialogue) {
-        applyKeyEvent(input, 'Space', true);
-        updateGameState(upState, input, 0.02);
-        applyKeyEvent(input, 'Space', false);
+        advanceDialogue(upState, input);
         continue;
       }
       applyKeyEvent(input, 'Space', true);
@@ -4306,15 +4288,18 @@ Tanja -> Alex
     }
     expect(upstairs.anneMarieCombat.mode).toBe('dead');
     expect(upState.droppedKatanas.length).toBe(1);
+    // Santa's post-kill one-liner dialogue is delayed by 0.5 seconds
+    expect(upState.activeDialogue).toBeNull();
+    updateGameState(upState, input, 0.4);
+    expect(upState.activeDialogue).toBeNull();
+    updateGameState(upState, input, 0.15);
     expect(upState.activeDialogue?.lines).toEqual([
       "I guess it's my turn to...",
       'Take out the trash.',
     ]);
     // Dismiss Santa's post-kill one-liner dialogue
     for (let i = 0; i < 2; i++) {
-      applyKeyEvent(input, 'Space', true);
-      updateGameState(upState, input, 0.02);
-      applyKeyEvent(input, 'Space', false);
+      advanceDialogue(upState, input);
     }
     expect(upState.activeDialogue).toBeNull();
 
@@ -4591,14 +4576,14 @@ Tanja -> Alex
       updateGameState(state, input, 0.05);
     }
     expect(state.destroyingDoors.some((d) => d.doorId === 'upstairs-bedroom-door')).toBe(true);
-    // Blowing up the bedroom door also makes Anne-Marie hostile & triggers her first-time dialogue
+    // Blowing up the bedroom door also makes Anne-Marie hostile & triggers her first-time dialogue after 0.5s
     expect(upstairs.anneMarieCombat.mode).toBe('hostile');
+    updateGameState(state, input, 1.05);
     while (state.activeDialogue) {
       applyKeyEvent(input, 'Space', true);
       updateGameState(state, input, 0.02);
       applyKeyEvent(input, 'Space', false);
     }
-    updateGameState(state, input, 1.05);
     expect(upstairs.doors.some((d) => d.id === 'upstairs-bedroom-door')).toBe(false);
 
     // 4. Shooting an outer border wall (e.g. row 4 north outer wall of house at col 13) turns it black but NEVER destroys it!
@@ -4777,8 +4762,10 @@ describe('Hostile armored headcrab cat', () => {
     state.player.health = MAX_PLAYER_HEALTH;
 
     // Trigger hostile state (normal 1.0x damage on 500 HP cat)
+    expect(isCatBillboardVisible(cat)).toBe(false);
     expect(applyCatDamage(cat, 30)).toBe(true);
     expect(cat.mode).toBe('hostile');
+    expect(isCatBillboardVisible(cat)).toBe(true);
     expect(cat.health).toBeCloseTo(MAX_CAT_HEALTH - 30, 4);
 
     // During leap toward player, cat becomes airborne (jumpZ > 0) and renders arched red mesh
@@ -4793,11 +4780,65 @@ describe('Hostile armored headcrab cat', () => {
     const latchedMesh = buildDynamicSceneMeshes(state, 0.05);
     expect(latchedMesh.opaque.vertexCount).toBeGreaterThan(0);
 
-    // It should reach and latch onto Santa's face
+    // It should reach and latch onto the RIGHT side of Santa's face
     expect(cat.mode).toBe('latched');
+    expect(isCatBillboardVisible(cat)).toBe(true);
     expect(cat.jumpZ).toBeGreaterThan(10);
+    const playerYaw = state.player.yaw ?? 0;
+    const rightAngle = playerYaw + Math.PI / 2;
+    const relX = (cat.x + cat.width * 0.5) - (state.player.x + state.player.width * 0.5);
+    const relY = (cat.y + cat.height * 0.5) - (state.player.y + state.player.height * 0.5);
+    const rightProj = relX * Math.cos(rightAngle) + relY * Math.sin(rightAngle);
+    expect(rightProj).toBeGreaterThan(2.5);
 
-    // Stay latched for 10.0 seconds (in 0.1s ticks) -> takes 5 HP per second = 50 HP total
+    // While latched, projectiles cannot hit the cat
+    const catHpBeforeShot = cat.health;
+    state.player.unlockedUzi = true;
+    state.player.equippedItem = 'uzi';
+    state.player.uziAmmo = 30;
+    state.player.uziFireCooldown = 0;
+    state.projectiles.push({
+      kind: 'bullet',
+      x: cat.x + cat.width * 0.5,
+      y: cat.y + cat.height * 0.5,
+      z: cat.jumpZ,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      yaw: 0,
+      distanceTraveled: 0,
+      owner: 'player',
+    });
+    updateGameState(state, input, 0.02);
+    expect(cat.health).toBe(catHpBeforeShot);
+
+    // While latched, firing the Uzi has 4x bullet spread (+40 deg at Math.random() = 1)
+    const origRandom = Math.random;
+    try {
+      Math.random = () => 1;
+      state.projectiles = [];
+      state.player.equippedItem = 'uzi';
+      state.player.uziAmmo = 30;
+      state.player.uziFireCooldown = 0;
+      state.player.yaw = 0;
+      applyKeyEvent(input, 'Space', true);
+      updateGameState(state, input, 0.02);
+      applyKeyEvent(input, 'Space', false);
+      const latchedBullet = state.projectiles.find((p) => p.kind === 'bullet');
+      expect(latchedBullet).toBeDefined();
+      expect(latchedBullet!.yaw).toBeCloseTo((40 * Math.PI) / 180, 4);
+    } finally {
+      Math.random = origRandom;
+    }
+
+    // While latched, punching with 'unarmed' damages the cat
+    state.player.equippedItem = 'unarmed';
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    expect(cat.health).toBeCloseTo(catHpBeforeShot - PLAYER_PUNCH_NPC_DAMAGE, 4);
+
+    // Stay latched for the remaining latch duration -> takes 5 HP per second = 50 HP total
     const healthBeforeLatch = state.player.health;
     for (let i = 0; i < 100; i++) {
       updateGameState(state, input, 0.1);
@@ -4812,6 +4853,25 @@ describe('Hostile armored headcrab cat', () => {
     // Right after 10 seconds, cat jumps off and becomes non-hostile ('flee')
     expect(cat.mode).toBe('flee');
     expect(cat.jumpZ).toBe(0);
+
+    // As soon as the cat stops face-hugging, Uzi spread returns to normal (+10 deg at Math.random() = 1)
+    try {
+      Math.random = () => 1;
+      state.projectiles = [];
+      state.player.equippedItem = 'uzi';
+      state.player.uziAmmo = 30;
+      state.player.uziFireCooldown = 0;
+      state.player.yaw = Math.PI;
+      applyKeyEvent(input, 'Space', true);
+      updateGameState(state, input, 0.02);
+      applyKeyEvent(input, 'Space', false);
+      const normalBullet = state.projectiles.find((p) => p.kind === 'bullet');
+      expect(normalBullet).toBeDefined();
+      expect(normalBullet!.yaw - Math.PI).toBeCloseTo((10 * Math.PI) / 180, 4);
+      state.projectiles = [];
+    } finally {
+      Math.random = origRandom;
+    }
 
     // Stepping while fleeing moves it away and deals no further damage
     const healthAfterJumpOff = state.player.health;
@@ -4835,6 +4895,7 @@ describe('Hostile armored headcrab cat', () => {
     applyCatDamage(cat, 2000);
     expect(cat.mode).toBe('dead');
     expect(cat.health).toBe(0);
+    expect(isCatBillboardVisible(cat)).toBe(false);
     const deadMesh = buildDynamicSceneMeshes(state, 0.2);
     expect(deadMesh.opaque.vertexCount).toBeGreaterThan(0);
   });
@@ -4881,9 +4942,7 @@ describe('Hostile armored headcrab cat', () => {
     expect(state.player.health).toBe(200);
     expect(state.player.states.get(BODY_ARMOR_TAKEN_KEY)).toBe(true);
     // Dismiss pickup dialogue
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.02);
-    applyKeyEvent(input, 'Space', false);
+    advanceDialogue(state, input);
 
     // Armor bar renders in navy blue (#1e3a8a) underneath the red health bar
     const fills: string[] = [];
@@ -4922,35 +4981,66 @@ describe('Hostile armored headcrab cat', () => {
       updateGameState(state, input, 0.05);
     }
     expect(upstairs.anneMarieCombat.mode).toBe('hostile');
+    // Anne-Marie's initial confession dialogue is delayed by 0.5s
+    expect(state.activeDialogue).toBeNull();
+    updateGameState(state, input, 0.4);
+    expect(state.activeDialogue).toBeNull();
+    updateGameState(state, input, 0.15);
     expect(state.player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)).toBe(true);
     expect(state.activeDialogue?.speakerPortrait).toBe('Anne-Marie');
     expect(state.activeDialogue?.lines).toEqual([...ANNE_MARIE_HOSTILE_DIALOGUE_LINES]);
 
     // Advancing through Anne-Marie's reveal chains into the "Murder-mystery solved." achievement banner
     for (let i = 0; i < ANNE_MARIE_HOSTILE_DIALOGUE_LINES.length; i++) {
-      applyKeyEvent(input, 'Space', true);
-      updateGameState(state, input, 0.02);
-      applyKeyEvent(input, 'Space', false);
+      advanceDialogue(state, input);
     }
     expect(state.activeDialogue?.variant).toBe('achievement');
     expect(state.activeDialogue?.lines).toEqual([
       'ACHIEVEMENT UNLOCKED: Murder-mystery solved.',
     ]);
-    // Dismiss achievement banner and verify Anne-Marie runs at 2x speed (48 px/s) when chasing Santa
-    applyKeyEvent(input, 'Space', true);
-    updateGameState(state, input, 0.02);
-    applyKeyEvent(input, 'Space', false);
+    // Dismiss achievement banner and verify Anne-Marie runs at 2x speed (48 px/s) normally,
+    // and sprints at 4x speed (96 px/s) for 0.5s every 2.5s
+    advanceDialogue(state, input);
     upstairs.anneMarieCombat.hostileAlertTimer = 0;
     upstairs.anneMarieCombat.pathTimer = 0;
+    upstairs.anneMarieSprintCycleTimer = 0;
     upstairs.anneMarieNpc.x = 24 * TILE_SIZE + 2;
-    upstairs.anneMarieNpc.y = 6 * TILE_SIZE + 2;
+    upstairs.anneMarieNpc.y = 5.2 * TILE_SIZE;
     state.player.x = 24 * TILE_SIZE + 2;
     state.player.y = 9.5 * TILE_SIZE;
     const amStartY = upstairs.anneMarieNpc.y;
     for (let i = 0; i < 10; i++) {
       updateGameState(state, input, 0.05);
     }
-    expect(upstairs.anneMarieNpc.y - amStartY).toBeGreaterThan(20); // > normal 12px in 0.5s (2x = 24px)
+    const normalDist = upstairs.anneMarieNpc.y - amStartY;
+    expect(normalDist).toBeGreaterThan(20); // > normal 12px in 0.5s (2x = 24px)
+    expect(normalDist).toBeLessThan(30);
+
+    // Advance into the 0.5s sprint window (t = 2.0s..2.5s) and verify 4x speed (~48px in 0.5s)
+    upstairs.anneMarieNpc.x = 24 * TILE_SIZE + 2;
+    upstairs.anneMarieNpc.y = 5.2 * TILE_SIZE;
+    upstairs.anneMarieCombat.pathTimer = 0;
+    upstairs.anneMarieSprintCycleTimer = 2.0;
+    const sprintStartY = upstairs.anneMarieNpc.y;
+    for (let i = 0; i < 10; i++) {
+      updateGameState(state, input, 0.05);
+    }
+    const sprintDist = upstairs.anneMarieNpc.y - sprintStartY;
+    expect(sprintDist).toBeGreaterThan(40); // 4x speed = 48px in 0.5s
+
+    // Verify Anne-Marie takes 25% less damage (e.g. 15-damage punch -> 11.25 damage)
+    const hpBeforeHit = upstairs.anneMarieCombat.health;
+    upstairs.anneMarieNpc.x = 24 * TILE_SIZE + 2;
+    upstairs.anneMarieNpc.y = 6 * TILE_SIZE;
+    state.player.equippedItem = 'unarmed';
+    state.player.x = upstairs.anneMarieNpc.x;
+    state.player.y = upstairs.anneMarieNpc.y + 12;
+    state.player.yaw = -Math.PI / 2;
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.02);
+    applyKeyEvent(input, 'Space', false);
+    expect(hpBeforeHit - upstairs.anneMarieCombat.health).toBeCloseTo(11.25, 2);
+    state.player.equippedItem = 'bazooka';
 
     // 4. Blowing up a wall around the basement bathroom makes Hanneloes active & hostile
     loadLevel(state, 'level-basement');
@@ -4978,9 +5068,7 @@ describe('Hostile armored headcrab cat', () => {
     damagePlayer(indoorState, 200);
     expect(indoorState.gameOver).toBe(true);
     expect(indoorState.activeDialogue?.lines).toEqual(['Try again?']);
-    applyKeyEvent(retryInput, 'Space', true);
-    updateGameState(indoorState, retryInput, 0.02);
-    applyKeyEvent(retryInput, 'Space', false);
+    advanceDialogue(indoorState, retryInput);
     expect(indoorState.gameOver).toBe(false);
     expect(indoorState.currentLevelId).toBe('level-basement');
     expect(indoorState.player.x).toBe(BASEMENT_FIREPLACE_SPAWN.x);
@@ -4999,9 +5087,7 @@ describe('Hostile armored headcrab cat', () => {
     });
     damagePlayer(outdoorState, 200);
     expect(outdoorState.gameOver).toBe(true);
-    applyKeyEvent(retryInput, 'Space', true);
-    updateGameState(outdoorState, retryInput, 0.02);
-    applyKeyEvent(retryInput, 'Space', false);
+    advanceDialogue(outdoorState, retryInput);
     expect(outdoorState.gameOver).toBe(false);
     expect(outdoorState.currentLevelId).toBe('level-outside');
 
@@ -5194,18 +5280,20 @@ describe('Hostile armored headcrab cat', () => {
     applyKeyEvent(sfxInput, 'Space', false);
     expect(soundManager.getRecentEvents()).toContain('door_locked');
     expect(soundManager.getRecentEvents()).toContain('dialogue_open');
-    applyKeyEvent(sfxInput, 'Space', true);
-    updateGameState(sfxState, sfxInput, 0.02);
-    applyKeyEvent(sfxInput, 'Space', false);
+    advanceDialogue(sfxState, sfxInput);
     expect(soundManager.getRecentEvents()).toContain('dialogue_advance');
     sfxState.activeDialogue = null;
 
-    // Upstairs: action music, cat meow/angry, weapons (uzi, flamethrower + fire_ember, katana, bazooka + rocket_flight + explosion), window break
+    // Upstairs outside of boss fights still plays peaceful_xmas (even after Rudolph/Uzi)
+    sfxState.player.states.set(RUDOLPH_INSPECTED_KEY, true);
+    sfxState.player.unlockedUzi = true;
     loadLevel(sfxState, 'level-upstairs');
     const sfxUp = sfxState.levels['level-upstairs'];
+    updateGameState(sfxState, sfxInput, 0.05);
+    expect(soundManager.getCurrentMusicTrack()).toBe('peaceful_xmas');
     soundManager.clearRecentEvents();
 
-    // Trigger Rosanna window break sound during jumping phase
+    // Trigger Rosanna window break sound during jumping phase -> boss music (action_xmas)
     sfxUp.rosannaCutscene = {
       active: true,
       phase: 'firing',
@@ -5221,7 +5309,22 @@ describe('Hostile armored headcrab cat', () => {
     expect(soundManager.getCurrentMusicTrack()).toBe('action_xmas');
     expect(soundManager.getRecentEvents()).toContain('window_break');
     sfxUp.rosannaCutscene = null;
+    sfxUp.rosannaSpawned = true;
+    updateGameState(sfxState, sfxInput, 0.05);
+    expect(soundManager.getCurrentMusicTrack()).toBe('action_xmas');
+    // Defeating Rosanna returns music to peaceful_xmas
+    sfxUp.rosannaCombat.mode = 'dead';
+    updateGameState(sfxState, sfxInput, 0.05);
+    expect(soundManager.getCurrentMusicTrack()).toBe('peaceful_xmas');
     sfxState.player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
+
+    // Anne-Marie boss music starts when she initiates her confession dialog and stops when defeated
+    sfxState.player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
+    updateGameState(sfxState, sfxInput, 0.05);
+    expect(soundManager.getCurrentMusicTrack()).toBe('action_xmas');
+    sfxUp.anneMarieCombat.mode = 'dead';
+    updateGameState(sfxState, sfxInput, 0.05);
+    expect(soundManager.getCurrentMusicTrack()).toBe('peaceful_xmas');
 
     // Cat fleeing -> cat_meow; cat damaged -> cat_angry
     sfxUp.cat.mode = 'flee';

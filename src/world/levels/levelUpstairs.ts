@@ -269,6 +269,11 @@ export const C4_PLACED_STATE_KEY = 'upstairsC4Placed';
 export const BODY_ARMOR_TAKEN_KEY = 'upstairsBodyArmorTaken';
 export const ANNE_MARIE_HOSTILE_DIALOGUE_KEY = 'upstairsAnneMarieHostileDialogueShown';
 export const ANNE_MARIE_MAX_HEALTH = MAX_NPC_HEALTH * 5;
+export const ANNE_MARIE_DIALOGUE_DELAY_SECONDS = 0.5;
+export const ANNE_MARIE_BASE_SPEED_MULTIPLIER = 2;
+export const ANNE_MARIE_SPRINT_SPEED_MULTIPLIER = 4;
+export const ANNE_MARIE_SPRINT_INTERVAL_SECONDS = 2.5;
+export const ANNE_MARIE_SPRINT_DURATION_SECONDS = 0.5;
 export const ANNE_MARIE_HOSTILE_DIALOGUE_LINES: readonly string[] = [
   'I was just sharpening my knife.',
   'You see... my other knife is missing. Where did I leave it?',
@@ -436,6 +441,8 @@ export class LevelUpstairs implements GameLevel {
   public readonly anneMarieNpc = { ...UPSTAIRS_ANNE_MARIE_NPC };
   public anneMarieAngle: number = Math.PI / 2; // Facing south toward the bedroom door
   public anneMarieTimer: number = 0;
+  public anneMarieHostileDialogueTimer: number | null = null;
+  public anneMarieSprintCycleTimer: number = 0;
   public anneMarieCone: ConeOfSight | null;
   public anneMarieCombat: ArmedNpcState;
 
@@ -688,6 +695,8 @@ export class LevelUpstairs implements GameLevel {
       this.anneMarieCombat.unseenTimer = 0;
       this.anneMarieAngle = Math.PI / 2;
       this.anneMarieTimer = 0;
+      this.anneMarieHostileDialogueTimer = null;
+      this.anneMarieSprintCycleTimer = 0;
       this.anneMarieCombat.aimYaw = this.anneMarieAngle;
       this.anneMarieCone = new ConeOfSight(
         { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
@@ -1050,6 +1059,22 @@ export class LevelUpstairs implements GameLevel {
     ctx: LevelTransitionContext,
     fov: number = DEFAULT_CONE_OF_SIGHT_FOV
   ): ConeOfSight {
+    let speedMultiplier = 1;
+    if (combat.key === 'upstairs:Anne-Marie') {
+      const sprintStart =
+        ANNE_MARIE_SPRINT_INTERVAL_SECONDS - ANNE_MARIE_SPRINT_DURATION_SECONDS;
+      const isSprinting =
+        combat.hostileAlertTimer <= 0 &&
+        this.anneMarieSprintCycleTimer >= sprintStart;
+      speedMultiplier = isSprinting
+        ? ANNE_MARIE_SPRINT_SPEED_MULTIPLIER
+        : ANNE_MARIE_BASE_SPEED_MULTIPLIER;
+      if (combat.hostileAlertTimer <= 0) {
+        this.anneMarieSprintCycleTimer =
+          (this.anneMarieSprintCycleTimer + dtSeconds) %
+          ANNE_MARIE_SPRINT_INTERVAL_SECONDS;
+      }
+    }
     stepHostileNpcAlongPath(
       combat,
       bounds,
@@ -1057,7 +1082,7 @@ export class LevelUpstairs implements GameLevel {
       this.map,
       this.getSolidObstacles(),
       dtSeconds,
-      combat.key === 'upstairs:Anne-Marie' ? 2 : 1
+      speedMultiplier
     );
     const originX = bounds.x + bounds.width * 0.5;
     const originY = bounds.y + bounds.height * 0.5;
@@ -1083,6 +1108,9 @@ export class LevelUpstairs implements GameLevel {
       combat.isMoving = false;
       combat.path = [];
       combat.pathTimer = 0;
+      if (combat.key === 'upstairs:Anne-Marie') {
+        this.anneMarieSprintCycleTimer = 0;
+      }
     } else if (combat.weapon === 'katana') {
       if (
         combat.hostileAlertTimer <= 0 &&
@@ -1457,20 +1485,31 @@ export class LevelUpstairs implements GameLevel {
           this.anneMarieCombat.mode === 'burning') &&
         !player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)
       ) {
-        player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
-        ctx.openDialogue(
-          [...ANNE_MARIE_HOSTILE_DIALOGUE_LINES],
-          () => {
+        if (this.anneMarieHostileDialogueTimer === null) {
+          this.anneMarieHostileDialogueTimer = ANNE_MARIE_DIALOGUE_DELAY_SECONDS;
+        } else {
+          this.anneMarieHostileDialogueTimer = Math.max(
+            0,
+            this.anneMarieHostileDialogueTimer - dtSeconds
+          );
+          if (this.anneMarieHostileDialogueTimer <= 0) {
+            this.anneMarieHostileDialogueTimer = null;
+            player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
             ctx.openDialogue(
-              ['ACHIEVEMENT UNLOCKED: Murder-mystery solved.'],
-              undefined,
-              undefined,
-              false,
-              'achievement'
+              [...ANNE_MARIE_HOSTILE_DIALOGUE_LINES],
+              () => {
+                ctx.openDialogue(
+                  ['ACHIEVEMENT UNLOCKED: Murder-mystery solved.'],
+                  undefined,
+                  undefined,
+                  false,
+                  'achievement'
+                );
+              },
+              'Anne-Marie'
             );
-          },
-          'Anne-Marie'
-        );
+          }
+        }
       }
     }
 

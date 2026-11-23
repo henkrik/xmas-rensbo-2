@@ -97,8 +97,52 @@ export function createCat(
   };
 }
 
+export function isCatBillboardVisible(cat: Cat): boolean {
+  return (
+    cat.mode !== 'dead' &&
+    (cat.mode === 'hostile' ||
+      cat.mode === 'latched' ||
+      cat.health < MAX_CAT_HEALTH)
+  );
+}
+
+function positionCatOnRightFace(cat: Cat, player: Player): void {
+  const playerCenterX = player.x + player.width / 2;
+  const playerCenterY = player.y + player.height / 2;
+  const playerYaw =
+    typeof player.yaw === 'number'
+      ? player.yaw
+      : player.facing === 'up'
+        ? -Math.PI / 2
+        : player.facing === 'down'
+          ? Math.PI / 2
+          : player.facing === 'left'
+            ? Math.PI
+            : 0;
+
+  const rightAngle = playerYaw + Math.PI / 2;
+  const forwardOffset = 2.4;
+  const rightOffset = 4.4;
+  cat.x =
+    playerCenterX +
+    Math.cos(playerYaw) * forwardOffset +
+    Math.cos(rightAngle) * rightOffset -
+    cat.width * 0.5;
+  cat.y =
+    playerCenterY +
+    Math.sin(playerYaw) * forwardOffset +
+    Math.sin(rightAngle) * rightOffset -
+    cat.height * 0.5;
+  cat.vx = 0;
+  cat.vy = 0;
+  // Face inward toward the right side of Santa's face while hugging it
+  cat.yaw = playerYaw - Math.PI / 2;
+  cat.facing = Math.cos(cat.yaw) < 0 ? 'left' : 'right';
+  cat.jumpZ = 12.2 + (player.jumpOffset ?? 0);
+}
+
 /**
- * Applies damage to the armored cat (1/10th normal damage) and turns it hostile.
+ * Applies damage to the armored cat and turns it hostile.
  * Returns true if damage was applied.
  */
 export function applyCatDamage(cat: Cat, rawDamage: number): boolean {
@@ -109,6 +153,10 @@ export function applyCatDamage(cat: Cat, rawDamage: number): boolean {
   const prevMode = cat.mode;
   const armorDamage = rawDamage * CAT_ARMOR_DAMAGE_MULTIPLIER;
   cat.health = Math.max(0, cat.health - armorDamage);
+  cat.delayedHealthRate = Math.max(
+    CAT_DELAYED_HEALTH_RATE,
+    Math.abs(cat.delayedHealth - cat.health)
+  );
   cat.blinkRedTimer = Math.max(cat.blinkRedTimer, 0.35);
 
   if (cat.health <= 0) {
@@ -198,16 +246,7 @@ export function updateCat(
               ? Math.PI
               : 0;
 
-    const faceOffset = 3.2;
-    cat.x =
-      playerCenterX + Math.cos(playerYaw) * faceOffset - cat.width * 0.5;
-    cat.y =
-      playerCenterY + Math.sin(playerYaw) * faceOffset - cat.height * 0.5;
-    cat.vx = 0;
-    cat.vy = 0;
-    cat.yaw = playerYaw + Math.PI;
-    cat.facing = Math.cos(cat.yaw) < 0 ? 'left' : 'right';
-    cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
+    positionCatOnRightFace(cat, player);
 
     const step = Math.min(dtSeconds, cat.latchTimer);
     cat.latchTimer = Math.max(0, cat.latchTimer - dtSeconds);
@@ -278,9 +317,7 @@ export function updateCat(
       cat.mode = 'latched';
       cat.latchTimer = CAT_LATCH_DURATION_SECONDS;
       cat.latchDamageAccum = 0;
-      cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
-      cat.vx = 0;
-      cat.vy = 0;
+      positionCatOnRightFace(cat, player);
       debugLog('Cat state changed: hostile -> latched');
     }
     return;

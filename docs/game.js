@@ -1046,364 +1046,375 @@
     }
   }
 
-  // src/entities/dog.ts
-  var DOG_START_X = 26.5 * TILE_SIZE;
-  var DOG_START_Y = 12.5 * TILE_SIZE;
-  var DOG_MAX_SPEED = 37;
-  var DOG_ACCELERATION = 95;
-  var DOG_DECELERATION = 90;
-  var DOG_AGGRO_DISTANCE = 6.5 * TILE_SIZE;
-  var DOG_DEAGGRO_DISTANCE = 10.5 * TILE_SIZE;
-  function createDog(x = DOG_START_X, y = DOG_START_Y) {
+  // src/core/debugConsole.ts
+  var DebugConsole = class {
+    constructor(maxLines = 50) {
+      __publicField(this, "lines", []);
+      __publicField(this, "maxLines");
+      __publicField(this, "element", null);
+      this.maxLines = maxLines;
+    }
+    log(message) {
+      this.lines.push(message);
+      if (this.lines.length > this.maxLines) {
+        this.lines.splice(0, this.lines.length - this.maxLines);
+      }
+      this.render();
+    }
+    getLines() {
+      return this.lines;
+    }
+    clear() {
+      this.lines = [];
+      this.render();
+    }
+    attach(frame) {
+      if (!frame || typeof document === "undefined") {
+        return () => {
+        };
+      }
+      frame.classList.add("debug");
+      const el = document.createElement("pre");
+      el.id = "viewport-debug-text";
+      frame.appendChild(el);
+      this.element = el;
+      this.render();
+      return () => {
+        if (this.element === el) {
+          this.element = null;
+        }
+        el.remove();
+        frame.classList.remove("debug");
+      };
+    }
+    render() {
+      if (this.element) {
+        this.element.textContent = this.lines.join("\n");
+      }
+    }
+  };
+  var debugConsole = new DebugConsole();
+  function debugLog(message) {
+    debugConsole.log(message);
+  }
+  function attachDebugConsole(frame) {
+    return debugConsole.attach(frame);
+  }
+  if (typeof globalThis !== "undefined") {
+    globalThis.debugLog = debugLog;
+  }
+
+  // src/entities/cat.ts
+  var CAT_START_X = 26.5 * TILE_SIZE;
+  var CAT_START_Y = 17 * TILE_SIZE;
+  var CAT_MAX_SPEED = 60;
+  var CAT_ACCELERATION = 120;
+  var CAT_DECELERATION = 100;
+  var EXTRA_ROOM_BOUNDS = {
+    x: 25.5 * TILE_SIZE,
+    y: 11 * TILE_SIZE,
+    width: 2.5 * TILE_SIZE,
+    height: 7 * TILE_SIZE
+  };
+  var CAT_STOP_FLEE_DISTANCE = 5 * TILE_SIZE;
+  var CAT_RETRIGGER_FLEE_DISTANCE = 2 * TILE_SIZE;
+  var MAX_CAT_HEALTH = 500;
+  var CAT_ARMOR_DAMAGE_MULTIPLIER = 1;
+  var CAT_HOSTILE_JUMP_SPEED = 95;
+  var CAT_JUMP_CYCLE_SECONDS = 0.55;
+  var CAT_JUMP_PEAK_Z = 13.5;
+  var CAT_LATCH_DURATION_SECONDS = 10;
+  var CAT_LATCH_DAMAGE_PER_SECOND = 5;
+  var CAT_LATCH_TICK_INTERVAL_SECONDS = 1;
+  var CAT_DELAYED_HEALTH_RATE = 40;
+  function createCat(x = CAT_START_X, y = CAT_START_Y) {
     return {
       x,
       y,
-      width: 12,
-      height: 12,
+      width: 10,
+      height: 10,
       vx: 0,
       vy: 0,
-      maxSpeed: DOG_MAX_SPEED,
-      acceleration: DOG_ACCELERATION,
-      deceleration: DOG_DECELERATION,
-      mode: "waiting",
+      maxSpeed: CAT_MAX_SPEED,
+      acceleration: CAT_ACCELERATION,
+      deceleration: CAT_DECELERATION,
+      mode: "standing",
       facing: "left",
-      yaw: Math.PI,
+      yaw: Math.PI / 2,
       animTimer: 0,
-      heartSpawnTimer: 0,
-      hearts: []
+      hasBeenActivated: false,
+      wallForceDirX: 0,
+      wallForceDirY: 0,
+      health: MAX_CAT_HEALTH,
+      delayedHealth: MAX_CAT_HEALTH,
+      delayedHealthRate: CAT_DELAYED_HEALTH_RATE,
+      jumpZ: 0,
+      jumpPhase: 0,
+      latchTimer: 0,
+      latchDamageAccum: 0,
+      blinkRedTimer: 0
     };
   }
-  function updateDog(dog, player, dtSeconds, map, solidObstacles = [], speedMultiplier = 1) {
-    const dogCenterX = dog.x + dog.width / 2;
-    const dogCenterY = dog.y + dog.height / 2;
+  function isCatBillboardVisible(cat) {
+    return cat.mode !== "dead" && (cat.mode === "hostile" || cat.mode === "latched" || cat.health < MAX_CAT_HEALTH);
+  }
+  function positionCatOnRightFace(cat, player) {
     const playerCenterX = player.x + player.width / 2;
     const playerCenterY = player.y + player.height / 2;
-    const dx = playerCenterX - dogCenterX;
-    const dy = playerCenterY - dogCenterY;
+    const playerYaw = typeof player.yaw === "number" ? player.yaw : player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
+    const rightAngle = playerYaw + Math.PI / 2;
+    const forwardOffset = 2.4;
+    const rightOffset = 4.4;
+    cat.x = playerCenterX + Math.cos(playerYaw) * forwardOffset + Math.cos(rightAngle) * rightOffset - cat.width * 0.5;
+    cat.y = playerCenterY + Math.sin(playerYaw) * forwardOffset + Math.sin(rightAngle) * rightOffset - cat.height * 0.5;
+    cat.vx = 0;
+    cat.vy = 0;
+    cat.yaw = playerYaw - Math.PI / 2;
+    cat.facing = Math.cos(cat.yaw) < 0 ? "left" : "right";
+    cat.jumpZ = 12.2 + (player.jumpOffset ?? 0);
+  }
+  function applyCatDamage(cat, rawDamage) {
+    if (cat.mode === "dead" || rawDamage <= 0) {
+      return false;
+    }
+    const prevMode = cat.mode;
+    const armorDamage = rawDamage * CAT_ARMOR_DAMAGE_MULTIPLIER;
+    cat.health = Math.max(0, cat.health - armorDamage);
+    cat.delayedHealthRate = Math.max(
+      CAT_DELAYED_HEALTH_RATE,
+      Math.abs(cat.delayedHealth - cat.health)
+    );
+    cat.blinkRedTimer = Math.max(cat.blinkRedTimer, 0.35);
+    if (cat.health <= 0) {
+      cat.mode = "dead";
+      cat.vx = 0;
+      cat.vy = 0;
+      cat.jumpZ = 0;
+      cat.latchTimer = 0;
+      cat.latchDamageAccum = 0;
+      debugLog(`Cat state changed: ${prevMode} -> dead`);
+      return true;
+    }
+    if (cat.mode !== "latched") {
+      cat.hasBeenActivated = true;
+      cat.mode = "hostile";
+      if (prevMode !== "hostile") {
+        cat.jumpPhase = 0;
+        debugLog(`Cat state changed: ${prevMode} -> hostile`);
+      }
+    }
+    return true;
+  }
+  function updateCat(cat, player, dtSeconds, map, solidObstacles = [], onDamagePlayer) {
+    if (cat.delayedHealth > cat.health) {
+      cat.delayedHealth = Math.max(
+        cat.health,
+        cat.delayedHealth - cat.delayedHealthRate * dtSeconds
+      );
+    } else if (cat.delayedHealth < cat.health) {
+      cat.delayedHealth = cat.health;
+    }
+    if (cat.mode === "dead") {
+      cat.vx = 0;
+      cat.vy = 0;
+      cat.jumpZ = 0;
+      return;
+    }
+    const catCenterX = cat.x + cat.width / 2;
+    const catCenterY = cat.y + cat.height / 2;
+    const playerCenterX = player.x + player.width / 2;
+    const playerCenterY = player.y + player.height / 2;
+    const dx = playerCenterX - catCenterX;
+    const dy = playerCenterY - catCenterY;
     const dist = Math.hypot(dx, dy);
-    if (dog.mode === "waiting" && dist <= DOG_AGGRO_DISTANCE) {
-      dog.mode = "chasing";
-      dog.heartSpawnTimer = 0;
-    } else if (dog.mode === "chasing" && dist >= DOG_DEAGGRO_DISTANCE) {
-      dog.mode = "waiting";
-    }
-    const effectiveMaxSpeed = dog.maxSpeed * speedMultiplier;
-    if (dog.mode === "chasing") {
-      const ux = dist > 1e-3 ? dx / dist : 0;
-      const uy = dist > 1e-3 ? dy / dist : 0;
-      const targetVx = ux * effectiveMaxSpeed;
-      const targetVy = uy * effectiveMaxSpeed;
-      const dvx = targetVx - dog.vx;
-      const dvy = targetVy - dog.vy;
-      const dvLen = Math.hypot(dvx, dvy);
-      const maxDeltaV = dog.acceleration * dtSeconds;
-      if (dvLen <= maxDeltaV || dvLen === 0) {
-        dog.vx = targetVx;
-        dog.vy = targetVy;
-      } else {
-        dog.vx += dvx / dvLen * maxDeltaV;
-        dog.vy += dvy / dvLen * maxDeltaV;
-      }
-      if (Math.abs(dog.vx) > 2) {
-        dog.facing = dog.vx < 0 ? "left" : "right";
-      } else if (Math.abs(dx) > 0.5) {
-        dog.facing = dx < 0 ? "left" : "right";
-      }
-    } else {
-      const speed = Math.hypot(dog.vx, dog.vy);
-      const maxDrop = dog.deceleration * dtSeconds;
-      if (speed <= maxDrop) {
-        dog.vx = 0;
-        dog.vy = 0;
-      } else {
-        dog.vx -= dog.vx / speed * maxDrop;
-        dog.vy -= dog.vy / speed * maxDrop;
-      }
-    }
     const collidesAt = (testX, testY) => {
-      if (isRectCollidingWithMap(map, testX, testY, dog.width, dog.height)) {
+      if (isRectCollidingWithMap(map, testX, testY, cat.width, cat.height)) {
         return true;
       }
       const testRect = {
         x: testX,
         y: testY,
-        width: dog.width,
-        height: dog.height
+        width: cat.width,
+        height: cat.height
       };
       return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
     };
-    if (dog.vx !== 0 || dog.vy !== 0) {
-      if (Math.hypot(dog.vx, dog.vy) > 0.5) {
-        dog.yaw = Math.atan2(dog.vy, dog.vx);
+    if (cat.mode === "latched") {
+      cat.blinkRedTimer += dtSeconds;
+      cat.animTimer += dtSeconds;
+      const playerYaw = typeof player.yaw === "number" ? player.yaw : player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
+      positionCatOnRightFace(cat, player);
+      const step = Math.min(dtSeconds, cat.latchTimer);
+      cat.latchTimer = Math.max(0, cat.latchTimer - dtSeconds);
+      cat.latchDamageAccum += step;
+      while (cat.latchDamageAccum >= CAT_LATCH_TICK_INTERVAL_SECONDS - 1e-6) {
+        cat.latchDamageAccum -= CAT_LATCH_TICK_INTERVAL_SECONDS;
+        onDamagePlayer?.(CAT_LATCH_DAMAGE_PER_SECOND);
       }
-      dog.animTimer += dtSeconds;
-      const nextX = dog.x + dog.vx * dtSeconds;
-      if (!collidesAt(nextX, dog.y)) {
-        dog.x = nextX;
-      } else {
-        dog.vx = 0;
-      }
-      const nextY = dog.y + dog.vy * dtSeconds;
-      if (!collidesAt(dog.x, nextY)) {
-        dog.y = nextY;
-      } else {
-        dog.vy = 0;
-      }
-    }
-    for (let i = dog.hearts.length - 1; i >= 0; i--) {
-      const h = dog.hearts[i];
-      h.age += dtSeconds;
-      h.x += h.vx * dtSeconds;
-      h.y += h.vy * dtSeconds;
-      if (h.age >= h.maxAge) {
-        dog.hearts.splice(i, 1);
-      }
-    }
-    if (dog.mode === "chasing") {
-      dog.heartSpawnTimer -= dtSeconds;
-      while (dog.heartSpawnTimer <= 0) {
-        const phase = dog.hearts.length + Math.floor(dog.animTimer * 10);
-        const offsetX = (phase % 3 - 1) * 4;
-        dog.hearts.push({
-          x: dog.x + dog.width / 2 + offsetX,
-          y: dog.y - 2,
-          vx: offsetX * 2.5,
-          vy: -16,
-          age: 0,
-          maxAge: 0.85
-        });
-        dog.heartSpawnTimer += 0.22;
-      }
-    }
-    return rectsIntersect(dog, player);
-  }
-
-  // src/entities/snowball.ts
-  var SNOWBALL_SPEED = 110;
-  var THROW_INTERVAL_SECONDS = 2.4;
-  var HIT_BLINK_DURATION_SECONDS = 2;
-  function createDrivewayThrowers() {
-    const rowY = 16 * TILE_SIZE + 2;
-    const leftX = 12 * TILE_SIZE + 2;
-    const rightX = 18 * TILE_SIZE + 2;
-    return [
-      {
-        id: "thrower-sylvester",
-        name: "Sylvester",
-        x: leftX,
-        y: rowY,
-        width: 12,
-        height: 12,
-        facing: "right",
-        targetX: rightX,
-        throwInterval: THROW_INTERVAL_SECONDS,
-        // Throw shortly after level starts/resets
-        throwTimer: 0.6
-      },
-      {
-        id: "thrower-annelotte",
-        name: "Annelotte",
-        x: rightX,
-        y: rowY,
-        width: 12,
-        height: 12,
-        facing: "left",
-        targetX: leftX,
-        throwInterval: THROW_INTERVAL_SECONDS,
-        // Staggered so they alternate throwing back and forth across the driveway
-        throwTimer: 1.8
-      }
-    ];
-  }
-  function spawnSnowballFromThrower(thrower) {
-    const dir = thrower.facing === "right" ? 1 : -1;
-    return {
-      x: thrower.facing === "right" ? thrower.x + thrower.width : thrower.x - 6,
-      y: thrower.y + 3,
-      width: 6,
-      height: 6,
-      vx: dir * SNOWBALL_SPEED,
-      vy: 0,
-      targetX: thrower.targetX
-    };
-  }
-  function updateSnowballFight(throwers, snowballs, player, dtSeconds) {
-    for (const thrower of throwers) {
-      thrower.throwTimer -= dtSeconds;
-      if (thrower.throwTimer <= 0) {
-        thrower.throwTimer += thrower.throwInterval;
-        snowballs.push(spawnSnowballFromThrower(thrower));
-      }
-    }
-    for (let i = snowballs.length - 1; i >= 0; i--) {
-      const sb = snowballs[i];
-      sb.x += sb.vx * dtSeconds;
-      sb.y += sb.vy * dtSeconds;
-      if (rectsIntersect(sb, player)) {
-        return true;
-      }
-      if (sb.vx > 0 && sb.x >= sb.targetX || sb.vx < 0 && sb.x + sb.width <= sb.targetX + 12) {
-        snowballs.splice(i, 1);
-      }
-    }
-    return false;
-  }
-
-  // src/world/interaction.ts
-  var INTERACTION_MAX_GAP_PX = 6;
-  function rectEdgeDistance(a, b) {
-    const dx = Math.max(0, b.x - (a.x + a.width), a.x - (b.x + b.width));
-    const dy = Math.max(0, b.y - (a.y + a.height), a.y - (b.y + b.height));
-    return Math.hypot(dx, dy);
-  }
-  function buildInteractables(throwers, options = {}) {
-    const {
-      hasLadder = false,
-      ladderPlaced = false,
-      isOnRoof = false,
-      motorcycleStatus = "parked",
-      alexNpc
-    } = options;
-    if (isOnRoof) {
-      return [
-        {
-          id: "roof-ladder",
-          bounds: { ...ROOF_LADDER_BOUNDS },
-          promptText: "Climb down ladder",
-          dialogueLines: []
-        },
-        {
-          id: "roof-chimney",
-          bounds: { ...ROOF_CHIMNEY_BOUNDS },
-          promptText: "Climb down chimney",
-          dialogueLines: []
-        },
-        {
-          id: "roof-rudolph",
-          bounds: { ...ROOF_RUDOLPH_BOUNDS },
-          promptText: "Inspect Rudolph",
-          dialogueLines: []
+      if (cat.latchTimer <= 1e-6) {
+        cat.mode = "flee";
+        cat.hasBeenActivated = true;
+        cat.jumpZ = 0;
+        cat.jumpPhase = 0;
+        cat.latchTimer = 0;
+        cat.latchDamageAccum = 0;
+        cat.blinkRedTimer = 0;
+        const awayYaw = playerYaw;
+        const fleeKickX = Math.cos(awayYaw) * 8;
+        const fleeKickY = Math.sin(awayYaw) * 8;
+        if (!collidesAt(cat.x + fleeKickX, cat.y + fleeKickY)) {
+          cat.x += fleeKickX;
+          cat.y += fleeKickY;
         }
-      ];
-    }
-    const list = throwers.map((t) => {
-      if (t.id === "thrower-sylvester") {
-        return {
-          id: t.id,
-          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-          promptText: "Talk to Sylvester",
-          dialogueLines: ["Watch out! Annelotte is crazy!"],
-          speakerPortrait: "Sylvester"
-        };
+        cat.vx = Math.cos(awayYaw) * cat.maxSpeed;
+        cat.vy = Math.sin(awayYaw) * cat.maxSpeed;
+        cat.yaw = awayYaw;
+        cat.facing = cat.vx < 0 ? "left" : "right";
+        debugLog("Cat state changed: latched -> flee");
       }
-      if (t.id === "thrower-annelotte") {
-        return {
-          id: t.id,
-          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-          promptText: "Talk to Annelotte",
-          dialogueLines: [
-            "It's good to talk about your feelings... how does a snowball in your face feel?"
-          ],
-          speakerPortrait: "Annelotte"
-        };
+      return;
+    }
+    if (cat.mode === "hostile") {
+      cat.blinkRedTimer += dtSeconds;
+      cat.animTimer += dtSeconds;
+      cat.jumpPhase = (cat.jumpPhase + dtSeconds / CAT_JUMP_CYCLE_SECONDS) % 1;
+      cat.jumpZ = 4 * CAT_JUMP_PEAK_Z * cat.jumpPhase * (1 - cat.jumpPhase);
+      const ux = dist > 1e-3 ? dx / dist : 1;
+      const uy = dist > 1e-3 ? dy / dist : 0;
+      cat.vx = ux * CAT_HOSTILE_JUMP_SPEED;
+      cat.vy = uy * CAT_HOSTILE_JUMP_SPEED;
+      cat.yaw = Math.atan2(uy, ux);
+      cat.facing = ux < 0 ? "left" : "right";
+      const stepDist = Math.min(dist, CAT_HOSTILE_JUMP_SPEED * dtSeconds);
+      const nextX = cat.x + ux * stepDist;
+      if (!collidesAt(nextX, cat.y)) {
+        cat.x = nextX;
+      } else {
+        cat.vx = 0;
       }
-      return {
-        id: t.id,
-        bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
-        promptText: "Talk to",
-        dialogueLines: ["Watch out!"]
-      };
-    });
-    list.push({
-      id: "house-double-door",
-      bounds: {
-        x: 9 * TILE_SIZE + 8,
-        y: HOUSE_DOOR_ROW * TILE_SIZE,
-        width: TILE_SIZE * 2,
-        height: TILE_SIZE
-      },
-      promptText: "Open door",
-      dialogueLines: ["It's locked."]
-    });
-    list.push({
-      id: "house-door",
-      bounds: {
-        x: HOUSE_DOOR_COL * TILE_SIZE,
-        y: HOUSE_DOOR_ROW * TILE_SIZE,
-        width: TILE_SIZE,
-        height: TILE_SIZE
-      },
-      promptText: "Open door",
-      dialogueLines: [
-        "It's locked.",
-        "There has to be another way into the house..."
-      ]
-    });
-    if (motorcycleStatus === "parked") {
-      list.push({
-        id: "motorcycle",
-        bounds: {
-          x: MOTORCYCLE_START_X,
-          y: MOTORCYCLE_START_Y,
-          width: TILE_SIZE * 2,
-          height: TILE_SIZE
-        },
-        promptText: "Drive",
-        dialogueLines: []
-      });
+      const nextY = cat.y + uy * stepDist;
+      if (!collidesAt(cat.x, nextY)) {
+        cat.y = nextY;
+      } else {
+        cat.vy = 0;
+      }
+      const newDist = Math.hypot(
+        playerCenterX - (cat.x + cat.width * 0.5),
+        playerCenterY - (cat.y + cat.height * 0.5)
+      );
+      if (rectsIntersect(cat, player) || newDist <= 12) {
+        cat.mode = "latched";
+        cat.latchTimer = CAT_LATCH_DURATION_SECONDS;
+        cat.latchDamageAccum = 0;
+        positionCatOnRightFace(cat, player);
+        debugLog("Cat state changed: hostile -> latched");
+      }
+      return;
     }
-    if (!hasLadder && !ladderPlaced) {
-      list.push({
-        id: "ground-ladder",
-        bounds: { ...GROUND_LADDER_BOUNDS },
-        promptText: "Pick up",
-        dialogueLines: []
-      });
-      list.push({
-        id: "house-west-inspect",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Inspect",
-        dialogueLines: [
-          "Hmm.. looks like there is a chimney up there, but I can't reach it"
-        ]
-      });
-    } else if (hasLadder && !ladderPlaced) {
-      list.push({
-        id: "house-west-place-ladder",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Place ladder",
-        dialogueLines: []
-      });
-    } else if (ladderPlaced) {
-      list.push({
-        id: "house-west-climb-ladder",
-        bounds: { ...HOUSE_WEST_LADDER_SPOT },
-        promptText: "Climb ladder",
-        dialogueLines: []
-      });
-    }
-    if (alexNpc) {
-      list.push({
-        id: "outside-alex",
-        bounds: { ...alexNpc },
-        promptText: "Talk to Alex",
-        dialogueLines: ["Just practicing my swings..."],
-        speakerPortrait: "Alex"
-      });
-    }
-    return list;
-  }
-  function findNearbyInteractable(player, interactables, maxGapPx = INTERACTION_MAX_GAP_PX) {
-    let closest = null;
-    let bestDist = Infinity;
-    for (const item of interactables) {
-      const dist = rectEdgeDistance(player, item.bounds);
-      if (dist <= maxGapPx && dist < bestDist) {
-        bestDist = dist;
-        closest = item;
+    cat.jumpZ = 0;
+    cat.blinkRedTimer = 0;
+    const prevMode = cat.mode;
+    if (!cat.hasBeenActivated) {
+      if (rectsIntersect(player, EXTRA_ROOM_BOUNDS)) {
+        cat.hasBeenActivated = true;
+        cat.mode = "flee";
+      }
+    } else {
+      if (cat.mode === "flee") {
+        if (dist > CAT_STOP_FLEE_DISTANCE) {
+          cat.mode = "standing";
+        }
+      } else if (cat.mode === "standing") {
+        if (dist <= CAT_RETRIGGER_FLEE_DISTANCE) {
+          cat.mode = "flee";
+        }
       }
     }
-    return closest;
+    if (cat.mode !== prevMode) {
+      debugLog(`Cat state changed: ${prevMode} -> ${cat.mode}`);
+    }
+    if (cat.mode === "flee") {
+      const lookDist = 8;
+      const wallWest = collidesAt(cat.x - lookDist, cat.y);
+      const wallEast = collidesAt(cat.x + lookDist, cat.y);
+      const wallNorth = collidesAt(cat.x, cat.y - lookDist);
+      const wallSouth = collidesAt(cat.x, cat.y + lookDist);
+      let forceDirX = 0;
+      let forceDirY = 0;
+      if (wallWest) forceDirX += 1;
+      if (wallEast) forceDirX -= 1;
+      if (wallNorth) forceDirY += 1;
+      if (wallSouth) forceDirY -= 1;
+      if (forceDirX !== cat.wallForceDirX || forceDirY !== cat.wallForceDirY) {
+        debugLog(
+          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (${forceDirX}, ${forceDirY})`
+        );
+        cat.wallForceDirX = forceDirX;
+        cat.wallForceDirY = forceDirY;
+      }
+      let ux = dist > 1e-3 ? -dx / dist : -1;
+      let uy = dist > 1e-3 ? -dy / dist : 0;
+      const targetVx = ux * cat.maxSpeed;
+      const targetVy = uy * cat.maxSpeed;
+      const dvx = targetVx - cat.vx;
+      const dvy = targetVy - cat.vy;
+      const dvLen = Math.hypot(dvx, dvy);
+      const maxDeltaV = cat.acceleration * dtSeconds;
+      if (dvLen <= maxDeltaV || dvLen === 0) {
+        cat.vx = targetVx;
+        cat.vy = targetVy;
+      } else {
+        cat.vx += dvx / dvLen * maxDeltaV;
+        cat.vy += dvy / dvLen * maxDeltaV;
+      }
+      if (forceDirX !== 0 || forceDirY !== 0) {
+        const forceLen = Math.hypot(forceDirX, forceDirY);
+        const normFx = forceDirX / forceLen;
+        const normFy = forceDirY / forceLen;
+        cat.vx += normFx * cat.acceleration * dtSeconds;
+        cat.vy += normFy * cat.acceleration * dtSeconds;
+      }
+      if (Math.abs(cat.vx) > 2) {
+        cat.facing = cat.vx < 0 ? "left" : "right";
+      } else if (Math.abs(dx) > 0.5) {
+        cat.facing = dx > 0 ? "left" : "right";
+      }
+    } else {
+      if (cat.wallForceDirX !== 0 || cat.wallForceDirY !== 0) {
+        debugLog(
+          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (0, 0)`
+        );
+        cat.wallForceDirX = 0;
+        cat.wallForceDirY = 0;
+      }
+      const speed = Math.hypot(cat.vx, cat.vy);
+      const maxDrop = cat.deceleration * dtSeconds;
+      if (speed <= maxDrop) {
+        cat.vx = 0;
+        cat.vy = 0;
+      } else {
+        cat.vx -= cat.vx / speed * maxDrop;
+        cat.vy -= cat.vy / speed * maxDrop;
+      }
+    }
+    if (cat.vx !== 0 || cat.vy !== 0) {
+      if (Math.hypot(cat.vx, cat.vy) > 0.5) {
+        cat.yaw = Math.atan2(cat.vy, cat.vx);
+      }
+      cat.animTimer += dtSeconds;
+      const nextX = cat.x + cat.vx * dtSeconds;
+      if (!collidesAt(nextX, cat.y)) {
+        cat.x = nextX;
+      } else {
+        cat.vx = 0;
+      }
+      const nextY = cat.y + cat.vy * dtSeconds;
+      if (!collidesAt(cat.x, nextY)) {
+        cat.y = nextY;
+      } else {
+        cat.vy = 0;
+      }
+    }
   }
 
   // src/world/pathfinding.ts
@@ -1564,7 +1575,7 @@
   // src/entities/npcCombat.ts
   var MAX_NPC_HEALTH = 100;
   var NPC_HOSTILE_LOSE_SIGHT_SECONDS = 5;
-  var NPC_HOSTILE_ALERT_SECONDS = 1;
+  var NPC_HOSTILE_ALERT_SECONDS = 0.5;
   var NPC_HOSTILE_PROPAGATION_DELAY_SECONDS = 2;
   var NPC_HOSTILE_PATH_RECALC_SECONDS = 1;
   var NPC_HOSTILE_WALK_SPEED = 24;
@@ -1611,7 +1622,8 @@
       pathTimer: 0,
       isMoving: false,
       burnDirYaw: initialAimYaw,
-      burnDirTimer: 0
+      burnDirTimer: 0,
+      charred: false
     };
   }
   function applyNpcDamage(npc, damage) {
@@ -1653,6 +1665,7 @@
   function igniteNpc(npc) {
     if (npc.mode === "dead") return;
     npc.mode = "burning";
+    npc.charred = true;
     npc.hostileAlertTimer = 0;
     npc.pendingHostileAlertTimer = 0;
     npc.unseenTimer = 0;
@@ -2096,364 +2109,6 @@
   __publicField(_ConeOfSight, "cheatMode", false);
   var ConeOfSight = _ConeOfSight;
 
-  // src/core/debugConsole.ts
-  var DebugConsole = class {
-    constructor(maxLines = 50) {
-      __publicField(this, "lines", []);
-      __publicField(this, "maxLines");
-      __publicField(this, "element", null);
-      this.maxLines = maxLines;
-    }
-    log(message) {
-      this.lines.push(message);
-      if (this.lines.length > this.maxLines) {
-        this.lines.splice(0, this.lines.length - this.maxLines);
-      }
-      this.render();
-    }
-    getLines() {
-      return this.lines;
-    }
-    clear() {
-      this.lines = [];
-      this.render();
-    }
-    attach(frame) {
-      if (!frame || typeof document === "undefined") {
-        return () => {
-        };
-      }
-      frame.classList.add("debug");
-      const el = document.createElement("pre");
-      el.id = "viewport-debug-text";
-      frame.appendChild(el);
-      this.element = el;
-      this.render();
-      return () => {
-        if (this.element === el) {
-          this.element = null;
-        }
-        el.remove();
-        frame.classList.remove("debug");
-      };
-    }
-    render() {
-      if (this.element) {
-        this.element.textContent = this.lines.join("\n");
-      }
-    }
-  };
-  var debugConsole = new DebugConsole();
-  function debugLog(message) {
-    debugConsole.log(message);
-  }
-  function attachDebugConsole(frame) {
-    return debugConsole.attach(frame);
-  }
-  if (typeof globalThis !== "undefined") {
-    globalThis.debugLog = debugLog;
-  }
-
-  // src/entities/cat.ts
-  var CAT_START_X = 26.5 * TILE_SIZE;
-  var CAT_START_Y = 17 * TILE_SIZE;
-  var CAT_MAX_SPEED = 60;
-  var CAT_ACCELERATION = 120;
-  var CAT_DECELERATION = 100;
-  var EXTRA_ROOM_BOUNDS = {
-    x: 25.5 * TILE_SIZE,
-    y: 11 * TILE_SIZE,
-    width: 2.5 * TILE_SIZE,
-    height: 7 * TILE_SIZE
-  };
-  var CAT_STOP_FLEE_DISTANCE = 5 * TILE_SIZE;
-  var CAT_RETRIGGER_FLEE_DISTANCE = 2 * TILE_SIZE;
-  var MAX_CAT_HEALTH = 500;
-  var CAT_ARMOR_DAMAGE_MULTIPLIER = 1;
-  var CAT_HOSTILE_JUMP_SPEED = 95;
-  var CAT_JUMP_CYCLE_SECONDS = 0.55;
-  var CAT_JUMP_PEAK_Z = 13.5;
-  var CAT_LATCH_DURATION_SECONDS = 10;
-  var CAT_LATCH_DAMAGE_PER_SECOND = 5;
-  var CAT_LATCH_TICK_INTERVAL_SECONDS = 1;
-  var CAT_DELAYED_HEALTH_RATE = 40;
-  function createCat(x = CAT_START_X, y = CAT_START_Y) {
-    return {
-      x,
-      y,
-      width: 10,
-      height: 10,
-      vx: 0,
-      vy: 0,
-      maxSpeed: CAT_MAX_SPEED,
-      acceleration: CAT_ACCELERATION,
-      deceleration: CAT_DECELERATION,
-      mode: "standing",
-      facing: "left",
-      yaw: Math.PI / 2,
-      animTimer: 0,
-      hasBeenActivated: false,
-      wallForceDirX: 0,
-      wallForceDirY: 0,
-      health: MAX_CAT_HEALTH,
-      delayedHealth: MAX_CAT_HEALTH,
-      delayedHealthRate: CAT_DELAYED_HEALTH_RATE,
-      jumpZ: 0,
-      jumpPhase: 0,
-      latchTimer: 0,
-      latchDamageAccum: 0,
-      blinkRedTimer: 0
-    };
-  }
-  function applyCatDamage(cat, rawDamage) {
-    if (cat.mode === "dead" || rawDamage <= 0) {
-      return false;
-    }
-    const prevMode = cat.mode;
-    const armorDamage = rawDamage * CAT_ARMOR_DAMAGE_MULTIPLIER;
-    cat.health = Math.max(0, cat.health - armorDamage);
-    cat.blinkRedTimer = Math.max(cat.blinkRedTimer, 0.35);
-    if (cat.health <= 0) {
-      cat.mode = "dead";
-      cat.vx = 0;
-      cat.vy = 0;
-      cat.jumpZ = 0;
-      cat.latchTimer = 0;
-      cat.latchDamageAccum = 0;
-      debugLog(`Cat state changed: ${prevMode} -> dead`);
-      return true;
-    }
-    if (cat.mode !== "latched") {
-      cat.hasBeenActivated = true;
-      cat.mode = "hostile";
-      if (prevMode !== "hostile") {
-        cat.jumpPhase = 0;
-        debugLog(`Cat state changed: ${prevMode} -> hostile`);
-      }
-    }
-    return true;
-  }
-  function updateCat(cat, player, dtSeconds, map, solidObstacles = [], onDamagePlayer) {
-    if (cat.delayedHealth > cat.health) {
-      cat.delayedHealth = Math.max(
-        cat.health,
-        cat.delayedHealth - cat.delayedHealthRate * dtSeconds
-      );
-    } else if (cat.delayedHealth < cat.health) {
-      cat.delayedHealth = cat.health;
-    }
-    if (cat.mode === "dead") {
-      cat.vx = 0;
-      cat.vy = 0;
-      cat.jumpZ = 0;
-      return;
-    }
-    const catCenterX = cat.x + cat.width / 2;
-    const catCenterY = cat.y + cat.height / 2;
-    const playerCenterX = player.x + player.width / 2;
-    const playerCenterY = player.y + player.height / 2;
-    const dx = playerCenterX - catCenterX;
-    const dy = playerCenterY - catCenterY;
-    const dist = Math.hypot(dx, dy);
-    const collidesAt = (testX, testY) => {
-      if (isRectCollidingWithMap(map, testX, testY, cat.width, cat.height)) {
-        return true;
-      }
-      const testRect = {
-        x: testX,
-        y: testY,
-        width: cat.width,
-        height: cat.height
-      };
-      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
-    };
-    if (cat.mode === "latched") {
-      cat.blinkRedTimer += dtSeconds;
-      cat.animTimer += dtSeconds;
-      const playerYaw = typeof player.yaw === "number" ? player.yaw : player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
-      const faceOffset = 3.2;
-      cat.x = playerCenterX + Math.cos(playerYaw) * faceOffset - cat.width * 0.5;
-      cat.y = playerCenterY + Math.sin(playerYaw) * faceOffset - cat.height * 0.5;
-      cat.vx = 0;
-      cat.vy = 0;
-      cat.yaw = playerYaw + Math.PI;
-      cat.facing = Math.cos(cat.yaw) < 0 ? "left" : "right";
-      cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
-      const step = Math.min(dtSeconds, cat.latchTimer);
-      cat.latchTimer = Math.max(0, cat.latchTimer - dtSeconds);
-      cat.latchDamageAccum += step;
-      while (cat.latchDamageAccum >= CAT_LATCH_TICK_INTERVAL_SECONDS - 1e-6) {
-        cat.latchDamageAccum -= CAT_LATCH_TICK_INTERVAL_SECONDS;
-        onDamagePlayer?.(CAT_LATCH_DAMAGE_PER_SECOND);
-      }
-      if (cat.latchTimer <= 1e-6) {
-        cat.mode = "flee";
-        cat.hasBeenActivated = true;
-        cat.jumpZ = 0;
-        cat.jumpPhase = 0;
-        cat.latchTimer = 0;
-        cat.latchDamageAccum = 0;
-        cat.blinkRedTimer = 0;
-        const awayYaw = playerYaw;
-        const fleeKickX = Math.cos(awayYaw) * 8;
-        const fleeKickY = Math.sin(awayYaw) * 8;
-        if (!collidesAt(cat.x + fleeKickX, cat.y + fleeKickY)) {
-          cat.x += fleeKickX;
-          cat.y += fleeKickY;
-        }
-        cat.vx = Math.cos(awayYaw) * cat.maxSpeed;
-        cat.vy = Math.sin(awayYaw) * cat.maxSpeed;
-        cat.yaw = awayYaw;
-        cat.facing = cat.vx < 0 ? "left" : "right";
-        debugLog("Cat state changed: latched -> flee");
-      }
-      return;
-    }
-    if (cat.mode === "hostile") {
-      cat.blinkRedTimer += dtSeconds;
-      cat.animTimer += dtSeconds;
-      cat.jumpPhase = (cat.jumpPhase + dtSeconds / CAT_JUMP_CYCLE_SECONDS) % 1;
-      cat.jumpZ = 4 * CAT_JUMP_PEAK_Z * cat.jumpPhase * (1 - cat.jumpPhase);
-      const ux = dist > 1e-3 ? dx / dist : 1;
-      const uy = dist > 1e-3 ? dy / dist : 0;
-      cat.vx = ux * CAT_HOSTILE_JUMP_SPEED;
-      cat.vy = uy * CAT_HOSTILE_JUMP_SPEED;
-      cat.yaw = Math.atan2(uy, ux);
-      cat.facing = ux < 0 ? "left" : "right";
-      const stepDist = Math.min(dist, CAT_HOSTILE_JUMP_SPEED * dtSeconds);
-      const nextX = cat.x + ux * stepDist;
-      if (!collidesAt(nextX, cat.y)) {
-        cat.x = nextX;
-      } else {
-        cat.vx = 0;
-      }
-      const nextY = cat.y + uy * stepDist;
-      if (!collidesAt(cat.x, nextY)) {
-        cat.y = nextY;
-      } else {
-        cat.vy = 0;
-      }
-      const newDist = Math.hypot(
-        playerCenterX - (cat.x + cat.width * 0.5),
-        playerCenterY - (cat.y + cat.height * 0.5)
-      );
-      if (rectsIntersect(cat, player) || newDist <= 12) {
-        cat.mode = "latched";
-        cat.latchTimer = CAT_LATCH_DURATION_SECONDS;
-        cat.latchDamageAccum = 0;
-        cat.jumpZ = 12.8 + (player.jumpOffset ?? 0);
-        cat.vx = 0;
-        cat.vy = 0;
-        debugLog("Cat state changed: hostile -> latched");
-      }
-      return;
-    }
-    cat.jumpZ = 0;
-    cat.blinkRedTimer = 0;
-    const prevMode = cat.mode;
-    if (!cat.hasBeenActivated) {
-      if (rectsIntersect(player, EXTRA_ROOM_BOUNDS)) {
-        cat.hasBeenActivated = true;
-        cat.mode = "flee";
-      }
-    } else {
-      if (cat.mode === "flee") {
-        if (dist > CAT_STOP_FLEE_DISTANCE) {
-          cat.mode = "standing";
-        }
-      } else if (cat.mode === "standing") {
-        if (dist <= CAT_RETRIGGER_FLEE_DISTANCE) {
-          cat.mode = "flee";
-        }
-      }
-    }
-    if (cat.mode !== prevMode) {
-      debugLog(`Cat state changed: ${prevMode} -> ${cat.mode}`);
-    }
-    if (cat.mode === "flee") {
-      const lookDist = 8;
-      const wallWest = collidesAt(cat.x - lookDist, cat.y);
-      const wallEast = collidesAt(cat.x + lookDist, cat.y);
-      const wallNorth = collidesAt(cat.x, cat.y - lookDist);
-      const wallSouth = collidesAt(cat.x, cat.y + lookDist);
-      let forceDirX = 0;
-      let forceDirY = 0;
-      if (wallWest) forceDirX += 1;
-      if (wallEast) forceDirX -= 1;
-      if (wallNorth) forceDirY += 1;
-      if (wallSouth) forceDirY -= 1;
-      if (forceDirX !== cat.wallForceDirX || forceDirY !== cat.wallForceDirY) {
-        debugLog(
-          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (${forceDirX}, ${forceDirY})`
-        );
-        cat.wallForceDirX = forceDirX;
-        cat.wallForceDirY = forceDirY;
-      }
-      let ux = dist > 1e-3 ? -dx / dist : -1;
-      let uy = dist > 1e-3 ? -dy / dist : 0;
-      const targetVx = ux * cat.maxSpeed;
-      const targetVy = uy * cat.maxSpeed;
-      const dvx = targetVx - cat.vx;
-      const dvy = targetVy - cat.vy;
-      const dvLen = Math.hypot(dvx, dvy);
-      const maxDeltaV = cat.acceleration * dtSeconds;
-      if (dvLen <= maxDeltaV || dvLen === 0) {
-        cat.vx = targetVx;
-        cat.vy = targetVy;
-      } else {
-        cat.vx += dvx / dvLen * maxDeltaV;
-        cat.vy += dvy / dvLen * maxDeltaV;
-      }
-      if (forceDirX !== 0 || forceDirY !== 0) {
-        const forceLen = Math.hypot(forceDirX, forceDirY);
-        const normFx = forceDirX / forceLen;
-        const normFy = forceDirY / forceLen;
-        cat.vx += normFx * cat.acceleration * dtSeconds;
-        cat.vy += normFy * cat.acceleration * dtSeconds;
-      }
-      if (Math.abs(cat.vx) > 2) {
-        cat.facing = cat.vx < 0 ? "left" : "right";
-      } else if (Math.abs(dx) > 0.5) {
-        cat.facing = dx > 0 ? "left" : "right";
-      }
-    } else {
-      if (cat.wallForceDirX !== 0 || cat.wallForceDirY !== 0) {
-        debugLog(
-          `Cat wall force changed: (${cat.wallForceDirX}, ${cat.wallForceDirY}) -> (0, 0)`
-        );
-        cat.wallForceDirX = 0;
-        cat.wallForceDirY = 0;
-      }
-      const speed = Math.hypot(cat.vx, cat.vy);
-      const maxDrop = cat.deceleration * dtSeconds;
-      if (speed <= maxDrop) {
-        cat.vx = 0;
-        cat.vy = 0;
-      } else {
-        cat.vx -= cat.vx / speed * maxDrop;
-        cat.vy -= cat.vy / speed * maxDrop;
-      }
-    }
-    if (cat.vx !== 0 || cat.vy !== 0) {
-      if (Math.hypot(cat.vx, cat.vy) > 0.5) {
-        cat.yaw = Math.atan2(cat.vy, cat.vx);
-      }
-      cat.animTimer += dtSeconds;
-      const nextX = cat.x + cat.vx * dtSeconds;
-      if (!collidesAt(nextX, cat.y)) {
-        cat.x = nextX;
-      } else {
-        cat.vx = 0;
-      }
-      const nextY = cat.y + cat.vy * dtSeconds;
-      if (!collidesAt(cat.x, nextY)) {
-        cat.y = nextY;
-      } else {
-        cat.vy = 0;
-      }
-    }
-  }
-
   // src/world/levels/levelUpstairs.ts
   var V = 20 /* VoidBlack */;
   var W = 21 /* InteriorWall */;
@@ -2648,6 +2303,11 @@
   var BODY_ARMOR_TAKEN_KEY = "upstairsBodyArmorTaken";
   var ANNE_MARIE_HOSTILE_DIALOGUE_KEY = "upstairsAnneMarieHostileDialogueShown";
   var ANNE_MARIE_MAX_HEALTH = MAX_NPC_HEALTH * 5;
+  var ANNE_MARIE_DIALOGUE_DELAY_SECONDS = 0.5;
+  var ANNE_MARIE_BASE_SPEED_MULTIPLIER = 2;
+  var ANNE_MARIE_SPRINT_SPEED_MULTIPLIER = 4;
+  var ANNE_MARIE_SPRINT_INTERVAL_SECONDS = 2.5;
+  var ANNE_MARIE_SPRINT_DURATION_SECONDS = 0.5;
   var ANNE_MARIE_HOSTILE_DIALOGUE_LINES = [
     "I was just sharpening my knife.",
     "You see... my other knife is missing. Where did I leave it?",
@@ -2772,6 +2432,8 @@
       __publicField(this, "anneMarieAngle", Math.PI / 2);
       // Facing south toward the bedroom door
       __publicField(this, "anneMarieTimer", 0);
+      __publicField(this, "anneMarieHostileDialogueTimer", null);
+      __publicField(this, "anneMarieSprintCycleTimer", 0);
       __publicField(this, "anneMarieCone");
       __publicField(this, "anneMarieCombat");
       __publicField(this, "intruderDetected", false);
@@ -3000,6 +2662,8 @@
         this.anneMarieCombat.unseenTimer = 0;
         this.anneMarieAngle = Math.PI / 2;
         this.anneMarieTimer = 0;
+        this.anneMarieHostileDialogueTimer = null;
+        this.anneMarieSprintCycleTimer = 0;
         this.anneMarieCombat.aimYaw = this.anneMarieAngle;
         this.anneMarieCone = new ConeOfSight(
           { x: this.anneMarieNpc.x + TILE_SIZE / 2, y: this.anneMarieNpc.y + TILE_SIZE / 2 },
@@ -3299,6 +2963,15 @@
       return false;
     }
     updateHostileNpc(combat, bounds, player, dtSeconds, ctx, fov = DEFAULT_CONE_OF_SIGHT_FOV) {
+      let speedMultiplier = 1;
+      if (combat.key === "upstairs:Anne-Marie") {
+        const sprintStart = ANNE_MARIE_SPRINT_INTERVAL_SECONDS - ANNE_MARIE_SPRINT_DURATION_SECONDS;
+        const isSprinting = combat.hostileAlertTimer <= 0 && this.anneMarieSprintCycleTimer >= sprintStart;
+        speedMultiplier = isSprinting ? ANNE_MARIE_SPRINT_SPEED_MULTIPLIER : ANNE_MARIE_BASE_SPEED_MULTIPLIER;
+        if (combat.hostileAlertTimer <= 0) {
+          this.anneMarieSprintCycleTimer = (this.anneMarieSprintCycleTimer + dtSeconds) % ANNE_MARIE_SPRINT_INTERVAL_SECONDS;
+        }
+      }
       stepHostileNpcAlongPath(
         combat,
         bounds,
@@ -3306,7 +2979,7 @@
         this.map,
         this.getSolidObstacles(),
         dtSeconds,
-        combat.key === "upstairs:Anne-Marie" ? 2 : 1
+        speedMultiplier
       );
       const originX = bounds.x + bounds.width * 0.5;
       const originY = bounds.y + bounds.height * 0.5;
@@ -3332,6 +3005,9 @@
         combat.isMoving = false;
         combat.path = [];
         combat.pathTimer = 0;
+        if (combat.key === "upstairs:Anne-Marie") {
+          this.anneMarieSprintCycleTimer = 0;
+        }
       } else if (combat.weapon === "katana") {
         if (combat.hostileAlertTimer <= 0 && combat.meleeCooldown <= 0 && Math.hypot(playerCx - originX, playerCy - originY) <= NPC_KATANA_MELEE_RANGE) {
           ctx.damagePlayer?.(NPC_KATANA_MELEE_DAMAGE);
@@ -3681,20 +3357,31 @@
           }
         }
         if ((this.anneMarieCombat.mode === "hostile" || this.anneMarieCombat.mode === "burning") && !player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)) {
-          player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
-          ctx.openDialogue(
-            [...ANNE_MARIE_HOSTILE_DIALOGUE_LINES],
-            () => {
+          if (this.anneMarieHostileDialogueTimer === null) {
+            this.anneMarieHostileDialogueTimer = ANNE_MARIE_DIALOGUE_DELAY_SECONDS;
+          } else {
+            this.anneMarieHostileDialogueTimer = Math.max(
+              0,
+              this.anneMarieHostileDialogueTimer - dtSeconds
+            );
+            if (this.anneMarieHostileDialogueTimer <= 0) {
+              this.anneMarieHostileDialogueTimer = null;
+              player.states.set(ANNE_MARIE_HOSTILE_DIALOGUE_KEY, true);
               ctx.openDialogue(
-                ["ACHIEVEMENT UNLOCKED: Murder-mystery solved."],
-                void 0,
-                void 0,
-                false,
-                "achievement"
+                [...ANNE_MARIE_HOSTILE_DIALOGUE_LINES],
+                () => {
+                  ctx.openDialogue(
+                    ["ACHIEVEMENT UNLOCKED: Murder-mystery solved."],
+                    void 0,
+                    void 0,
+                    false,
+                    "achievement"
+                  );
+                },
+                "Anne-Marie"
               );
-            },
-            "Anne-Marie"
-          );
+            }
+          }
         }
       }
       if (this.rosannaSpawned) {
@@ -3746,950 +3433,6 @@
           }
         }
       }
-    }
-  };
-
-  // src/world/levels/levelBasement.ts
-  var V2 = 20 /* VoidBlack */;
-  var W2 = 21 /* InteriorWall */;
-  var F2 = 16 /* WoodFloor */;
-  var S = 17 /* StoneTileFloor */;
-  var B2 = 18 /* BathroomTileFloor */;
-  var T2 = 19 /* StairsFloor */;
-  var O2 = 22 /* FurnitureSolid */;
-  var BASEMENT_TILES = [
-    //0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 0
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 1
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 2
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 3
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 4: Expanded Spa Room north wall (cols 13..18)
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, W2, B2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 5: Spa Room north bathtub end (cols 14..17)
-    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, B2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 6: Library Bookshelf top | Spa Room
-    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, B2, B2, B2, B2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 7: Library Bookshelf base | Spa Room | Bathroom north wall
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, O2, W2, B2, B2, B2, B2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 8: Wood stack (12) | Spa Room (14..17) | Bathroom floor (19..21)
-    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, O2, W2, B2, B2, B2, B2, W2, O2, B2, O2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 9: Library couch (7) | Wood stack (12) | Spa Room | Sink (19) | Toilet (21)
-    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, F2, W2, B2, B2, B2, B2, W2, O2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 10: Library couch (7) | Spa Room | Sink (19)
-    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, O2, O2, W2, B2, B2, B2, B2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 11: Library couch (7) | Fireplace (11..12) | Spa Room
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, O2, O2, W2, W2, B2, B2, W2, W2, W2, B2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 12: Fireplace (11..12) | Spa Doors (15..16) | Bathroom Door (20)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, F2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 13: Wood->Stone threshold (14) | Hallway
-    [V2, V2, V2, V2, V2, V2, W2, F2, O2, O2, O2, F2, F2, F2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 14: Living Room couch (8..10)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, F2, S, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 15: Stairs (18..21)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, S, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 16: Dividing wall (13) | Stairs (18..21)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, O2, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 17: Chess table (8..9, non-collidable) | Coat hangers (14) | Stairs (18..21)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, O2, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 18: Coat hangers (14) | Stairs (18..21)
-    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 19: Window NPC at col 11, row 18.5
-    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 20: Big south windows (7..9, 10..12) | Front Door (15..16)
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 21
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 22
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 23
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 24
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 25
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
-    // 26
-    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2]
-    // 27
-  ];
-  var BASEMENT_FIREPLACE_SPAWN = {
-    x: 9.5 * TILE_SIZE,
-    y: 11 * TILE_SIZE + 2,
-    facing: "down"
-  };
-  var BASEMENT_STAIRS_SPAWN = {
-    x: 18.5 * TILE_SIZE,
-    y: 16 * TILE_SIZE + 2,
-    facing: "left"
-  };
-  var BASEMENT_WINDOW_NPC = {
-    x: 11 * TILE_SIZE + 2,
-    y: 18.5 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "down"
-  };
-  var BASEMENT_OLEXA_NPC = {
-    x: 8.5 * TILE_SIZE + 2,
-    y: 18 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "up"
-  };
-  var BASEMENT_TOILET_NPC = {
-    x: 21 * TILE_SIZE + 2,
-    y: 9 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "left"
-  };
-  var BASEMENT_HALL_NORTH_DOOR_BOUNDS = {
-    x: 15 * TILE_SIZE,
-    y: 12 * TILE_SIZE,
-    width: 2 * TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var BASEMENT_FRONT_DOOR_BOUNDS = {
-    x: 15 * TILE_SIZE,
-    y: 20 * TILE_SIZE,
-    width: 2 * TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var BASEMENT_BATHROOM_DOOR_BOUNDS = {
-    x: 20 * TILE_SIZE,
-    y: 12 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var BASEMENT_BATHROOM_HIDDEN_MASK = {
-    x: 18 * TILE_SIZE,
-    y: 7 * TILE_SIZE,
-    width: 5 * TILE_SIZE,
-    height: 5 * TILE_SIZE
-  };
-  var BASEMENT_SPA_ROOM_BOUNDS = {
-    x: 14 * TILE_SIZE,
-    y: 5 * TILE_SIZE,
-    width: 4 * TILE_SIZE,
-    height: 7 * TILE_SIZE
-  };
-  var BASEMENT_SPA_TUB_BOUNDS = {
-    x: 14 * TILE_SIZE + 6,
-    y: 5 * TILE_SIZE + 2,
-    width: 4 * TILE_SIZE - 12,
-    height: 22
-  };
-  var BASEMENT_SPA_HIDDEN_MASK = {
-    x: 14 * TILE_SIZE,
-    y: 4 * TILE_SIZE,
-    width: 4 * TILE_SIZE,
-    height: 8 * TILE_SIZE
-  };
-  var BASEMENT_MINE_BOUNDS = {
-    x: 15 * TILE_SIZE + 11,
-    y: 13 * TILE_SIZE + 3,
-    width: 10,
-    height: 10
-  };
-  var BASEMENT_MINE_FUSE_SECONDS = 3;
-  var BASEMENT_FLAMETHROWER_BOUNDS = {
-    x: 15 * TILE_SIZE + 8,
-    y: 9 * TILE_SIZE + 4,
-    width: 16,
-    height: 10
-  };
-  var BASEMENT_SPA_MEDKIT_POS = {
-    x: 15.5 * TILE_SIZE,
-    y: 7.5 * TILE_SIZE
-  };
-  var BASEMENT_STAIRS_WOOD_BOUNDS = {
-    x: 18 * TILE_SIZE,
-    y: 15 * TILE_SIZE,
-    width: TILE_SIZE,
-    height: 4 * TILE_SIZE
-  };
-  var BASEMENT_STAIRS_WOOD_NORTH_BOUNDS = {
-    x: 18 * TILE_SIZE,
-    y: 14 * TILE_SIZE,
-    width: 4 * TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS = {
-    x: 18 * TILE_SIZE,
-    y: 19 * TILE_SIZE,
-    width: 4 * TILE_SIZE,
-    height: TILE_SIZE
-  };
-  var STAIRS_WOOD_BURN_DURATION = 3;
-  var STAIRS_WOOD_SPREAD_SECONDS = 2.5;
-  var BASEMENT_MINE_EXPLOSION_DAMAGE = 50;
-  var BASEMENT_MINE_EXPLOSION_RADIUS = 2.5 * TILE_SIZE;
-  function createInitialStairsWoodTiles() {
-    const coords = [
-      // North edge (row 14, cols 18..21)
-      [18, 14],
-      [19, 14],
-      [20, 14],
-      [21, 14],
-      // West edge (col 18, rows 15..18)
-      [18, 15],
-      [18, 16],
-      [18, 17],
-      [18, 18],
-      // South edge (row 19, cols 18..21)
-      [18, 19],
-      [19, 19],
-      [20, 19],
-      [21, 19]
-    ];
-    return coords.map(([col, row]) => ({
-      col,
-      row,
-      bounds: {
-        x: col * TILE_SIZE,
-        y: row * TILE_SIZE,
-        width: TILE_SIZE,
-        height: TILE_SIZE
-      },
-      burning: false,
-      burnElapsed: 0,
-      burned: false,
-      spreadDone: false
-    }));
-  }
-  var BASEMENT_STAIRS_TRIGGER_BOUNDS = {
-    x: 20 * TILE_SIZE,
-    y: 15 * TILE_SIZE,
-    width: 2 * TILE_SIZE,
-    height: 4 * TILE_SIZE
-  };
-  var BASEMENT_STAIRS_SIDE_NORTH_BOUNDS = {
-    x: 18 * TILE_SIZE,
-    y: 15 * TILE_SIZE - 2,
-    width: 4 * TILE_SIZE,
-    height: 2
-  };
-  var BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS = {
-    x: 18 * TILE_SIZE,
-    y: 19 * TILE_SIZE,
-    width: 4 * TILE_SIZE,
-    height: 2
-  };
-  function isPlayerOnBasementStairs(player) {
-    const centerY = player.y + player.height * 0.5;
-    return player.x + player.width > 18 * TILE_SIZE + 1 && player.x < 22 * TILE_SIZE && centerY >= 15 * TILE_SIZE && centerY <= 19 * TILE_SIZE;
-  }
-  var USED_STAIRS_STATE_KEY = "usedStairs";
-  var TOILET_EVENT_TRIGGERED_KEY = "basementToiletEventTriggered";
-  var BASEMENT_CHIMNEY_INTRO_STATE_KEY = "basementChimneyIntroTriggered";
-  var LevelBasement = class {
-    constructor() {
-      __publicField(this, "id", "level-basement");
-      __publicField(this, "map", {
-        cols: MAP_COLS,
-        rows: MAP_ROWS,
-        tileSize: TILE_SIZE,
-        tiles: BASEMENT_TILES.map((row) => [...row])
-      });
-      __publicField(this, "doors");
-      __publicField(this, "openedDoors", []);
-      __publicField(this, "spaDoorClosed", true);
-      __publicField(this, "spaFogCleared", false);
-      __publicField(this, "mineState", "idle");
-      __publicField(this, "mineTimer", 0);
-      __publicField(this, "mineExplosionTimer", 0);
-      __publicField(this, "flamethrowerPickedUp", false);
-      __publicField(this, "stairsWoodTiles", createInitialStairsWoodTiles());
-      __publicField(this, "windowNpc", { ...BASEMENT_WINDOW_NPC });
-      __publicField(this, "olexaNpc", { ...BASEMENT_OLEXA_NPC });
-      __publicField(this, "toiletNpc", { ...BASEMENT_TOILET_NPC });
-      __publicField(this, "toiletCutscene", null);
-      __publicField(this, "coneOfSight");
-      __publicField(this, "olexaConeOfSight");
-      __publicField(this, "hanneloesCone", null);
-      __publicField(this, "arjanCombat");
-      __publicField(this, "olexaCombat");
-      __publicField(this, "hanneloesCombat");
-      __publicField(this, "npcSightAngle", -Math.PI / 2);
-      // North is -90 degrees in screen Y coordinates
-      __publicField(this, "arjanSweepDir", 1);
-      // Sweeps West (-PI) <-> North (-PI/2) <-> East (0)
-      __publicField(this, "npcSightTimer", 0);
-      __publicField(this, "intruderDetected", false);
-      this.doors = [
-        {
-          id: "basement-bathroom-door",
-          bounds: { ...BASEMENT_BATHROOM_DOOR_BOUNDS },
-          hiddenRegions: []
-        }
-      ];
-      this.arjanCombat = createArmedNpcState("basement:Arjan", "Arjan", -Math.PI / 2);
-      this.olexaCombat = createArmedNpcState("basement:Olexa", "Olexa", -Math.PI / 2);
-      this.hanneloesCombat = createArmedNpcState("basement:Hanneloes", "Hanneloes", Math.PI);
-      this.coneOfSight = new ConeOfSight(
-        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-        this.npcSightAngle,
-        void 0,
-        this.map
-      );
-      this.olexaConeOfSight = new ConeOfSight(
-        { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
-        -Math.PI / 2,
-        // Looking north
-        void 0,
-        this.map
-      );
-    }
-    get stairsWoodBurned() {
-      return this.stairsWoodTiles.every((t) => t.burned);
-    }
-    set stairsWoodBurned(val) {
-      for (const tile of this.stairsWoodTiles) {
-        tile.burned = val;
-        tile.burning = false;
-        tile.burnElapsed = val ? STAIRS_WOOD_BURN_DURATION : 0;
-        tile.spreadDone = val;
-      }
-    }
-    get stairsWoodBurnTimer() {
-      let maxRemaining = 0;
-      for (const tile of this.stairsWoodTiles) {
-        if (tile.burning && !tile.burned) {
-          maxRemaining = Math.max(
-            maxRemaining,
-            STAIRS_WOOD_BURN_DURATION - tile.burnElapsed
-          );
-        }
-      }
-      return maxRemaining;
-    }
-    igniteStairsWoodAt(hitRect) {
-      let hitAny = false;
-      for (const tile of this.stairsWoodTiles) {
-        if (!tile.burned && rectsIntersect(hitRect, tile.bounds)) {
-          if (!tile.burning) {
-            tile.burning = true;
-          }
-          hitAny = true;
-        }
-      }
-      return hitAny;
-    }
-    getArmedNpcs() {
-      const isBathroomOpen = !this.doors.some(
-        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
-      );
-      return [
-        { state: this.arjanCombat, bounds: this.windowNpc, visible: true },
-        { state: this.olexaCombat, bounds: this.olexaNpc, visible: true },
-        { state: this.hanneloesCombat, bounds: this.toiletNpc, visible: isBathroomOpen }
-      ];
-    }
-    getArmedNpcByKey(key) {
-      if (key === this.arjanCombat.key) return this.arjanCombat;
-      if (key === this.olexaCombat.key) return this.olexaCombat;
-      if (key === this.hanneloesCombat.key) return this.hanneloesCombat;
-      return void 0;
-    }
-    enter(player) {
-      const hasUsedStairs = Boolean(player.states.get(USED_STAIRS_STATE_KEY));
-      if (hasUsedStairs) {
-        player.x = BASEMENT_STAIRS_SPAWN.x;
-        player.y = BASEMENT_STAIRS_SPAWN.y;
-        player.facing = BASEMENT_STAIRS_SPAWN.facing;
-      } else {
-        player.x = BASEMENT_FIREPLACE_SPAWN.x;
-        player.y = BASEMENT_FIREPLACE_SPAWN.y;
-        player.facing = BASEMENT_FIREPLACE_SPAWN.facing;
-      }
-      const spawnYaw = player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
-      player.yaw = spawnYaw;
-      player.renderYaw = spawnYaw;
-      player.jumpOffset = 0;
-      player.jumpVelocity = 0;
-      player.isMoving = false;
-      player.walkTimer = 0;
-      if (this.doors.some((d) => d.id === "basement-bathroom-door")) {
-        this.openedDoors = [];
-      }
-      this.npcSightAngle = -Math.PI / 2;
-      this.npcSightTimer = 0;
-      this.intruderDetected = false;
-      if (this.arjanCombat.mode !== "dead") {
-        this.arjanCombat.mode = "passive";
-        this.arjanCombat.unseenTimer = 0;
-        this.arjanCombat.aimYaw = this.npcSightAngle;
-        this.coneOfSight = new ConeOfSight(
-          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-          this.npcSightAngle,
-          void 0,
-          this.map
-        );
-      } else {
-        this.coneOfSight = null;
-      }
-      if (this.olexaCombat.mode !== "dead") {
-        this.olexaCombat.mode = "passive";
-        this.olexaCombat.unseenTimer = 0;
-        this.olexaCombat.aimYaw = -Math.PI / 2;
-        this.olexaConeOfSight = new ConeOfSight(
-          { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
-          -Math.PI / 2,
-          void 0,
-          this.map
-        );
-      } else {
-        this.olexaConeOfSight = null;
-      }
-    }
-    getSolidObstacles(player) {
-      const obs = [
-        BASEMENT_SPA_TUB_BOUNDS,
-        BASEMENT_STAIRS_TRIGGER_BOUNDS,
-        ...this.doors.map((d) => d.bounds)
-      ];
-      if (this.arjanCombat.mode !== "dead") {
-        obs.push(this.windowNpc);
-      }
-      if (this.olexaCombat.mode !== "dead") {
-        obs.push(this.olexaNpc);
-      }
-      const isBathroomOpen = !this.doors.some(
-        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
-      );
-      if (isBathroomOpen && this.hanneloesCombat.mode !== "dead") {
-        obs.push(this.toiletNpc);
-      }
-      if (this.spaDoorClosed) {
-        obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
-      }
-      for (const tile of this.stairsWoodTiles) {
-        if (!tile.burned) {
-          obs.push(tile.bounds);
-        }
-      }
-      if (!player || !isPlayerOnBasementStairs(player)) {
-        obs.push(BASEMENT_STAIRS_SIDE_NORTH_BOUNDS, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS);
-      }
-      return obs;
-    }
-    getInteractables() {
-      const list = [
-        {
-          id: "basement-front-door",
-          bounds: { ...BASEMENT_FRONT_DOOR_BOUNDS },
-          promptText: "Open door",
-          dialogueLines: ["It's locked."]
-        }
-      ];
-      if (this.spaDoorClosed) {
-        list.push({
-          id: "basement-hall-north-door",
-          bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
-          promptText: "Open door",
-          dialogueLines: ["It's locked."]
-        });
-      }
-      if (!this.spaDoorClosed && !this.flamethrowerPickedUp) {
-        list.push({
-          id: "basement-flamethrower",
-          bounds: { ...BASEMENT_FLAMETHROWER_BOUNDS },
-          promptText: "Pick up flamethrower",
-          dialogueLines: []
-        });
-      }
-      for (const door of this.doors) {
-        list.push({
-          id: door.id,
-          bounds: { ...door.bounds },
-          promptText: "Open door",
-          dialogueLines: []
-        });
-      }
-      return list;
-    }
-    updateHazardsAndItems(dtSeconds, player, ctx) {
-      if (dtSeconds <= 0) return;
-      if (this.mineState === "idle" && rectsIntersect(player, BASEMENT_MINE_BOUNDS)) {
-        this.mineState = "blinking";
-        this.mineTimer = BASEMENT_MINE_FUSE_SECONDS;
-      } else if (this.mineState === "blinking") {
-        this.mineTimer = Math.max(0, this.mineTimer - dtSeconds);
-        if (this.mineTimer <= 0) {
-          this.mineState = "exploded";
-          this.mineExplosionTimer = 0.65;
-          this.spaDoorClosed = false;
-          const mineCx = BASEMENT_MINE_BOUNDS.x + BASEMENT_MINE_BOUNDS.width * 0.5;
-          const mineCy = BASEMENT_MINE_BOUNDS.y + BASEMENT_MINE_BOUNDS.height * 0.5;
-          const playerCx = player.x + player.width * 0.5;
-          const playerCy = player.y + player.height * 0.5;
-          if (Math.hypot(playerCx - mineCx, playerCy - mineCy) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
-            ctx?.damagePlayer?.(BASEMENT_MINE_EXPLOSION_DAMAGE);
-          }
-        }
-      }
-      if (this.mineExplosionTimer > 0) {
-        this.mineExplosionTimer = Math.max(0, this.mineExplosionTimer - dtSeconds);
-      }
-      if (!this.spaDoorClosed && !this.flamethrowerPickedUp && rectsIntersect(player, BASEMENT_FLAMETHROWER_BOUNDS)) {
-        this.flamethrowerPickedUp = true;
-        player.unlockedFlamethrower = true;
-        selectPlayerEquipmentSlot(player, 4);
-        if (!ctx?.isMobile) {
-          ctx?.openDialogue(["Use the number keys to change weapon."]);
-        }
-      }
-      const toIgnite = [];
-      for (const tile of this.stairsWoodTiles) {
-        if (!tile.burning || tile.burned) continue;
-        tile.burnElapsed += dtSeconds;
-        if (!tile.spreadDone && tile.burnElapsed >= STAIRS_WOOD_SPREAD_SECONDS) {
-          tile.spreadDone = true;
-          for (const neighbor of this.stairsWoodTiles) {
-            if (!neighbor.burned && !neighbor.burning && Math.abs(neighbor.col - tile.col) + Math.abs(neighbor.row - tile.row) === 1) {
-              toIgnite.push(neighbor);
-            }
-          }
-        }
-        if (tile.burnElapsed >= STAIRS_WOOD_BURN_DURATION) {
-          tile.burned = true;
-          tile.burning = false;
-        }
-      }
-      for (const tile of toIgnite) {
-        tile.burning = true;
-      }
-    }
-    handleInteraction(interactableId, player, ctx) {
-      if (interactableId === "basement-flamethrower") {
-        this.flamethrowerPickedUp = true;
-        player.unlockedFlamethrower = true;
-        selectPlayerEquipmentSlot(player, 4);
-        if (!ctx.isMobile) {
-          ctx.openDialogue(["Use the number keys to change weapon."]);
-        }
-        return true;
-      }
-      const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
-      if (doorIdx !== -1) {
-        const openedDoor = this.doors[doorIdx];
-        this.doors.splice(doorIdx, 1);
-        this.openedDoors.push({
-          id: openedDoor.id,
-          bounds: { ...openedDoor.bounds },
-          progress: 0,
-          swingDirection: player.y >= openedDoor.bounds.y ? -1 : 1
-        });
-        if (openedDoor.id === "basement-bathroom-door") {
-          this.startToiletCutscene(player);
-        }
-        return true;
-      }
-      if (interactableId === "basement-stairs-up") {
-        player.states.set(USED_STAIRS_STATE_KEY, true);
-        ctx.loadLevel("level-upstairs");
-        if (!player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
-          player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
-          ctx.openDialogue([
-            "Heeeeere's Santa."
-          ]);
-        }
-        return true;
-      }
-      return false;
-    }
-    startToiletCutscene(player) {
-      if (player.states.get(TOILET_EVENT_TRIGGERED_KEY)) {
-        return;
-      }
-      this.toiletCutscene = {
-        active: true,
-        timer: 0
-      };
-    }
-    updateNpcSight(dtSeconds, player, ctx) {
-      const playerCx = player.x + player.width * 0.5;
-      const playerCy = player.y + player.height * 0.5;
-      updateNpcHealthAndTimers(this.arjanCombat, dtSeconds);
-      if (this.arjanCombat.mode === "dead") {
-        this.coneOfSight = null;
-      } else if (this.arjanCombat.mode === "burning") {
-        this.coneOfSight = null;
-        stepBurningNpc(
-          this.arjanCombat,
-          this.windowNpc,
-          player,
-          this.map,
-          this.getSolidObstacles(player),
-          dtSeconds,
-          ctx.fireNpcUzi
-        );
-      } else if (this.arjanCombat.mode === "hostile") {
-        stepHostileNpcAlongPath(
-          this.arjanCombat,
-          this.windowNpc,
-          player,
-          this.map,
-          this.getSolidObstacles(player),
-          dtSeconds
-        );
-        const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
-        const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
-        const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
-        this.arjanCombat.aimYaw = aimYaw;
-        this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, void 0, this.map);
-        if (this.coneOfSight.checkDetection(player)) {
-          this.arjanCombat.unseenTimer = 0;
-        } else {
-          this.arjanCombat.unseenTimer += dtSeconds;
-        }
-        if (this.arjanCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
-          this.arjanCombat.mode = "passive";
-          this.arjanCombat.unseenTimer = 0;
-          this.arjanCombat.isMoving = false;
-          this.arjanCombat.path = [];
-          this.arjanCombat.pathTimer = 0;
-          this.arjanCombat.aimYaw = this.npcSightAngle;
-          this.coneOfSight = new ConeOfSight(
-            { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-            this.npcSightAngle,
-            void 0,
-            this.map
-          );
-        } else {
-          tryFireHostileNpcUzi(this.arjanCombat, ax, ay, aimYaw, ctx.fireNpcUzi);
-        }
-      } else {
-        this.arjanCombat.isMoving = false;
-        this.npcSightAngle += this.arjanSweepDir * (Math.PI / 4) * dtSeconds;
-        if (this.npcSightAngle >= 0) {
-          this.npcSightAngle = 0;
-          this.arjanSweepDir = -1;
-        } else if (this.npcSightAngle <= -Math.PI) {
-          this.npcSightAngle = -Math.PI;
-          this.arjanSweepDir = 1;
-        }
-        this.coneOfSight = new ConeOfSight(
-          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
-          this.npcSightAngle,
-          void 0,
-          this.map
-        );
-        this.arjanCombat.aimYaw = this.coneOfSight.direction;
-        if (this.coneOfSight.checkDetection(player)) {
-          enterHostileMode(this.arjanCombat);
-          const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
-          const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
-          const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
-          this.arjanCombat.aimYaw = aimYaw;
-          this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, void 0, this.map);
-          propagateHostileAlert(this.getArmedNpcs(), this.arjanCombat.key);
-        }
-      }
-      updateNpcHealthAndTimers(this.olexaCombat, dtSeconds);
-      if (this.olexaCombat.mode === "dead") {
-        this.olexaConeOfSight = null;
-      } else if (this.olexaCombat.mode === "burning") {
-        this.olexaConeOfSight = null;
-        stepBurningNpc(
-          this.olexaCombat,
-          this.olexaNpc,
-          player,
-          this.map,
-          this.getSolidObstacles(player),
-          dtSeconds,
-          ctx.fireNpcUzi
-        );
-      } else if (this.olexaCombat.mode === "hostile") {
-        stepHostileNpcAlongPath(
-          this.olexaCombat,
-          this.olexaNpc,
-          player,
-          this.map,
-          this.getSolidObstacles(player),
-          dtSeconds
-        );
-        const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
-        const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
-        const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
-        this.olexaCombat.aimYaw = aimYaw;
-        this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, void 0, this.map);
-        if (this.olexaConeOfSight.checkDetection(player)) {
-          this.olexaCombat.unseenTimer = 0;
-        } else {
-          this.olexaCombat.unseenTimer += dtSeconds;
-        }
-        if (this.olexaCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
-          this.olexaCombat.mode = "passive";
-          this.olexaCombat.unseenTimer = 0;
-          this.olexaCombat.isMoving = false;
-          this.olexaCombat.path = [];
-          this.olexaCombat.pathTimer = 0;
-          this.olexaCombat.aimYaw = -Math.PI / 2;
-          this.olexaConeOfSight = new ConeOfSight(
-            { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
-            -Math.PI / 2,
-            void 0,
-            this.map
-          );
-        } else {
-          tryFireHostileNpcUzi(this.olexaCombat, ox, oy, aimYaw, ctx.fireNpcUzi);
-        }
-      } else {
-        this.olexaCombat.isMoving = false;
-        this.olexaCombat.aimYaw = this.olexaConeOfSight?.direction ?? -Math.PI / 2;
-        if (this.olexaConeOfSight?.checkDetection(player)) {
-          enterHostileMode(this.olexaCombat);
-          const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
-          const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
-          const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
-          this.olexaCombat.aimYaw = aimYaw;
-          this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, void 0, this.map);
-          propagateHostileAlert(this.getArmedNpcs(), this.olexaCombat.key);
-        }
-      }
-      const isBathroomOpen = !this.doors.some(
-        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
-      );
-      updateNpcHealthAndTimers(this.hanneloesCombat, dtSeconds);
-      if (this.hanneloesCombat.mode === "dead") {
-        this.hanneloesCone = null;
-      } else if (isBathroomOpen && this.hanneloesCombat.mode === "burning") {
-        this.hanneloesCone = null;
-        if (this.toiletNpc.x >= 21 * TILE_SIZE) {
-          this.toiletNpc.x = 20 * TILE_SIZE + 2;
-        }
-        stepBurningNpc(
-          this.hanneloesCombat,
-          this.toiletNpc,
-          player,
-          this.map,
-          this.getSolidObstacles(player),
-          dtSeconds,
-          ctx.fireNpcUzi
-        );
-      } else if (isBathroomOpen && this.hanneloesCombat.mode === "hostile") {
-        if (this.toiletNpc.x >= 21 * TILE_SIZE) {
-          this.toiletNpc.x = 20 * TILE_SIZE + 2;
-        }
-        stepHostileNpcAlongPath(
-          this.hanneloesCombat,
-          this.toiletNpc,
-          player,
-          this.map,
-          this.getSolidObstacles(player),
-          dtSeconds
-        );
-        const hx = this.toiletNpc.x + this.toiletNpc.width * 0.5;
-        const hy = this.toiletNpc.y + this.toiletNpc.height * 0.5;
-        const aimYaw = Math.atan2(playerCy - hy, playerCx - hx);
-        this.hanneloesCombat.aimYaw = aimYaw;
-        this.hanneloesCone = new ConeOfSight({ x: hx, y: hy }, aimYaw, void 0, this.map);
-        if (this.hanneloesCone.checkDetection(player)) {
-          this.hanneloesCombat.unseenTimer = 0;
-        } else {
-          this.hanneloesCombat.unseenTimer += dtSeconds;
-        }
-        if (this.hanneloesCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
-          this.hanneloesCombat.mode = "passive";
-          this.hanneloesCombat.unseenTimer = 0;
-          this.hanneloesCombat.isMoving = false;
-          this.hanneloesCombat.path = [];
-          this.hanneloesCombat.pathTimer = 0;
-          this.hanneloesCone = new ConeOfSight({ x: hx, y: hy }, aimYaw, void 0, this.map);
-        } else {
-          tryFireHostileNpcUzi(this.hanneloesCombat, hx, hy, aimYaw, ctx.fireNpcUzi);
-        }
-      } else if (isBathroomOpen && this.hanneloesCone?.checkDetection(player)) {
-        enterHostileMode(this.hanneloesCombat);
-        propagateHostileAlert(this.getArmedNpcs(), this.hanneloesCombat.key);
-      }
-    }
-    updateCutscene(dtSeconds, player, _ctx) {
-      if (!this.toiletCutscene?.active) {
-        return false;
-      }
-      player.isMoving = false;
-      player.walkTimer = 0;
-      this.toiletCutscene.timer += dtSeconds;
-      if (this.toiletCutscene.timer >= 2) {
-        this.toiletCutscene.active = false;
-        this.toiletCutscene = null;
-        player.states.set(TOILET_EVENT_TRIGGERED_KEY, true);
-        if (this.hanneloesCombat.mode !== "dead") {
-          if (this.toiletNpc.x >= 21 * TILE_SIZE) {
-            this.toiletNpc.x = 20 * TILE_SIZE + 2;
-          }
-          enterHostileMode(this.hanneloesCombat);
-          propagateHostileAlert(this.getArmedNpcs(), this.hanneloesCombat.key);
-        }
-      }
-      return true;
-    }
-  };
-
-  // src/world/levels/levelOutside.ts
-  function createMotorcycle() {
-    return {
-      x: MOTORCYCLE_START_X,
-      y: MOTORCYCLE_START_Y,
-      width: TILE_SIZE * 2,
-      height: TILE_SIZE,
-      status: "parked"
-    };
-  }
-  var RUDOLPH_INSPECTED_KEY = "rudolphInspected";
-  var OUTSIDE_ALEX_NPC = {
-    x: 4 * TILE_SIZE + 2,
-    y: 19 * TILE_SIZE + 2,
-    width: 12,
-    height: 12,
-    facing: "left"
-  };
-  var LevelOutside = class {
-    constructor(map = STARTER_MAP) {
-      __publicField(this, "id", "level-outside");
-      __publicField(this, "map");
-      __publicField(this, "dog");
-      __publicField(this, "motorcycle");
-      __publicField(this, "throwers");
-      __publicField(this, "snowballs");
-      __publicField(this, "alexNpc", { ...OUTSIDE_ALEX_NPC });
-      __publicField(this, "hasLadder", false);
-      __publicField(this, "ladderPlaced", false);
-      __publicField(this, "isOnRoof", false);
-      __publicField(this, "climbing", null);
-      __publicField(this, "electrocutionTimer", 0);
-      this.map = map;
-      this.dog = createDog();
-      this.motorcycle = createMotorcycle();
-      this.throwers = createDrivewayThrowers();
-      this.snowballs = [];
-    }
-    enter(player) {
-      player.x = PLAYER_START_X;
-      player.y = PLAYER_START_Y;
-      player.facing = "up";
-      player.yaw = -Math.PI / 2;
-      player.renderYaw = -Math.PI / 2;
-      player.jumpOffset = 0;
-      player.jumpVelocity = 0;
-      player.isMoving = false;
-      player.walkTimer = 0;
-    }
-    getSolidObstacles() {
-      return [...this.throwers, this.motorcycle, this.alexNpc];
-    }
-    getInteractables() {
-      return buildInteractables(this.throwers, {
-        hasLadder: this.hasLadder,
-        ladderPlaced: this.ladderPlaced,
-        isOnRoof: this.isOnRoof,
-        motorcycleStatus: this.motorcycle.status,
-        alexNpc: this.alexNpc
-      });
-    }
-    handleInteraction(interactableId, player, ctx) {
-      if (interactableId === "motorcycle") {
-        this.motorcycle.status = "driving";
-        player.x = this.motorcycle.x + 8;
-        player.y = this.motorcycle.y - 2;
-        player.facing = "right";
-        player.yaw = 0;
-        player.renderYaw = 0;
-        player.isMoving = true;
-        return true;
-      }
-      if (interactableId === "ground-ladder") {
-        this.hasLadder = true;
-        return true;
-      }
-      if (interactableId === "house-west-place-ladder") {
-        this.hasLadder = false;
-        this.ladderPlaced = true;
-        return true;
-      }
-      if (interactableId === "house-west-climb-ladder") {
-        this.climbing = { direction: "up", progress: 0 };
-        player.x = LADDER_CLIMB_X;
-        player.y = LADDER_BOTTOM_Y;
-        player.facing = "up";
-        player.yaw = -Math.PI / 2;
-        player.renderYaw = -Math.PI / 2;
-        player.jumpOffset = 0;
-        player.jumpVelocity = 0;
-        return true;
-      }
-      if (interactableId === "roof-ladder") {
-        this.climbing = { direction: "down", progress: 0 };
-        player.x = LADDER_CLIMB_X;
-        player.y = LADDER_BOTTOM_Y;
-        player.facing = "down";
-        player.yaw = Math.PI / 2;
-        player.renderYaw = Math.PI / 2;
-        player.jumpOffset = 0;
-        player.jumpVelocity = 0;
-        return true;
-      }
-      if (interactableId === "roof-rudolph") {
-        player.states.set(RUDOLPH_INSPECTED_KEY, true);
-        ctx.openDialogue(
-          [
-            "RUDOLPH?!! WHO DID THIS?",
-            "...",
-            "This is no longer about saving christmas...",
-            "This is about REVENGE!",
-            "I will find out who did this, if it is the last thing I'll ever do."
-          ],
-          () => {
-            ctx.openDialogue(
-              ["ACHIEVEMENT UNLOCKED: Murder-mystery genre unlocked."],
-              () => {
-                ctx.openDialogue(["I'm dreaming of a RED CHRISTMAS."], () => {
-                  ctx.openDialogue(
-                    [
-                      "ACHIEVEMENT UNLOCKED: Action genre unlocked. Viewer discretion is advised."
-                    ],
-                    () => {
-                      if (!player.unlockedUzi) {
-                        player.unlockedUzi = true;
-                        selectPlayerEquipmentSlot(player, 3);
-                      }
-                    },
-                    void 0,
-                    false,
-                    "achievement"
-                  );
-                });
-              },
-              void 0,
-              false,
-              "achievement"
-            );
-          }
-        );
-        return true;
-      }
-      if (interactableId === "roof-chimney") {
-        if (!player.states.get(RUDOLPH_INSPECTED_KEY) && !player.unlockedUzi) {
-          ctx.openDialogue(["You smell the stench of blood..."]);
-          return true;
-        }
-        ctx.loadLevel("level-basement");
-        if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
-          player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
-          ctx.openDialogue([
-            "You better run, Santa Claus is coming to town.",
-            ctx.isMobile ? "Tap anywhere inside the game screen to fire your weapon (hold to keep firing)." : "Press Space to fire your weapon (hold to keep firing)."
-          ]);
-        }
-        return true;
-      }
-      return false;
     }
   };
 
@@ -5974,7 +4717,10 @@
   }
   function updateGameAudio(state, input, dtSeconds) {
     const snap = getOrCreateSnapshot(state);
-    const desiredTrack = state.houseExploding ? "victory_xmas" : state.currentLevelId !== "level-outside" || state.player.unlockedUzi || Boolean(state.player.states.get(RUDOLPH_INSPECTED_KEY)) ? "action_xmas" : "peaceful_xmas";
+    const upstairsLevel = state.levels["level-upstairs"];
+    const inRosannaBossFight = state.currentLevelId === "level-upstairs" && (Boolean(upstairsLevel.rosannaCutscene?.active) || upstairsLevel.rosannaSpawned) && upstairsLevel.rosannaCombat.mode !== "dead";
+    const inAnneMarieBossFight = state.currentLevelId === "level-upstairs" && Boolean(state.player.states.get(ANNE_MARIE_HOSTILE_DIALOGUE_KEY)) && upstairsLevel.anneMarieCombat.mode !== "dead";
+    const desiredTrack = state.houseExploding ? "victory_xmas" : inRosannaBossFight || inAnneMarieBossFight ? "action_xmas" : "peaceful_xmas";
     soundManager.setMusicTrack(desiredTrack);
     soundManager.stepMusic(dtSeconds);
     if (state.activeDialogue !== snap.dialogueRef) {
@@ -6844,6 +5590,1310 @@
     cam.viewProjMatrix = mat4Multiply(cam.projMatrix, cam.viewMatrix);
   }
 
+  // src/entities/dog.ts
+  var DOG_START_X = 26.5 * TILE_SIZE;
+  var DOG_START_Y = 12.5 * TILE_SIZE;
+  var DOG_MAX_SPEED = 37;
+  var DOG_ACCELERATION = 95;
+  var DOG_DECELERATION = 90;
+  var DOG_AGGRO_DISTANCE = 6.5 * TILE_SIZE;
+  var DOG_DEAGGRO_DISTANCE = 10.5 * TILE_SIZE;
+  function createDog(x = DOG_START_X, y = DOG_START_Y) {
+    return {
+      x,
+      y,
+      width: 12,
+      height: 12,
+      vx: 0,
+      vy: 0,
+      maxSpeed: DOG_MAX_SPEED,
+      acceleration: DOG_ACCELERATION,
+      deceleration: DOG_DECELERATION,
+      mode: "waiting",
+      facing: "left",
+      yaw: Math.PI,
+      animTimer: 0,
+      heartSpawnTimer: 0,
+      hearts: []
+    };
+  }
+  function updateDog(dog, player, dtSeconds, map, solidObstacles = [], speedMultiplier = 1) {
+    const dogCenterX = dog.x + dog.width / 2;
+    const dogCenterY = dog.y + dog.height / 2;
+    const playerCenterX = player.x + player.width / 2;
+    const playerCenterY = player.y + player.height / 2;
+    const dx = playerCenterX - dogCenterX;
+    const dy = playerCenterY - dogCenterY;
+    const dist = Math.hypot(dx, dy);
+    if (dog.mode === "waiting" && dist <= DOG_AGGRO_DISTANCE) {
+      dog.mode = "chasing";
+      dog.heartSpawnTimer = 0;
+    } else if (dog.mode === "chasing" && dist >= DOG_DEAGGRO_DISTANCE) {
+      dog.mode = "waiting";
+    }
+    const effectiveMaxSpeed = dog.maxSpeed * speedMultiplier;
+    if (dog.mode === "chasing") {
+      const ux = dist > 1e-3 ? dx / dist : 0;
+      const uy = dist > 1e-3 ? dy / dist : 0;
+      const targetVx = ux * effectiveMaxSpeed;
+      const targetVy = uy * effectiveMaxSpeed;
+      const dvx = targetVx - dog.vx;
+      const dvy = targetVy - dog.vy;
+      const dvLen = Math.hypot(dvx, dvy);
+      const maxDeltaV = dog.acceleration * dtSeconds;
+      if (dvLen <= maxDeltaV || dvLen === 0) {
+        dog.vx = targetVx;
+        dog.vy = targetVy;
+      } else {
+        dog.vx += dvx / dvLen * maxDeltaV;
+        dog.vy += dvy / dvLen * maxDeltaV;
+      }
+      if (Math.abs(dog.vx) > 2) {
+        dog.facing = dog.vx < 0 ? "left" : "right";
+      } else if (Math.abs(dx) > 0.5) {
+        dog.facing = dx < 0 ? "left" : "right";
+      }
+    } else {
+      const speed = Math.hypot(dog.vx, dog.vy);
+      const maxDrop = dog.deceleration * dtSeconds;
+      if (speed <= maxDrop) {
+        dog.vx = 0;
+        dog.vy = 0;
+      } else {
+        dog.vx -= dog.vx / speed * maxDrop;
+        dog.vy -= dog.vy / speed * maxDrop;
+      }
+    }
+    const collidesAt = (testX, testY) => {
+      if (isRectCollidingWithMap(map, testX, testY, dog.width, dog.height)) {
+        return true;
+      }
+      const testRect = {
+        x: testX,
+        y: testY,
+        width: dog.width,
+        height: dog.height
+      };
+      return solidObstacles.some((obs) => rectsIntersect(testRect, obs));
+    };
+    if (dog.vx !== 0 || dog.vy !== 0) {
+      if (Math.hypot(dog.vx, dog.vy) > 0.5) {
+        dog.yaw = Math.atan2(dog.vy, dog.vx);
+      }
+      dog.animTimer += dtSeconds;
+      const nextX = dog.x + dog.vx * dtSeconds;
+      if (!collidesAt(nextX, dog.y)) {
+        dog.x = nextX;
+      } else {
+        dog.vx = 0;
+      }
+      const nextY = dog.y + dog.vy * dtSeconds;
+      if (!collidesAt(dog.x, nextY)) {
+        dog.y = nextY;
+      } else {
+        dog.vy = 0;
+      }
+    }
+    for (let i = dog.hearts.length - 1; i >= 0; i--) {
+      const h = dog.hearts[i];
+      h.age += dtSeconds;
+      h.x += h.vx * dtSeconds;
+      h.y += h.vy * dtSeconds;
+      if (h.age >= h.maxAge) {
+        dog.hearts.splice(i, 1);
+      }
+    }
+    if (dog.mode === "chasing") {
+      dog.heartSpawnTimer -= dtSeconds;
+      while (dog.heartSpawnTimer <= 0) {
+        const phase = dog.hearts.length + Math.floor(dog.animTimer * 10);
+        const offsetX = (phase % 3 - 1) * 4;
+        dog.hearts.push({
+          x: dog.x + dog.width / 2 + offsetX,
+          y: dog.y - 2,
+          vx: offsetX * 2.5,
+          vy: -16,
+          age: 0,
+          maxAge: 0.85
+        });
+        dog.heartSpawnTimer += 0.22;
+      }
+    }
+    return rectsIntersect(dog, player);
+  }
+
+  // src/entities/snowball.ts
+  var SNOWBALL_SPEED = 110;
+  var THROW_INTERVAL_SECONDS = 2.4;
+  var HIT_BLINK_DURATION_SECONDS = 2;
+  function createDrivewayThrowers() {
+    const rowY = 16 * TILE_SIZE + 2;
+    const leftX = 12 * TILE_SIZE + 2;
+    const rightX = 18 * TILE_SIZE + 2;
+    return [
+      {
+        id: "thrower-sylvester",
+        name: "Sylvester",
+        x: leftX,
+        y: rowY,
+        width: 12,
+        height: 12,
+        facing: "right",
+        targetX: rightX,
+        throwInterval: THROW_INTERVAL_SECONDS,
+        // Throw shortly after level starts/resets
+        throwTimer: 0.6
+      },
+      {
+        id: "thrower-annelotte",
+        name: "Annelotte",
+        x: rightX,
+        y: rowY,
+        width: 12,
+        height: 12,
+        facing: "left",
+        targetX: leftX,
+        throwInterval: THROW_INTERVAL_SECONDS,
+        // Staggered so they alternate throwing back and forth across the driveway
+        throwTimer: 1.8
+      }
+    ];
+  }
+  function spawnSnowballFromThrower(thrower) {
+    const dir = thrower.facing === "right" ? 1 : -1;
+    return {
+      x: thrower.facing === "right" ? thrower.x + thrower.width : thrower.x - 6,
+      y: thrower.y + 3,
+      width: 6,
+      height: 6,
+      vx: dir * SNOWBALL_SPEED,
+      vy: 0,
+      targetX: thrower.targetX
+    };
+  }
+  function updateSnowballFight(throwers, snowballs, player, dtSeconds) {
+    for (const thrower of throwers) {
+      thrower.throwTimer -= dtSeconds;
+      if (thrower.throwTimer <= 0) {
+        thrower.throwTimer += thrower.throwInterval;
+        snowballs.push(spawnSnowballFromThrower(thrower));
+      }
+    }
+    for (let i = snowballs.length - 1; i >= 0; i--) {
+      const sb = snowballs[i];
+      sb.x += sb.vx * dtSeconds;
+      sb.y += sb.vy * dtSeconds;
+      if (rectsIntersect(sb, player)) {
+        return true;
+      }
+      if (sb.vx > 0 && sb.x >= sb.targetX || sb.vx < 0 && sb.x + sb.width <= sb.targetX + 12) {
+        snowballs.splice(i, 1);
+      }
+    }
+    return false;
+  }
+
+  // src/world/interaction.ts
+  var INTERACTION_MAX_GAP_PX = 6;
+  function rectEdgeDistance(a, b) {
+    const dx = Math.max(0, b.x - (a.x + a.width), a.x - (b.x + b.width));
+    const dy = Math.max(0, b.y - (a.y + a.height), a.y - (b.y + b.height));
+    return Math.hypot(dx, dy);
+  }
+  function buildInteractables(throwers, options = {}) {
+    const {
+      hasLadder = false,
+      ladderPlaced = false,
+      isOnRoof = false,
+      motorcycleStatus = "parked",
+      alexNpc
+    } = options;
+    if (isOnRoof) {
+      return [
+        {
+          id: "roof-ladder",
+          bounds: { ...ROOF_LADDER_BOUNDS },
+          promptText: "Climb down ladder",
+          dialogueLines: []
+        },
+        {
+          id: "roof-chimney",
+          bounds: { ...ROOF_CHIMNEY_BOUNDS },
+          promptText: "Climb down chimney",
+          dialogueLines: []
+        },
+        {
+          id: "roof-rudolph",
+          bounds: { ...ROOF_RUDOLPH_BOUNDS },
+          promptText: "Inspect Rudolph",
+          dialogueLines: []
+        }
+      ];
+    }
+    const list = throwers.map((t) => {
+      if (t.id === "thrower-sylvester") {
+        return {
+          id: t.id,
+          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+          promptText: "Talk to Sylvester",
+          dialogueLines: ["Watch out! Annelotte is crazy!"],
+          speakerPortrait: "Sylvester"
+        };
+      }
+      if (t.id === "thrower-annelotte") {
+        return {
+          id: t.id,
+          bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+          promptText: "Talk to Annelotte",
+          dialogueLines: [
+            "It's good to talk about your feelings... how does a snowball in your face feel?"
+          ],
+          speakerPortrait: "Annelotte"
+        };
+      }
+      return {
+        id: t.id,
+        bounds: { x: t.x, y: t.y, width: t.width, height: t.height },
+        promptText: "Talk to",
+        dialogueLines: ["Watch out!"]
+      };
+    });
+    list.push({
+      id: "house-double-door",
+      bounds: {
+        x: 9 * TILE_SIZE + 8,
+        y: HOUSE_DOOR_ROW * TILE_SIZE,
+        width: TILE_SIZE * 2,
+        height: TILE_SIZE
+      },
+      promptText: "Open door",
+      dialogueLines: ["It's locked."]
+    });
+    list.push({
+      id: "house-door",
+      bounds: {
+        x: HOUSE_DOOR_COL * TILE_SIZE,
+        y: HOUSE_DOOR_ROW * TILE_SIZE,
+        width: TILE_SIZE,
+        height: TILE_SIZE
+      },
+      promptText: "Open door",
+      dialogueLines: [
+        "It's locked.",
+        "There has to be another way into the house..."
+      ]
+    });
+    if (motorcycleStatus === "parked") {
+      list.push({
+        id: "motorcycle",
+        bounds: {
+          x: MOTORCYCLE_START_X,
+          y: MOTORCYCLE_START_Y,
+          width: TILE_SIZE * 2,
+          height: TILE_SIZE
+        },
+        promptText: "Drive",
+        dialogueLines: []
+      });
+    }
+    if (!hasLadder && !ladderPlaced) {
+      list.push({
+        id: "ground-ladder",
+        bounds: { ...GROUND_LADDER_BOUNDS },
+        promptText: "Pick up",
+        dialogueLines: []
+      });
+      list.push({
+        id: "house-west-inspect",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Inspect",
+        dialogueLines: [
+          "Hmm.. looks like there is a chimney up there, but I can't reach it"
+        ]
+      });
+    } else if (hasLadder && !ladderPlaced) {
+      list.push({
+        id: "house-west-place-ladder",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Place ladder",
+        dialogueLines: []
+      });
+    } else if (ladderPlaced) {
+      list.push({
+        id: "house-west-climb-ladder",
+        bounds: { ...HOUSE_WEST_LADDER_SPOT },
+        promptText: "Climb ladder",
+        dialogueLines: []
+      });
+    }
+    if (alexNpc) {
+      list.push({
+        id: "outside-alex",
+        bounds: { ...alexNpc },
+        promptText: "Talk to Alex",
+        dialogueLines: ["Just practicing my swings..."],
+        speakerPortrait: "Alex"
+      });
+    }
+    return list;
+  }
+  function findNearbyInteractable(player, interactables, maxGapPx = INTERACTION_MAX_GAP_PX) {
+    let closest = null;
+    let bestDist = Infinity;
+    for (const item of interactables) {
+      const dist = rectEdgeDistance(player, item.bounds);
+      if (dist <= maxGapPx && dist < bestDist) {
+        bestDist = dist;
+        closest = item;
+      }
+    }
+    return closest;
+  }
+
+  // src/world/levels/levelBasement.ts
+  var V2 = 20 /* VoidBlack */;
+  var W2 = 21 /* InteriorWall */;
+  var F2 = 16 /* WoodFloor */;
+  var S = 17 /* StoneTileFloor */;
+  var B2 = 18 /* BathroomTileFloor */;
+  var T2 = 19 /* StairsFloor */;
+  var O2 = 22 /* FurnitureSolid */;
+  var BASEMENT_TILES = [
+    //0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 0
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 1
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 2
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 3
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 4: Expanded Spa Room north wall (cols 13..18)
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, W2, B2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 5: Spa Room north bathtub end (cols 14..17)
+    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, B2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 6: Library Bookshelf top | Spa Room
+    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, B2, B2, B2, B2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 7: Library Bookshelf base | Spa Room | Bathroom north wall
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, O2, W2, B2, B2, B2, B2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 8: Wood stack (12) | Spa Room (14..17) | Bathroom floor (19..21)
+    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, O2, W2, B2, B2, B2, B2, W2, O2, B2, O2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 9: Library couch (7) | Wood stack (12) | Spa Room | Sink (19) | Toilet (21)
+    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, F2, F2, W2, B2, B2, B2, B2, W2, O2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 10: Library couch (7) | Spa Room | Sink (19)
+    [V2, V2, V2, V2, V2, V2, W2, O2, F2, F2, F2, O2, O2, W2, B2, B2, B2, B2, W2, B2, B2, B2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 11: Library couch (7) | Fireplace (11..12) | Spa Room
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, O2, O2, W2, W2, B2, B2, W2, W2, W2, B2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 12: Fireplace (11..12) | Spa Doors (15..16) | Bathroom Door (20)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, F2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 13: Wood->Stone threshold (14) | Hallway
+    [V2, V2, V2, V2, V2, V2, W2, F2, O2, O2, O2, F2, F2, F2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 14: Living Room couch (8..10)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, F2, S, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 15: Stairs (18..21)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, S, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 16: Dividing wall (13) | Stairs (18..21)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, O2, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 17: Chess table (8..9, non-collidable) | Coat hangers (14) | Stairs (18..21)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, O2, S, S, S, T2, T2, T2, T2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 18: Coat hangers (14) | Stairs (18..21)
+    [V2, V2, V2, V2, V2, V2, W2, F2, F2, F2, F2, F2, F2, W2, S, S, S, S, S, S, S, S, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 19: Window NPC at col 11, row 18.5
+    [V2, V2, V2, V2, V2, V2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, W2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 20: Big south windows (7..9, 10..12) | Front Door (15..16)
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 21
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 22
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 23
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 24
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 25
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2],
+    // 26
+    [V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2, V2]
+    // 27
+  ];
+  var BASEMENT_FIREPLACE_SPAWN = {
+    x: 9.5 * TILE_SIZE,
+    y: 11 * TILE_SIZE + 2,
+    facing: "down"
+  };
+  var BASEMENT_STAIRS_SPAWN = {
+    x: 18.5 * TILE_SIZE,
+    y: 16 * TILE_SIZE + 2,
+    facing: "left"
+  };
+  var BASEMENT_WINDOW_NPC = {
+    x: 11 * TILE_SIZE + 2,
+    y: 18.5 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "down"
+  };
+  var BASEMENT_OLEXA_NPC = {
+    x: 8.5 * TILE_SIZE + 2,
+    y: 18 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "up"
+  };
+  var BASEMENT_TOILET_NPC = {
+    x: 21 * TILE_SIZE + 2,
+    y: 9 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "left"
+  };
+  var BASEMENT_HALL_NORTH_DOOR_BOUNDS = {
+    x: 15 * TILE_SIZE,
+    y: 12 * TILE_SIZE,
+    width: 2 * TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_FRONT_DOOR_BOUNDS = {
+    x: 15 * TILE_SIZE,
+    y: 20 * TILE_SIZE,
+    width: 2 * TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_BATHROOM_DOOR_BOUNDS = {
+    x: 20 * TILE_SIZE,
+    y: 12 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_BATHROOM_HIDDEN_MASK = {
+    x: 18 * TILE_SIZE,
+    y: 7 * TILE_SIZE,
+    width: 5 * TILE_SIZE,
+    height: 5 * TILE_SIZE
+  };
+  var BASEMENT_SPA_ROOM_BOUNDS = {
+    x: 14 * TILE_SIZE,
+    y: 5 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: 7 * TILE_SIZE
+  };
+  var BASEMENT_SPA_TUB_BOUNDS = {
+    x: 14 * TILE_SIZE + 6,
+    y: 5 * TILE_SIZE + 2,
+    width: 4 * TILE_SIZE - 12,
+    height: 22
+  };
+  var BASEMENT_SPA_HIDDEN_MASK = {
+    x: 14 * TILE_SIZE,
+    y: 4 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: 8 * TILE_SIZE
+  };
+  var BASEMENT_MINE_BOUNDS = {
+    x: 15 * TILE_SIZE + 11,
+    y: 13 * TILE_SIZE + 3,
+    width: 10,
+    height: 10
+  };
+  var BASEMENT_MINE_FUSE_SECONDS = 3;
+  var BASEMENT_FLAMETHROWER_BOUNDS = {
+    x: 15 * TILE_SIZE + 8,
+    y: 9 * TILE_SIZE + 4,
+    width: 16,
+    height: 10
+  };
+  var BASEMENT_SPA_MEDKIT_POS = {
+    x: 15.5 * TILE_SIZE,
+    y: 7.5 * TILE_SIZE
+  };
+  var BASEMENT_STAIRS_WOOD_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 15 * TILE_SIZE,
+    width: TILE_SIZE,
+    height: 4 * TILE_SIZE
+  };
+  var BASEMENT_STAIRS_WOOD_NORTH_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 14 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var BASEMENT_STAIRS_WOOD_SOUTH_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 19 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: TILE_SIZE
+  };
+  var STAIRS_WOOD_BURN_DURATION = 3;
+  var STAIRS_WOOD_SPREAD_SECONDS = 2.5;
+  var BASEMENT_MINE_EXPLOSION_DAMAGE = 50;
+  var BASEMENT_MINE_EXPLOSION_RADIUS = 2.5 * TILE_SIZE;
+  function createInitialStairsWoodTiles() {
+    const coords = [
+      // North edge (row 14, cols 18..21)
+      [18, 14],
+      [19, 14],
+      [20, 14],
+      [21, 14],
+      // West edge (col 18, rows 15..18)
+      [18, 15],
+      [18, 16],
+      [18, 17],
+      [18, 18],
+      // South edge (row 19, cols 18..21)
+      [18, 19],
+      [19, 19],
+      [20, 19],
+      [21, 19]
+    ];
+    return coords.map(([col, row]) => ({
+      col,
+      row,
+      bounds: {
+        x: col * TILE_SIZE,
+        y: row * TILE_SIZE,
+        width: TILE_SIZE,
+        height: TILE_SIZE
+      },
+      burning: false,
+      burnElapsed: 0,
+      burned: false,
+      spreadDone: false
+    }));
+  }
+  var BASEMENT_STAIRS_TRIGGER_BOUNDS = {
+    x: 20 * TILE_SIZE,
+    y: 15 * TILE_SIZE,
+    width: 2 * TILE_SIZE,
+    height: 4 * TILE_SIZE
+  };
+  var BASEMENT_STAIRS_SIDE_NORTH_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 15 * TILE_SIZE - 2,
+    width: 4 * TILE_SIZE,
+    height: 2
+  };
+  var BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS = {
+    x: 18 * TILE_SIZE,
+    y: 19 * TILE_SIZE,
+    width: 4 * TILE_SIZE,
+    height: 2
+  };
+  function isPlayerOnBasementStairs(player) {
+    const centerY = player.y + player.height * 0.5;
+    return player.x + player.width > 18 * TILE_SIZE + 1 && player.x < 22 * TILE_SIZE && centerY >= 15 * TILE_SIZE && centerY <= 19 * TILE_SIZE;
+  }
+  var USED_STAIRS_STATE_KEY = "usedStairs";
+  var TOILET_EVENT_TRIGGERED_KEY = "basementToiletEventTriggered";
+  var BASEMENT_CHIMNEY_INTRO_STATE_KEY = "basementChimneyIntroTriggered";
+  var LevelBasement = class {
+    constructor() {
+      __publicField(this, "id", "level-basement");
+      __publicField(this, "map", {
+        cols: MAP_COLS,
+        rows: MAP_ROWS,
+        tileSize: TILE_SIZE,
+        tiles: BASEMENT_TILES.map((row) => [...row])
+      });
+      __publicField(this, "doors");
+      __publicField(this, "openedDoors", []);
+      __publicField(this, "spaDoorClosed", true);
+      __publicField(this, "spaFogCleared", false);
+      __publicField(this, "mineState", "idle");
+      __publicField(this, "mineTimer", 0);
+      __publicField(this, "mineExplosionTimer", 0);
+      __publicField(this, "flamethrowerPickedUp", false);
+      __publicField(this, "stairsWoodTiles", createInitialStairsWoodTiles());
+      __publicField(this, "windowNpc", { ...BASEMENT_WINDOW_NPC });
+      __publicField(this, "olexaNpc", { ...BASEMENT_OLEXA_NPC });
+      __publicField(this, "toiletNpc", { ...BASEMENT_TOILET_NPC });
+      __publicField(this, "toiletCutscene", null);
+      __publicField(this, "coneOfSight");
+      __publicField(this, "olexaConeOfSight");
+      __publicField(this, "hanneloesCone", null);
+      __publicField(this, "arjanCombat");
+      __publicField(this, "olexaCombat");
+      __publicField(this, "hanneloesCombat");
+      __publicField(this, "npcSightAngle", -Math.PI / 2);
+      // North is -90 degrees in screen Y coordinates
+      __publicField(this, "arjanSweepDir", 1);
+      // Sweeps West (-PI) <-> North (-PI/2) <-> East (0)
+      __publicField(this, "npcSightTimer", 0);
+      __publicField(this, "intruderDetected", false);
+      this.doors = [
+        {
+          id: "basement-bathroom-door",
+          bounds: { ...BASEMENT_BATHROOM_DOOR_BOUNDS },
+          hiddenRegions: []
+        }
+      ];
+      this.arjanCombat = createArmedNpcState("basement:Arjan", "Arjan", -Math.PI / 2);
+      this.olexaCombat = createArmedNpcState("basement:Olexa", "Olexa", -Math.PI / 2);
+      this.hanneloesCombat = createArmedNpcState("basement:Hanneloes", "Hanneloes", Math.PI);
+      this.coneOfSight = new ConeOfSight(
+        { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+        this.npcSightAngle,
+        void 0,
+        this.map
+      );
+      this.olexaConeOfSight = new ConeOfSight(
+        { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+        -Math.PI / 2,
+        // Looking north
+        void 0,
+        this.map
+      );
+    }
+    get stairsWoodBurned() {
+      return this.stairsWoodTiles.every((t) => t.burned);
+    }
+    set stairsWoodBurned(val) {
+      for (const tile of this.stairsWoodTiles) {
+        tile.burned = val;
+        tile.burning = false;
+        tile.burnElapsed = val ? STAIRS_WOOD_BURN_DURATION : 0;
+        tile.spreadDone = val;
+      }
+    }
+    get stairsWoodBurnTimer() {
+      let maxRemaining = 0;
+      for (const tile of this.stairsWoodTiles) {
+        if (tile.burning && !tile.burned) {
+          maxRemaining = Math.max(
+            maxRemaining,
+            STAIRS_WOOD_BURN_DURATION - tile.burnElapsed
+          );
+        }
+      }
+      return maxRemaining;
+    }
+    igniteStairsWoodAt(hitRect) {
+      let hitAny = false;
+      for (const tile of this.stairsWoodTiles) {
+        if (!tile.burned && rectsIntersect(hitRect, tile.bounds)) {
+          if (!tile.burning) {
+            tile.burning = true;
+          }
+          hitAny = true;
+        }
+      }
+      return hitAny;
+    }
+    getArmedNpcs() {
+      const isBathroomOpen = !this.doors.some(
+        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
+      );
+      return [
+        { state: this.arjanCombat, bounds: this.windowNpc, visible: true },
+        { state: this.olexaCombat, bounds: this.olexaNpc, visible: true },
+        { state: this.hanneloesCombat, bounds: this.toiletNpc, visible: isBathroomOpen }
+      ];
+    }
+    getArmedNpcByKey(key) {
+      if (key === this.arjanCombat.key) return this.arjanCombat;
+      if (key === this.olexaCombat.key) return this.olexaCombat;
+      if (key === this.hanneloesCombat.key) return this.hanneloesCombat;
+      return void 0;
+    }
+    enter(player) {
+      const hasUsedStairs = Boolean(player.states.get(USED_STAIRS_STATE_KEY));
+      if (hasUsedStairs) {
+        player.x = BASEMENT_STAIRS_SPAWN.x;
+        player.y = BASEMENT_STAIRS_SPAWN.y;
+        player.facing = BASEMENT_STAIRS_SPAWN.facing;
+      } else {
+        player.x = BASEMENT_FIREPLACE_SPAWN.x;
+        player.y = BASEMENT_FIREPLACE_SPAWN.y;
+        player.facing = BASEMENT_FIREPLACE_SPAWN.facing;
+      }
+      const spawnYaw = player.facing === "up" ? -Math.PI / 2 : player.facing === "down" ? Math.PI / 2 : player.facing === "left" ? Math.PI : 0;
+      player.yaw = spawnYaw;
+      player.renderYaw = spawnYaw;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
+      player.isMoving = false;
+      player.walkTimer = 0;
+      if (this.doors.some((d) => d.id === "basement-bathroom-door")) {
+        this.openedDoors = [];
+      }
+      this.npcSightAngle = -Math.PI / 2;
+      this.npcSightTimer = 0;
+      this.intruderDetected = false;
+      if (this.arjanCombat.mode !== "dead") {
+        this.arjanCombat.mode = "passive";
+        this.arjanCombat.unseenTimer = 0;
+        this.arjanCombat.aimYaw = this.npcSightAngle;
+        this.coneOfSight = new ConeOfSight(
+          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+          this.npcSightAngle,
+          void 0,
+          this.map
+        );
+      } else {
+        this.coneOfSight = null;
+      }
+      if (this.olexaCombat.mode !== "dead") {
+        this.olexaCombat.mode = "passive";
+        this.olexaCombat.unseenTimer = 0;
+        this.olexaCombat.aimYaw = -Math.PI / 2;
+        this.olexaConeOfSight = new ConeOfSight(
+          { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+          -Math.PI / 2,
+          void 0,
+          this.map
+        );
+      } else {
+        this.olexaConeOfSight = null;
+      }
+    }
+    getSolidObstacles(player) {
+      const obs = [
+        BASEMENT_SPA_TUB_BOUNDS,
+        BASEMENT_STAIRS_TRIGGER_BOUNDS,
+        ...this.doors.map((d) => d.bounds)
+      ];
+      if (this.arjanCombat.mode !== "dead") {
+        obs.push(this.windowNpc);
+      }
+      if (this.olexaCombat.mode !== "dead") {
+        obs.push(this.olexaNpc);
+      }
+      const isBathroomOpen = !this.doors.some(
+        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
+      );
+      if (isBathroomOpen && this.hanneloesCombat.mode !== "dead") {
+        obs.push(this.toiletNpc);
+      }
+      if (this.spaDoorClosed) {
+        obs.push(BASEMENT_HALL_NORTH_DOOR_BOUNDS);
+      }
+      for (const tile of this.stairsWoodTiles) {
+        if (!tile.burned) {
+          obs.push(tile.bounds);
+        }
+      }
+      if (!player || !isPlayerOnBasementStairs(player)) {
+        obs.push(BASEMENT_STAIRS_SIDE_NORTH_BOUNDS, BASEMENT_STAIRS_SIDE_SOUTH_BOUNDS);
+      }
+      return obs;
+    }
+    getInteractables() {
+      const list = [
+        {
+          id: "basement-front-door",
+          bounds: { ...BASEMENT_FRONT_DOOR_BOUNDS },
+          promptText: "Open door",
+          dialogueLines: ["It's locked."]
+        }
+      ];
+      if (this.spaDoorClosed) {
+        list.push({
+          id: "basement-hall-north-door",
+          bounds: { ...BASEMENT_HALL_NORTH_DOOR_BOUNDS },
+          promptText: "Open door",
+          dialogueLines: ["It's locked."]
+        });
+      }
+      if (!this.spaDoorClosed && !this.flamethrowerPickedUp) {
+        list.push({
+          id: "basement-flamethrower",
+          bounds: { ...BASEMENT_FLAMETHROWER_BOUNDS },
+          promptText: "Pick up flamethrower",
+          dialogueLines: []
+        });
+      }
+      for (const door of this.doors) {
+        list.push({
+          id: door.id,
+          bounds: { ...door.bounds },
+          promptText: "Open door",
+          dialogueLines: []
+        });
+      }
+      return list;
+    }
+    updateHazardsAndItems(dtSeconds, player, ctx) {
+      if (dtSeconds <= 0) return;
+      if (this.mineState === "idle" && rectsIntersect(player, BASEMENT_MINE_BOUNDS)) {
+        this.mineState = "blinking";
+        this.mineTimer = BASEMENT_MINE_FUSE_SECONDS;
+      } else if (this.mineState === "blinking") {
+        this.mineTimer = Math.max(0, this.mineTimer - dtSeconds);
+        if (this.mineTimer <= 0) {
+          this.mineState = "exploded";
+          this.mineExplosionTimer = 0.65;
+          this.spaDoorClosed = false;
+          const mineCx = BASEMENT_MINE_BOUNDS.x + BASEMENT_MINE_BOUNDS.width * 0.5;
+          const mineCy = BASEMENT_MINE_BOUNDS.y + BASEMENT_MINE_BOUNDS.height * 0.5;
+          const playerCx = player.x + player.width * 0.5;
+          const playerCy = player.y + player.height * 0.5;
+          if (Math.hypot(playerCx - mineCx, playerCy - mineCy) <= BASEMENT_MINE_EXPLOSION_RADIUS) {
+            ctx?.damagePlayer?.(BASEMENT_MINE_EXPLOSION_DAMAGE);
+          }
+        }
+      }
+      if (this.mineExplosionTimer > 0) {
+        this.mineExplosionTimer = Math.max(0, this.mineExplosionTimer - dtSeconds);
+      }
+      if (!this.spaDoorClosed && !this.flamethrowerPickedUp && rectsIntersect(player, BASEMENT_FLAMETHROWER_BOUNDS)) {
+        this.flamethrowerPickedUp = true;
+        player.unlockedFlamethrower = true;
+        selectPlayerEquipmentSlot(player, 4);
+        if (!ctx?.isMobile) {
+          ctx?.openDialogue(["Use the number keys to change weapon."]);
+        }
+      }
+      const toIgnite = [];
+      for (const tile of this.stairsWoodTiles) {
+        if (!tile.burning || tile.burned) continue;
+        tile.burnElapsed += dtSeconds;
+        if (!tile.spreadDone && tile.burnElapsed >= STAIRS_WOOD_SPREAD_SECONDS) {
+          tile.spreadDone = true;
+          for (const neighbor of this.stairsWoodTiles) {
+            if (!neighbor.burned && !neighbor.burning && Math.abs(neighbor.col - tile.col) + Math.abs(neighbor.row - tile.row) === 1) {
+              toIgnite.push(neighbor);
+            }
+          }
+        }
+        if (tile.burnElapsed >= STAIRS_WOOD_BURN_DURATION) {
+          tile.burned = true;
+          tile.burning = false;
+        }
+      }
+      for (const tile of toIgnite) {
+        tile.burning = true;
+      }
+    }
+    handleInteraction(interactableId, player, ctx) {
+      if (interactableId === "basement-flamethrower") {
+        this.flamethrowerPickedUp = true;
+        player.unlockedFlamethrower = true;
+        selectPlayerEquipmentSlot(player, 4);
+        if (!ctx.isMobile) {
+          ctx.openDialogue(["Use the number keys to change weapon."]);
+        }
+        return true;
+      }
+      const doorIdx = this.doors.findIndex((d) => d.id === interactableId);
+      if (doorIdx !== -1) {
+        const openedDoor = this.doors[doorIdx];
+        this.doors.splice(doorIdx, 1);
+        this.openedDoors.push({
+          id: openedDoor.id,
+          bounds: { ...openedDoor.bounds },
+          progress: 0,
+          swingDirection: player.y >= openedDoor.bounds.y ? -1 : 1
+        });
+        if (openedDoor.id === "basement-bathroom-door") {
+          this.startToiletCutscene(player);
+        }
+        return true;
+      }
+      if (interactableId === "basement-stairs-up") {
+        player.states.set(USED_STAIRS_STATE_KEY, true);
+        ctx.loadLevel("level-upstairs");
+        if (!player.states.get(UPSTAIRS_INTRO_STATE_KEY)) {
+          player.states.set(UPSTAIRS_INTRO_STATE_KEY, true);
+          ctx.openDialogue([
+            "Heeeeere's Santa."
+          ]);
+        }
+        return true;
+      }
+      return false;
+    }
+    startToiletCutscene(player) {
+      if (player.states.get(TOILET_EVENT_TRIGGERED_KEY)) {
+        return;
+      }
+      this.toiletCutscene = {
+        active: true,
+        timer: 0
+      };
+    }
+    updateNpcSight(dtSeconds, player, ctx) {
+      const playerCx = player.x + player.width * 0.5;
+      const playerCy = player.y + player.height * 0.5;
+      updateNpcHealthAndTimers(this.arjanCombat, dtSeconds);
+      if (this.arjanCombat.mode === "dead") {
+        this.coneOfSight = null;
+      } else if (this.arjanCombat.mode === "burning") {
+        this.coneOfSight = null;
+        stepBurningNpc(
+          this.arjanCombat,
+          this.windowNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
+      } else if (this.arjanCombat.mode === "hostile") {
+        stepHostileNpcAlongPath(
+          this.arjanCombat,
+          this.windowNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds
+        );
+        const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
+        const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
+        const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
+        this.arjanCombat.aimYaw = aimYaw;
+        this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, void 0, this.map);
+        if (this.coneOfSight.checkDetection(player)) {
+          this.arjanCombat.unseenTimer = 0;
+        } else {
+          this.arjanCombat.unseenTimer += dtSeconds;
+        }
+        if (this.arjanCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+          this.arjanCombat.mode = "passive";
+          this.arjanCombat.unseenTimer = 0;
+          this.arjanCombat.isMoving = false;
+          this.arjanCombat.path = [];
+          this.arjanCombat.pathTimer = 0;
+          this.arjanCombat.aimYaw = this.npcSightAngle;
+          this.coneOfSight = new ConeOfSight(
+            { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+            this.npcSightAngle,
+            void 0,
+            this.map
+          );
+        } else {
+          tryFireHostileNpcUzi(this.arjanCombat, ax, ay, aimYaw, ctx.fireNpcUzi);
+        }
+      } else {
+        this.arjanCombat.isMoving = false;
+        this.npcSightAngle += this.arjanSweepDir * (Math.PI / 4) * dtSeconds;
+        if (this.npcSightAngle >= 0) {
+          this.npcSightAngle = 0;
+          this.arjanSweepDir = -1;
+        } else if (this.npcSightAngle <= -Math.PI) {
+          this.npcSightAngle = -Math.PI;
+          this.arjanSweepDir = 1;
+        }
+        this.coneOfSight = new ConeOfSight(
+          { x: this.windowNpc.x + TILE_SIZE / 2, y: this.windowNpc.y + TILE_SIZE / 2 },
+          this.npcSightAngle,
+          void 0,
+          this.map
+        );
+        this.arjanCombat.aimYaw = this.coneOfSight.direction;
+        if (this.coneOfSight.checkDetection(player)) {
+          enterHostileMode(this.arjanCombat);
+          const ax = this.windowNpc.x + this.windowNpc.width * 0.5;
+          const ay = this.windowNpc.y + this.windowNpc.height * 0.5;
+          const aimYaw = Math.atan2(playerCy - ay, playerCx - ax);
+          this.arjanCombat.aimYaw = aimYaw;
+          this.coneOfSight = new ConeOfSight({ x: ax, y: ay }, aimYaw, void 0, this.map);
+          propagateHostileAlert(this.getArmedNpcs(), this.arjanCombat.key);
+        }
+      }
+      updateNpcHealthAndTimers(this.olexaCombat, dtSeconds);
+      if (this.olexaCombat.mode === "dead") {
+        this.olexaConeOfSight = null;
+      } else if (this.olexaCombat.mode === "burning") {
+        this.olexaConeOfSight = null;
+        stepBurningNpc(
+          this.olexaCombat,
+          this.olexaNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
+      } else if (this.olexaCombat.mode === "hostile") {
+        stepHostileNpcAlongPath(
+          this.olexaCombat,
+          this.olexaNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds
+        );
+        const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
+        const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
+        const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
+        this.olexaCombat.aimYaw = aimYaw;
+        this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, void 0, this.map);
+        if (this.olexaConeOfSight.checkDetection(player)) {
+          this.olexaCombat.unseenTimer = 0;
+        } else {
+          this.olexaCombat.unseenTimer += dtSeconds;
+        }
+        if (this.olexaCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+          this.olexaCombat.mode = "passive";
+          this.olexaCombat.unseenTimer = 0;
+          this.olexaCombat.isMoving = false;
+          this.olexaCombat.path = [];
+          this.olexaCombat.pathTimer = 0;
+          this.olexaCombat.aimYaw = -Math.PI / 2;
+          this.olexaConeOfSight = new ConeOfSight(
+            { x: this.olexaNpc.x + TILE_SIZE / 2, y: this.olexaNpc.y + TILE_SIZE / 2 },
+            -Math.PI / 2,
+            void 0,
+            this.map
+          );
+        } else {
+          tryFireHostileNpcUzi(this.olexaCombat, ox, oy, aimYaw, ctx.fireNpcUzi);
+        }
+      } else {
+        this.olexaCombat.isMoving = false;
+        this.olexaCombat.aimYaw = this.olexaConeOfSight?.direction ?? -Math.PI / 2;
+        if (this.olexaConeOfSight?.checkDetection(player)) {
+          enterHostileMode(this.olexaCombat);
+          const ox = this.olexaNpc.x + this.olexaNpc.width * 0.5;
+          const oy = this.olexaNpc.y + this.olexaNpc.height * 0.5;
+          const aimYaw = Math.atan2(playerCy - oy, playerCx - ox);
+          this.olexaCombat.aimYaw = aimYaw;
+          this.olexaConeOfSight = new ConeOfSight({ x: ox, y: oy }, aimYaw, void 0, this.map);
+          propagateHostileAlert(this.getArmedNpcs(), this.olexaCombat.key);
+        }
+      }
+      const isBathroomOpen = !this.doors.some(
+        (d) => d.id === "basement-bathroom-door" && d.hiddenRegions.length > 0
+      );
+      updateNpcHealthAndTimers(this.hanneloesCombat, dtSeconds);
+      if (this.hanneloesCombat.mode === "dead") {
+        this.hanneloesCone = null;
+      } else if (isBathroomOpen && this.hanneloesCombat.mode === "burning") {
+        this.hanneloesCone = null;
+        if (this.toiletNpc.x >= 21 * TILE_SIZE) {
+          this.toiletNpc.x = 20 * TILE_SIZE + 2;
+        }
+        stepBurningNpc(
+          this.hanneloesCombat,
+          this.toiletNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
+      } else if (isBathroomOpen && this.hanneloesCombat.mode === "hostile") {
+        if (this.toiletNpc.x >= 21 * TILE_SIZE) {
+          this.toiletNpc.x = 20 * TILE_SIZE + 2;
+        }
+        stepHostileNpcAlongPath(
+          this.hanneloesCombat,
+          this.toiletNpc,
+          player,
+          this.map,
+          this.getSolidObstacles(player),
+          dtSeconds
+        );
+        const hx = this.toiletNpc.x + this.toiletNpc.width * 0.5;
+        const hy = this.toiletNpc.y + this.toiletNpc.height * 0.5;
+        const aimYaw = Math.atan2(playerCy - hy, playerCx - hx);
+        this.hanneloesCombat.aimYaw = aimYaw;
+        this.hanneloesCone = new ConeOfSight({ x: hx, y: hy }, aimYaw, void 0, this.map);
+        if (this.hanneloesCone.checkDetection(player)) {
+          this.hanneloesCombat.unseenTimer = 0;
+        } else {
+          this.hanneloesCombat.unseenTimer += dtSeconds;
+        }
+        if (this.hanneloesCombat.unseenTimer >= NPC_HOSTILE_LOSE_SIGHT_SECONDS) {
+          this.hanneloesCombat.mode = "passive";
+          this.hanneloesCombat.unseenTimer = 0;
+          this.hanneloesCombat.isMoving = false;
+          this.hanneloesCombat.path = [];
+          this.hanneloesCombat.pathTimer = 0;
+          this.hanneloesCone = new ConeOfSight({ x: hx, y: hy }, aimYaw, void 0, this.map);
+        } else {
+          tryFireHostileNpcUzi(this.hanneloesCombat, hx, hy, aimYaw, ctx.fireNpcUzi);
+        }
+      } else if (isBathroomOpen && this.hanneloesCone?.checkDetection(player)) {
+        enterHostileMode(this.hanneloesCombat);
+        propagateHostileAlert(this.getArmedNpcs(), this.hanneloesCombat.key);
+      }
+    }
+    updateCutscene(dtSeconds, player, _ctx) {
+      if (!this.toiletCutscene?.active) {
+        return false;
+      }
+      player.isMoving = false;
+      player.walkTimer = 0;
+      this.toiletCutscene.timer += dtSeconds;
+      if (this.toiletCutscene.timer >= 2) {
+        this.toiletCutscene.active = false;
+        this.toiletCutscene = null;
+        player.states.set(TOILET_EVENT_TRIGGERED_KEY, true);
+        if (this.hanneloesCombat.mode !== "dead") {
+          if (this.toiletNpc.x >= 21 * TILE_SIZE) {
+            this.toiletNpc.x = 20 * TILE_SIZE + 2;
+          }
+          enterHostileMode(this.hanneloesCombat);
+          propagateHostileAlert(this.getArmedNpcs(), this.hanneloesCombat.key);
+        }
+      }
+      return true;
+    }
+  };
+
+  // src/world/levels/levelOutside.ts
+  function createMotorcycle() {
+    return {
+      x: MOTORCYCLE_START_X,
+      y: MOTORCYCLE_START_Y,
+      width: TILE_SIZE * 2,
+      height: TILE_SIZE,
+      status: "parked"
+    };
+  }
+  var RUDOLPH_INSPECTED_KEY = "rudolphInspected";
+  var OUTSIDE_ALEX_NPC = {
+    x: 4 * TILE_SIZE + 2,
+    y: 19 * TILE_SIZE + 2,
+    width: 12,
+    height: 12,
+    facing: "left"
+  };
+  var LevelOutside = class {
+    constructor(map = STARTER_MAP) {
+      __publicField(this, "id", "level-outside");
+      __publicField(this, "map");
+      __publicField(this, "dog");
+      __publicField(this, "motorcycle");
+      __publicField(this, "throwers");
+      __publicField(this, "snowballs");
+      __publicField(this, "alexNpc", { ...OUTSIDE_ALEX_NPC });
+      __publicField(this, "hasLadder", false);
+      __publicField(this, "ladderPlaced", false);
+      __publicField(this, "isOnRoof", false);
+      __publicField(this, "climbing", null);
+      __publicField(this, "electrocutionTimer", 0);
+      this.map = map;
+      this.dog = createDog();
+      this.motorcycle = createMotorcycle();
+      this.throwers = createDrivewayThrowers();
+      this.snowballs = [];
+    }
+    enter(player) {
+      player.x = PLAYER_START_X;
+      player.y = PLAYER_START_Y;
+      player.facing = "up";
+      player.yaw = -Math.PI / 2;
+      player.renderYaw = -Math.PI / 2;
+      player.jumpOffset = 0;
+      player.jumpVelocity = 0;
+      player.isMoving = false;
+      player.walkTimer = 0;
+    }
+    getSolidObstacles() {
+      return [...this.throwers, this.motorcycle, this.alexNpc];
+    }
+    getInteractables() {
+      return buildInteractables(this.throwers, {
+        hasLadder: this.hasLadder,
+        ladderPlaced: this.ladderPlaced,
+        isOnRoof: this.isOnRoof,
+        motorcycleStatus: this.motorcycle.status,
+        alexNpc: this.alexNpc
+      });
+    }
+    handleInteraction(interactableId, player, ctx) {
+      if (interactableId === "motorcycle") {
+        this.motorcycle.status = "driving";
+        player.x = this.motorcycle.x + 8;
+        player.y = this.motorcycle.y - 2;
+        player.facing = "right";
+        player.yaw = 0;
+        player.renderYaw = 0;
+        player.isMoving = true;
+        return true;
+      }
+      if (interactableId === "ground-ladder") {
+        this.hasLadder = true;
+        return true;
+      }
+      if (interactableId === "house-west-place-ladder") {
+        this.hasLadder = false;
+        this.ladderPlaced = true;
+        return true;
+      }
+      if (interactableId === "house-west-climb-ladder") {
+        this.climbing = { direction: "up", progress: 0 };
+        player.x = LADDER_CLIMB_X;
+        player.y = LADDER_BOTTOM_Y;
+        player.facing = "up";
+        player.yaw = -Math.PI / 2;
+        player.renderYaw = -Math.PI / 2;
+        player.jumpOffset = 0;
+        player.jumpVelocity = 0;
+        return true;
+      }
+      if (interactableId === "roof-ladder") {
+        this.climbing = { direction: "down", progress: 0 };
+        player.x = LADDER_CLIMB_X;
+        player.y = LADDER_BOTTOM_Y;
+        player.facing = "down";
+        player.yaw = Math.PI / 2;
+        player.renderYaw = Math.PI / 2;
+        player.jumpOffset = 0;
+        player.jumpVelocity = 0;
+        return true;
+      }
+      if (interactableId === "roof-rudolph") {
+        player.states.set(RUDOLPH_INSPECTED_KEY, true);
+        ctx.openDialogue(
+          [
+            "RUDOLPH?!! WHO DID THIS?",
+            "...",
+            "This is no longer about saving christmas...",
+            "This is about REVENGE!",
+            "I will find out who did this, if it is the last thing I'll ever do."
+          ],
+          () => {
+            ctx.openDialogue(
+              ["ACHIEVEMENT UNLOCKED: Murder-mystery genre unlocked."],
+              () => {
+                ctx.openDialogue(["I'm dreaming of a RED CHRISTMAS."], () => {
+                  ctx.openDialogue(
+                    [
+                      "ACHIEVEMENT UNLOCKED: Action genre unlocked. Viewer discretion is advised."
+                    ],
+                    () => {
+                      if (!player.unlockedUzi) {
+                        player.unlockedUzi = true;
+                        selectPlayerEquipmentSlot(player, 3);
+                      }
+                    },
+                    void 0,
+                    false,
+                    "achievement"
+                  );
+                });
+              },
+              void 0,
+              false,
+              "achievement"
+            );
+          }
+        );
+        return true;
+      }
+      if (interactableId === "roof-chimney") {
+        if (!player.states.get(RUDOLPH_INSPECTED_KEY) && !player.unlockedUzi) {
+          ctx.openDialogue(["You smell the stench of blood..."]);
+          return true;
+        }
+        ctx.loadLevel("level-basement");
+        if (!player.states.get(BASEMENT_CHIMNEY_INTRO_STATE_KEY)) {
+          player.states.set(BASEMENT_CHIMNEY_INTRO_STATE_KEY, true);
+          ctx.openDialogue([
+            "You better run, Santa Claus is coming to town.",
+            ctx.isMobile ? "Tap anywhere inside the game screen to fire your weapon (hold to keep firing)." : "Press Space to fire your weapon (hold to keep firing)."
+          ]);
+        }
+        return true;
+      }
+      return false;
+    }
+  };
+
   // src/world/levels/levelPeople.ts
   var V3 = 20 /* VoidBlack */;
   var W3 = 21 /* InteriorWall */;
@@ -7034,6 +7084,7 @@
     state.projectiles = [];
     state.nearbyInteractable = null;
     state.activeDialogue = null;
+    state.pendingDialogue = null;
     nextLevel.enter(state.player);
     refreshInteractables(state);
     debugLog(`Loaded level: ${levelId}`);
@@ -7198,6 +7249,7 @@
       interactables: activeLevel.getInteractables(player),
       nearbyInteractable: null,
       activeDialogue,
+      pendingDialogue: null,
       gameOver: false,
       elapsedTime: 0,
       debugMode,
@@ -7205,6 +7257,7 @@
       worldFadedToBlack,
       damageFlashTimer: 0,
       fireFlashTimer: 0,
+      playerCharredTimer: 0,
       houseExploding: false,
       houseExplosionTimer: 0,
       houseExplosionSpawnAccum: 0,
@@ -7248,6 +7301,8 @@
   }
   var DAMAGE_FLASH_DURATION_SECONDS = 0.3;
   var FIRE_FLASH_DURATION_SECONDS = 0.08;
+  var PLAYER_CHARRED_DURATION_SECONDS = 2;
+  var DIALOGUE_ADVANCE_LOCK_SECONDS = 0.5;
   var BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 20;
   function damagePlayer(state, amount) {
     applyPlayerDamage(state.player, amount);
@@ -7258,6 +7313,7 @@
       const insideHouse = state.currentLevelId === "level-basement" || state.currentLevelId === "level-upstairs";
       state.gameOver = true;
       state.nearbyInteractable = null;
+      state.pendingDialogue = null;
       state.activeDialogue = {
         lines: ["Try again?"],
         currentIndex: 0,
@@ -7298,6 +7354,7 @@
     state.climbing = null;
     state.electrocutionTimer = 0;
     state.activeDialogue = null;
+    state.pendingDialogue = null;
     syncOutsideToLevel(state);
     refreshInteractables(state);
     damagePlayer(state, 30);
@@ -7550,11 +7607,12 @@
     return void 0;
   }
   var ROSANNA_DAMAGE_MULTIPLIER = 0.2;
+  var ANNE_MARIE_DAMAGE_MULTIPLIER = 0.75;
   function damageArmedNpc(state, key, damage, hitX, hitY, groundZ) {
     const npc = getArmedNpcByKey(state, key);
     if (!npc) return;
     const wasPassive = npc.mode === "passive";
-    const effectiveDamage = key === "upstairs:Rosanna" ? damage * ROSANNA_DAMAGE_MULTIPLIER : damage;
+    const effectiveDamage = key === "upstairs:Rosanna" ? damage * ROSANNA_DAMAGE_MULTIPLIER : key === "upstairs:Anne-Marie" ? damage * ANNE_MARIE_DAMAGE_MULTIPLIER : damage;
     const died = applyNpcDamage(npc, effectiveDamage);
     if (wasPassive && npc.mode === "hostile") {
       if (state.currentLevelId === "level-basement") {
@@ -7584,9 +7642,12 @@
           yaw: npc.aimYaw + 0.4
         });
         if (key === "upstairs:Anne-Marie") {
-          state.activeDialogue = {
-            lines: ["I guess it's my turn to...", "Take out the trash."],
-            currentIndex: 0
+          state.pendingDialogue = {
+            delay: ANNE_MARIE_DIALOGUE_DELAY_SECONDS,
+            dialogue: {
+              lines: ["I guess it's my turn to...", "Take out the trash."],
+              currentIndex: 0
+            }
           };
         }
       } else if (npc.weapon === "flamethrower") {
@@ -7628,12 +7689,14 @@
       }
     }
   }
+  var NPC_UZI_YAW_SPREAD_RAD = 20 * Math.PI / 180;
+  var NPC_UZI_PITCH_SPREAD_RAD = 10 * Math.PI / 180;
   function fireNpcUziProjectile(state, npc, originX, originY, aimYaw) {
     const rightAngle = aimYaw + Math.PI / 2;
     const groundZ = getTerrainHeight(originX, originY, state.currentLevelId);
-    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180);
+    const yawSpread = (Math.random() * 2 - 1) * NPC_UZI_YAW_SPREAD_RAD;
     const shotYaw = aimYaw + yawSpread;
-    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180);
+    const pitchSpread = (Math.random() * 2 - 1) * NPC_UZI_PITCH_SPREAD_RAD;
     const spawnX = originX + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
     const spawnY = originY + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
     const spawnZ = groundZ + 10;
@@ -8066,7 +8129,7 @@
     }
     if (state.currentLevelId === "level-upstairs") {
       const cat = state.levels["level-upstairs"].cat;
-      if (cat.mode !== "dead" && rectsIntersect(punchRect, cat)) {
+      if (cat.mode !== "dead" && (cat.mode === "latched" || rectsIntersect(punchRect, cat))) {
         damageUpstairsCat(state, PLAYER_PUNCH_NPC_DAMAGE);
       }
     }
@@ -8234,6 +8297,9 @@
             if (isRocket) {
               detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, "npc");
             } else {
+              if (isFireball) {
+                state.playerCharredTimer = PLAYER_CHARRED_DURATION_SECONDS;
+              }
               damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
             }
             removed = true;
@@ -8285,7 +8351,7 @@
         }
         if (p.owner !== "npc" && !p.cutsceneShot && state.currentLevelId === "level-upstairs") {
           const cat = state.levels["level-upstairs"].cat;
-          if (cat.mode !== "dead" && rectsIntersect(projRect, cat)) {
+          if (cat.mode !== "dead" && cat.mode !== "latched" && rectsIntersect(projRect, cat)) {
             if (isRocket) {
               detonateRocket(
                 state,
@@ -8484,9 +8550,11 @@
     const cy = player.y + player.height * 0.5;
     const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
     const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
-    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180);
+    const isCatLatched = state.currentLevelId === "level-upstairs" && state.levels["level-upstairs"].cat.mode === "latched";
+    const spreadMult = isCatLatched ? 4 : 1;
+    const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180) * spreadMult;
     const shotYaw = aimYaw + yawSpread;
-    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180);
+    const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180) * spreadMult;
     const spawnX = cx + Math.cos(aimYaw) * 7.5 + Math.cos(rightAngle) * 3.8;
     const spawnY = cy + Math.sin(aimYaw) * 7.5 + Math.sin(rightAngle) * 3.8;
     const spawnZ = groundZ + (player.jumpOffset ?? 0) + 10;
@@ -8597,6 +8665,12 @@
     if (state.fireFlashTimer > 0) {
       state.fireFlashTimer = Math.max(0, state.fireFlashTimer - dtSeconds);
     }
+    if (state.playerCharredTimer > 0) {
+      state.playerCharredTimer = Math.max(
+        0,
+        state.playerCharredTimer - dtSeconds
+      );
+    }
     if (state.cheatMode && state.player.uziDepleted && state.player.uziCheatRefillTimer > 0) {
       state.player.uziCheatRefillTimer = Math.max(
         0,
@@ -8661,17 +8735,25 @@
     }
     if (state.activeDialogue) {
       state.player.isMoving = false;
+      const dlg = state.activeDialogue;
+      if (dlg.inputLockTimer === void 0) {
+        dlg.inputLockTimer = DIALOGUE_ADVANCE_LOCK_SECONDS;
+      }
+      if (dlg.inputLockTimer > 0) {
+        dlg.inputLockTimer = Math.max(0, dlg.inputLockTimer - dtSeconds);
+        return;
+      }
       if (actionPressed) {
-        if (state.activeDialogue.unclosable && state.activeDialogue.currentIndex >= state.activeDialogue.lines.length - 1) {
+        if (dlg.unclosable && dlg.currentIndex >= dlg.lines.length - 1) {
           return;
         }
-        state.activeDialogue.currentIndex += 1;
-        if (state.houseExploding && state.activeDialogue.currentIndex >= 1) {
+        dlg.currentIndex += 1;
+        if (state.houseExploding && dlg.currentIndex >= 1) {
           state.worldFadedToBlack = true;
         }
-        if (state.activeDialogue.currentIndex >= state.activeDialogue.lines.length) {
+        if (dlg.currentIndex >= dlg.lines.length) {
           const wasGameOver = state.gameOver;
-          const onClose = state.activeDialogue.onClose;
+          const onClose = dlg.onClose;
           const prevLevel = state.currentLevelId;
           state.activeDialogue = null;
           if (onClose) {
@@ -8680,9 +8762,23 @@
           if ((state.currentLevelId !== prevLevel || wasGameOver) && typeof input.cameraYaw === "number") {
             input.cameraYaw = state.player.yaw ?? directionToYaw(state.player.facing);
           }
+        } else {
+          dlg.inputLockTimer = DIALOGUE_ADVANCE_LOCK_SECONDS;
         }
       }
       return;
+    }
+    if (state.pendingDialogue) {
+      state.pendingDialogue.delay = Math.max(
+        0,
+        state.pendingDialogue.delay - dtSeconds
+      );
+      if (state.pendingDialogue.delay <= 0) {
+        state.activeDialogue = state.pendingDialogue.dialogue;
+        state.pendingDialogue = null;
+        state.player.isMoving = false;
+        return;
+      }
     }
     if (slotPressed !== null) {
       selectPlayerEquipmentSlot(state.player, slotPressed);
@@ -11494,7 +11590,8 @@
         trim: rgb(32, 32, 36),
         pants: rgb(18, 18, 22),
         skin: rgb(30, 26, 26),
-        hair: rgb(14, 14, 16)
+        hair: rgb(14, 14, 16),
+        hat: style.hat ? rgb(22, 22, 26) : void 0
       };
     }
     const cyaw = Math.cos(yaw);
@@ -11623,7 +11720,7 @@
       mb.addTorus(cx, y0 + 10.2, cz, 2.85, 0.75, 12, 8, "y", style.trim, TexId.FABRIC, 0.45);
     }
     const armSpread = 4.35;
-    const mittenColor = isSanta ? rgb(224, 232, 245) : style.skin;
+    const mittenColor = isSanta ? style.isCharred ? rgb(28, 28, 32) : rgb(224, 232, 245) : style.skin;
     const equippedItem = style.equippedItem ?? "empty";
     const isUnarmedPunch = equippedItem === "unarmed" && (style.punchTimer ?? 0) > 0;
     const punchProgress = isUnarmedPunch ? 1 - Math.max(0, Math.min(1, (style.punchTimer ?? 0) / PUNCH_DURATION_SECONDS)) : 0;
@@ -11971,13 +12068,17 @@
       mb.addOrientedBox(ex + fx * 0.1, headY + 1.45, ez + fz * 0.1, 0.4, 0.32, 1.1, yaw, 0, style.hair, TexId.SOLID, 0.2);
     }
     if (style.hasBeard || isSanta) {
-      mb.addSphere(cx + fx * 2.35, headY - 1.65, cz + fz * 2.35, 3.25, 2.75, 2.95, 10, 12, rgb(250, 252, 255), TexId.SNOW, 0.65);
-      mb.addSphere(cx + fx * 3.1, headY - 2.9, cz + fz * 3.1, 2.1, 1.8, 2.1, 8, 10, rgb(252, 254, 255), TexId.SNOW, 0.55);
-      mb.addSphere(cx + fx * 3.45 + rx * 0.95, headY - 0.65, cz + fz * 3.45 + rz * 0.95, 1.1, 0.65, 1.1, 6, 8, rgb(255, 255, 255), TexId.SNOW, 0.35);
-      mb.addSphere(cx + fx * 3.45 - rx * 0.95, headY - 0.65, cz + fz * 3.45 - rz * 0.95, 1.1, 0.65, 1.1, 6, 8, rgb(255, 255, 255), TexId.SNOW, 0.35);
+      const beardMain = style.isCharred ? rgb(26, 26, 30) : rgb(250, 252, 255);
+      const beardTip = style.isCharred ? rgb(28, 28, 32) : rgb(252, 254, 255);
+      const mustacheCol = style.isCharred ? rgb(30, 30, 34) : rgb(255, 255, 255);
+      mb.addSphere(cx + fx * 2.35, headY - 1.65, cz + fz * 2.35, 3.25, 2.75, 2.95, 10, 12, beardMain, TexId.SNOW, 0.65);
+      mb.addSphere(cx + fx * 3.1, headY - 2.9, cz + fz * 3.1, 2.1, 1.8, 2.1, 8, 10, beardTip, TexId.SNOW, 0.55);
+      mb.addSphere(cx + fx * 3.45 + rx * 0.95, headY - 0.65, cz + fz * 3.45 + rz * 0.95, 1.1, 0.65, 1.1, 6, 8, mustacheCol, TexId.SNOW, 0.35);
+      mb.addSphere(cx + fx * 3.45 - rx * 0.95, headY - 0.65, cz + fz * 3.45 - rz * 0.95, 1.1, 0.65, 1.1, 6, 8, mustacheCol, TexId.SNOW, 0.35);
     }
     if (style.hat || isSanta) {
-      const hatColor = style.hat ?? rgb(220, 36, 42);
+      const hatColor = style.isCharred ? rgb(22, 22, 26) : style.hat ?? rgb(220, 36, 42);
+      const pomColor = style.isCharred ? rgb(32, 32, 36) : rgb(252, 254, 255);
       mb.addTorus(cx, headY + 2.25, cz, 3.35, 0.85, 14, 8, "y", style.trim, TexId.SNOW, 0.55);
       mb.addCylinder(cx - fx * 0.3, headY + 2.6, cz - fz * 0.3, 3.35, 2.3, 3.2, 12, hatColor, TexId.FABRIC, 0.7);
       mb.addCone(cx - fx * 1.15, headY + 5.4, cz - fz * 1.15, 2.35, 4.2, 12, hatColor, TexId.FABRIC, 0.7);
@@ -11990,7 +12091,7 @@
         1.55,
         8,
         10,
-        rgb(252, 254, 255),
+        pomColor,
         TexId.SNOW,
         0.6
       );
@@ -12456,6 +12557,7 @@
         hair: rgb(250, 252, 255),
         hat: rgb(220, 36, 42),
         hasBeard: true,
+        isCharred: state.playerCharredTimer > 0,
         ...sharedWeaponFields
       };
       const rosannaCutsceneActive = levelId === "level-upstairs" && Boolean(state.levels["level-upstairs"].rosannaCutscene?.active);
@@ -12665,7 +12767,7 @@
           hair: hexToColor4("#4e433c"),
           equippedItem: "uzi",
           uziReloadTimer: basement.arjanCombat.reloadTimer,
-          isCharred: basement.arjanCombat.mode === "burning",
+          isCharred: basement.arjanCombat.mode === "burning" || basement.arjanCombat.charred,
           weaponVibrationTimer: basement.arjanCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: basement.arjanCombat.mode === "dead" ? Math.max(0.05, basement.arjanCombat.deadFallProgress) : 0
@@ -12696,7 +12798,7 @@
           hair: hexToColor4("#342618"),
           equippedItem: "uzi",
           uziReloadTimer: basement.olexaCombat.reloadTimer,
-          isCharred: basement.olexaCombat.mode === "burning",
+          isCharred: basement.olexaCombat.mode === "burning" || basement.olexaCombat.charred,
           weaponVibrationTimer: basement.olexaCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: basement.olexaCombat.mode === "dead" ? Math.max(0.05, basement.olexaCombat.deadFallProgress) : 0
@@ -12734,7 +12836,7 @@
             sitting: isSittingOnToilet,
             equippedItem: isSittingOnToilet ? "empty" : "uzi",
             uziReloadTimer: basement.hanneloesCombat.reloadTimer,
-            isCharred: basement.hanneloesCombat.mode === "burning",
+            isCharred: basement.hanneloesCombat.mode === "burning" || basement.hanneloesCombat.charred,
             weaponVibrationTimer: basement.hanneloesCombat.weaponVibrationTimer,
             elapsedTime: t,
             deadFallProgress: basement.hanneloesCombat.mode === "dead" ? Math.max(0.05, basement.hanneloesCombat.deadFallProgress) : 0
@@ -13066,7 +13168,7 @@
           hair: hexToColor4("#7a421c"),
           equippedItem: "uzi",
           uziReloadTimer: upstairs.albinCombat.reloadTimer,
-          isCharred: upstairs.albinCombat.mode === "burning",
+          isCharred: upstairs.albinCombat.mode === "burning" || upstairs.albinCombat.charred,
           weaponVibrationTimer: upstairs.albinCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: upstairs.albinCombat.mode === "dead" ? Math.max(0.05, upstairs.albinCombat.deadFallProgress) : 0
@@ -13100,7 +13202,7 @@
           hasPresentInLap: isDianaDistracted,
           equippedItem: "uzi",
           uziReloadTimer: upstairs.dianaCombat.reloadTimer,
-          isCharred: upstairs.dianaCombat.mode === "burning",
+          isCharred: upstairs.dianaCombat.mode === "burning" || upstairs.dianaCombat.charred,
           weaponVibrationTimer: upstairs.dianaCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: upstairs.dianaCombat.mode === "dead" ? Math.max(0.05, upstairs.dianaCombat.deadFallProgress) : 0
@@ -13134,7 +13236,7 @@
           hasPresentInLap: isSimonDistracted,
           equippedItem: "uzi",
           uziReloadTimer: upstairs.simonCombat.reloadTimer,
-          isCharred: upstairs.simonCombat.mode === "burning",
+          isCharred: upstairs.simonCombat.mode === "burning" || upstairs.simonCombat.charred,
           weaponVibrationTimer: upstairs.simonCombat.weaponVibrationTimer,
           elapsedTime: t,
           deadFallProgress: upstairs.simonCombat.mode === "dead" ? Math.max(0.05, upstairs.simonCombat.deadFallProgress) : 0
@@ -13165,7 +13267,7 @@
             skin: rgb(248, 206, 174),
             hair: hexToColor4("#6e4624"),
             equippedItem: "flamethrower",
-            isCharred: upstairs.henrikCombat.mode === "burning",
+            isCharred: upstairs.henrikCombat.mode === "burning" || upstairs.henrikCombat.charred,
             weaponVibrationTimer: upstairs.henrikCombat.weaponVibrationTimer,
             elapsedTime: t,
             deadFallProgress: upstairs.henrikCombat.mode === "dead" ? Math.max(0.05, upstairs.henrikCombat.deadFallProgress) : 0
@@ -13195,7 +13297,7 @@
             skin: rgb(250, 208, 176),
             hair: hexToColor4("#743c20"),
             equippedItem: "flamethrower",
-            isCharred: upstairs.tanjaCombat.mode === "burning",
+            isCharred: upstairs.tanjaCombat.mode === "burning" || upstairs.tanjaCombat.charred,
             weaponVibrationTimer: upstairs.tanjaCombat.weaponVibrationTimer,
             elapsedTime: t,
             deadFallProgress: upstairs.tanjaCombat.mode === "dead" ? Math.max(0.05, upstairs.tanjaCombat.deadFallProgress) : 0
@@ -13228,7 +13330,7 @@
             hair: hexToColor4("#c88642"),
             equippedItem: "katana",
             wildKatanaSwing: upstairs.anneMarieCombat.mode === "hostile" && upstairs.anneMarieCombat.hostileAlertTimer <= 0 || upstairs.anneMarieCombat.mode === "burning",
-            isCharred: upstairs.anneMarieCombat.mode === "burning",
+            isCharred: upstairs.anneMarieCombat.mode === "burning" || upstairs.anneMarieCombat.charred,
             elapsedTime: t,
             deadFallProgress: upstairs.anneMarieCombat.mode === "dead" ? Math.max(0.05, upstairs.anneMarieCombat.deadFallProgress) : 0
           },
@@ -13261,7 +13363,7 @@
             hat: rgb(220, 36, 42),
             hasBeard: true,
             holdingBazooka: true,
-            isCharred: upstairs.rosannaCombat.mode === "burning",
+            isCharred: upstairs.rosannaCombat.mode === "burning" || upstairs.rosannaCombat.charred,
             weaponVibrationTimer: upstairs.rosannaCombat.weaponVibrationTimer,
             elapsedTime: t,
             deadFallProgress: upstairs.rosannaCombat.mode === "dead" ? Math.max(0.05, upstairs.rosannaCombat.deadFallProgress) : 0
@@ -13879,26 +13981,82 @@
     "tanja",
     "arjan"
   ];
+  var CAT_PIXEL_PORTRAIT_GRID = [
+    "................",
+    "..BB........BB..",
+    "..BEB......BEB..",
+    "..BEBB....BBEB..",
+    "..BBHBBBBBBHBB..",
+    "..BBBBBBBBBBBB..",
+    ".BBHBBBBBBBBHBB.",
+    ".BBBRPBBBBPRBBB.",
+    ".BBBYPBBBBPYBBB.",
+    "W.BBBBBBBBBBBB.W",
+    ".WWBBBBNNBBBBWW.",
+    "W..BBBBBBBBBB..W",
+    "...BBBWBBWBBB...",
+    "....BBBBBBBB....",
+    ".....BBHHBB.....",
+    "................"
+  ];
+  var CAT_PIXEL_PORTRAIT_PALETTE = {
+    ".": "#2c1d3e",
+    B: "#161822",
+    H: "#363b54",
+    E: "#e87aa4",
+    R: "#ff3a2a",
+    Y: "#ffdf40",
+    P: "#0b0c12",
+    N: "#ff8fab",
+    W: "#eef2f8"
+  };
+  function drawCatPixelPortrait(ctx, x, y, size) {
+    const grid = CAT_PIXEL_PORTRAIT_GRID;
+    const dim = grid.length;
+    ctx.fillStyle = CAT_PIXEL_PORTRAIT_PALETTE["."];
+    ctx.fillRect(x, y, size, size);
+    for (let row = 0; row < dim; row++) {
+      const line = grid[row];
+      const py0 = y + Math.floor(row * size / dim);
+      const py1 = y + Math.floor((row + 1) * size / dim);
+      const ph = Math.max(1, py1 - py0);
+      for (let col = 0; col < dim; col++) {
+        const ch = line[col];
+        if (ch === ".") continue;
+        const color = CAT_PIXEL_PORTRAIT_PALETTE[ch];
+        if (!color) continue;
+        const px0 = x + Math.floor(col * size / dim);
+        const px1 = x + Math.floor((col + 1) * size / dim);
+        const pw = Math.max(1, px1 - px0);
+        ctx.fillStyle = color;
+        ctx.fillRect(px0, py0, pw, ph);
+      }
+    }
+  }
   function drawPortrait(ctx, speakerName, portraitsAtlas, x, y) {
     const norm = speakerName.toLowerCase();
     const idx = PORTRAIT_ORDER.indexOf(norm);
-    if (idx === -1) return;
+    if (idx === -1 && norm !== "cat") return;
     const portraitSize = 40;
     const frameWidth = portraitSize + 4;
     const frameHeight = portraitSize + 4;
     ctx.save();
     drawSnesFrame(ctx, x, y, frameWidth, frameHeight);
-    ctx.drawImage(
-      portraitsAtlas,
-      idx * portraitSize,
-      0,
-      portraitSize,
-      portraitSize,
-      x + 2,
-      y + 2,
-      portraitSize,
-      portraitSize
-    );
+    if (norm === "cat") {
+      drawCatPixelPortrait(ctx, x + 2, y + 2, portraitSize);
+    } else {
+      ctx.drawImage(
+        portraitsAtlas,
+        idx * portraitSize,
+        0,
+        portraitSize,
+        portraitSize,
+        x + 2,
+        y + 2,
+        portraitSize,
+        portraitSize
+      );
+    }
     ctx.restore();
   }
   function drawPersonNpc(ctx, npc, options) {
@@ -14006,30 +14164,61 @@
     const canvasW = ctx.canvas.width;
     const canvasH = ctx.canvas.height;
     const projected = [];
-    for (const entry of entries) {
-      if (!entry.visible || !isNpcBillboardVisible(entry.state)) continue;
-      const wx = entry.bounds.x + entry.bounds.width * 0.5;
-      const wy = 20.5;
-      const wz = entry.bounds.y + entry.bounds.height * 0.5;
+    const pushBillboard = (name, health, delayedHealth, maxHealth, wx, wy, wz) => {
       const clipX = m[0] * wx + m[4] * wy + m[8] * wz + m[12];
       const clipY = m[1] * wx + m[5] * wy + m[9] * wz + m[13];
       const clipZ = m[2] * wx + m[6] * wy + m[10] * wz + m[14];
       const clipW = m[3] * wx + m[7] * wy + m[11] * wz + m[15];
-      if (clipW <= 0.5) continue;
+      if (clipW <= 0.5) return;
       const ndcX = clipX / clipW;
       const ndcY = clipY / clipW;
       const ndcZ = clipZ / clipW;
       if (ndcZ < -1 || ndcZ > 1 || ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2) {
-        continue;
+        return;
       }
       const sx = (ndcX * 0.5 + 0.5) * canvasW;
       const sy = (1 - (ndcY * 0.5 + 0.5)) * canvasH;
       const scale = Math.max(0.55, Math.min(1.2, 46 / clipW));
-      projected.push({ npc: entry.state, sx, sy, clipW, scale });
+      projected.push({
+        name,
+        health,
+        delayedHealth,
+        maxHealth,
+        sx,
+        sy,
+        clipW,
+        scale
+      });
+    };
+    for (const entry of entries) {
+      if (!entry.visible || !isNpcBillboardVisible(entry.state)) continue;
+      pushBillboard(
+        entry.state.name,
+        entry.state.health,
+        entry.state.delayedHealth,
+        entry.state.maxHealth || MAX_NPC_HEALTH,
+        entry.bounds.x + entry.bounds.width * 0.5,
+        20.5,
+        entry.bounds.y + entry.bounds.height * 0.5
+      );
+    }
+    if (state.currentLevelId === "level-upstairs") {
+      const cat = state.levels["level-upstairs"].cat;
+      if (isCatBillboardVisible(cat)) {
+        pushBillboard(
+          "Cat",
+          cat.health,
+          cat.delayedHealth,
+          MAX_CAT_HEALTH,
+          cat.x + cat.width * 0.5,
+          10.5 + cat.jumpZ,
+          cat.y + cat.height * 0.5
+        );
+      }
     }
     projected.sort((a, b) => b.clipW - a.clipW);
     for (const item of projected) {
-      const { npc, sx, sy, scale } = item;
+      const { sx, sy, scale } = item;
       const portraitSize = Math.max(10, Math.round(16 * scale));
       const barInnerW = Math.max(22, Math.round(36 * scale));
       const barInnerH = Math.max(4, Math.round(6 * scale));
@@ -14051,8 +14240,11 @@
       ctx.strokeRect(cardX + 0.5, cardY + 0.5, cardW - 1, cardH - 1);
       const px = cardX + pad;
       const py = cardY + Math.round((cardH - portraitSize) * 0.5);
-      const pIdx = PORTRAIT_ORDER.indexOf(npc.name.toLowerCase());
-      if (pIdx !== -1 && assets.portraitsAtlas) {
+      const normName = item.name.toLowerCase();
+      const pIdx = PORTRAIT_ORDER.indexOf(normName);
+      if (normName === "cat") {
+        drawCatPixelPortrait(ctx, px, py, portraitSize);
+      } else if (pIdx !== -1 && assets.portraitsAtlas) {
         ctx.drawImage(
           assets.portraitsAtlas,
           pIdx * 40,
@@ -14064,7 +14256,7 @@
           portraitSize,
           portraitSize
         );
-      } else if (npc.name.toLowerCase() === "rosanna") {
+      } else if (normName === "rosanna") {
         ctx.fillStyle = "#d62828";
         ctx.fillRect(px, py, portraitSize, portraitSize);
         ctx.fillStyle = "#ffcfab";
@@ -14091,21 +14283,21 @@
       ctx.strokeRect(bx + 0.5, by + 0.5, barOuterW - 1, barOuterH - 1);
       const innerX = bx + 1;
       const innerY = by + 1;
-      const npcMaxHp = npc.maxHealth || MAX_NPC_HEALTH;
-      const healthRatio = Math.max(0, Math.min(1, npc.health / npcMaxHp));
+      const npcMaxHp = item.maxHealth || MAX_NPC_HEALTH;
+      const healthRatio = Math.max(0, Math.min(1, item.health / npcMaxHp));
       const delayedRatio = Math.max(
         0,
-        Math.min(1, npc.delayedHealth / npcMaxHp)
+        Math.min(1, item.delayedHealth / npcMaxHp)
       );
-      const healthPx = npc.health > 0 ? Math.max(1, Math.round(barInnerW * healthRatio)) : 0;
-      const delayedPx = npc.delayedHealth > 0 ? Math.max(1, Math.round(barInnerW * delayedRatio)) : 0;
+      const healthPx = item.health > 0 ? Math.max(1, Math.round(barInnerW * healthRatio)) : 0;
+      const delayedPx = item.delayedHealth > 0 ? Math.max(1, Math.round(barInnerW * delayedRatio)) : 0;
       if (healthPx > 0) {
         ctx.fillStyle = "#ef233c";
         ctx.fillRect(innerX, innerY, healthPx, barInnerH);
         ctx.fillStyle = "#ff6b6b";
         ctx.fillRect(innerX, innerY, healthPx, Math.max(1, Math.round(barInnerH * 0.25)));
       }
-      if (npc.delayedHealth !== npc.health) {
+      if (item.delayedHealth !== item.health) {
         const startPx = Math.min(healthPx, delayedPx);
         const endPx = Math.max(healthPx, delayedPx);
         const deltaW = Math.max(1, endPx - startPx);

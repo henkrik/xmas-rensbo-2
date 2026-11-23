@@ -1647,14 +1647,14 @@ function addTuftedCouch3D(
 
   if (facing === 'east') {
     // Backrest on West side, rolled armrests on North & South
-    mb.addBeveledBox(cx - w * 0.34, 4.8, cz, w * 0.32, 6.2, d, 1.0, darkFabric, TexId.FABRIC, 0.65);
+    mb.addBeveledBox(cx - w * 0.34, 4.8, cz, w * 0.32, 7.7, d, 1.0, darkFabric, TexId.FABRIC, 0.65);
     mb.addTorus(cx + 1, 5.5, cz - d * 0.44, 2.0, 1.2, 10, 8, 'x', darkFabric, TexId.FABRIC, 0.5);
     mb.addTorus(cx + 1, 5.5, cz + d * 0.44, 2.0, 1.2, 10, 8, 'x', darkFabric, TexId.FABRIC, 0.5);
     mb.addSphere(cx + 0.5, 6.2, cz - d * 0.25, 1.8, 2.2, 3.0, 8, 10, pillowColor, TexId.FABRIC, 0.45);
     mb.addSphere(cx + 0.5, 6.2, cz + d * 0.25, 1.8, 2.2, 3.0, 8, 10, pillowColor, TexId.FABRIC, 0.45);
   } else {
     // Backrest on North side, rolled armrests on West & East
-    mb.addBeveledBox(cx, 4.8, cz - d * 0.34, w, 6.2, d * 0.32, 1.0, darkFabric, TexId.FABRIC, 0.65);
+    mb.addBeveledBox(cx, 4.8, cz - d * 0.34, w, 7.7, d * 0.32, 1.0, darkFabric, TexId.FABRIC, 0.65);
     mb.addTorus(cx - w * 0.44, 5.5, cz + 1, 2.0, 1.2, 10, 8, 'z', darkFabric, TexId.FABRIC, 0.5);
     mb.addTorus(cx + w * 0.44, 5.5, cz + 1, 2.0, 1.2, 10, 8, 'z', darkFabric, TexId.FABRIC, 0.5);
     mb.addSphere(cx - w * 0.26, 6.2, cz + 0.5, 3.2, 2.2, 1.8, 8, 10, pillowColor, TexId.FABRIC, 0.45);
@@ -2063,11 +2063,11 @@ export function buildUpstairsStaticMesh(map: TileMap, state?: GameState): MeshBu
   addTuftedCouch3D(mb, 5.5 * ts, 11.5 * ts, 3 * ts - 2, 15, 'south', rgb(214, 84, 58), rgb(248, 206, 68));
   mb.addShadowDisc(2.5 * ts, 0, 12.5 * ts, 8.5, 8.5, 0.3);
   mb.addBeveledBox(2.5 * ts, 0.5, 12.5 * ts, 14.5, 5.2, 14.5, 0.9, rgb(236, 178, 52), TexId.FABRIC, 0.65);
-  mb.addBeveledBox(2.1 * ts, 5.2, 12.5 * ts, 4.2, 5.8, 14.5, 0.8, rgb(214, 156, 38), TexId.FABRIC, 0.65);
+  mb.addBeveledBox(2.1 * ts, 5.2, 12.5 * ts, 4.2, 7.3, 14.5, 0.8, rgb(214, 156, 38), TexId.FABRIC, 0.65);
 
   mb.addShadowDisc(7.5 * ts, 0, 13.5 * ts, 8.5, 8.5, 0.3);
   mb.addBeveledBox(7.5 * ts, 0.5, 13.5 * ts, 14.5, 5.2, 14.5, 0.9, rgb(68, 156, 124), TexId.FABRIC, 0.65);
-  mb.addBeveledBox(7.9 * ts, 5.2, 13.5 * ts, 4.2, 5.8, 14.5, 0.8, rgb(52, 134, 104), TexId.FABRIC, 0.65);
+  mb.addBeveledBox(7.9 * ts, 5.2, 13.5 * ts, 4.2, 7.3, 14.5, 0.8, rgb(52, 134, 104), TexId.FABRIC, 0.65);
 
   // 5. THE GRAND CHRISTMAS TREE! (cols 2..3, rows 14..16 => x: 48, z: 248)
   {

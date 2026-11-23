@@ -10666,13 +10666,13 @@
     const darkFabric = darkenColor(fabricColor, 0.84);
     mb.addBeveledBox(cx, 0.6, cz, w, 4.8, d, 0.9, fabricColor, TexId.FABRIC, 0.65);
     if (facing === "east") {
-      mb.addBeveledBox(cx - w * 0.34, 4.8, cz, w * 0.32, 6.2, d, 1, darkFabric, TexId.FABRIC, 0.65);
+      mb.addBeveledBox(cx - w * 0.34, 4.8, cz, w * 0.32, 7.7, d, 1, darkFabric, TexId.FABRIC, 0.65);
       mb.addTorus(cx + 1, 5.5, cz - d * 0.44, 2, 1.2, 10, 8, "x", darkFabric, TexId.FABRIC, 0.5);
       mb.addTorus(cx + 1, 5.5, cz + d * 0.44, 2, 1.2, 10, 8, "x", darkFabric, TexId.FABRIC, 0.5);
       mb.addSphere(cx + 0.5, 6.2, cz - d * 0.25, 1.8, 2.2, 3, 8, 10, pillowColor, TexId.FABRIC, 0.45);
       mb.addSphere(cx + 0.5, 6.2, cz + d * 0.25, 1.8, 2.2, 3, 8, 10, pillowColor, TexId.FABRIC, 0.45);
     } else {
-      mb.addBeveledBox(cx, 4.8, cz - d * 0.34, w, 6.2, d * 0.32, 1, darkFabric, TexId.FABRIC, 0.65);
+      mb.addBeveledBox(cx, 4.8, cz - d * 0.34, w, 7.7, d * 0.32, 1, darkFabric, TexId.FABRIC, 0.65);
       mb.addTorus(cx - w * 0.44, 5.5, cz + 1, 2, 1.2, 10, 8, "z", darkFabric, TexId.FABRIC, 0.5);
       mb.addTorus(cx + w * 0.44, 5.5, cz + 1, 2, 1.2, 10, 8, "z", darkFabric, TexId.FABRIC, 0.5);
       mb.addSphere(cx - w * 0.26, 6.2, cz + 0.5, 3.2, 2.2, 1.8, 8, 10, pillowColor, TexId.FABRIC, 0.45);
@@ -10986,10 +10986,10 @@
     addTuftedCouch3D(mb, 5.5 * ts, 11.5 * ts, 3 * ts - 2, 15, "south", rgb(214, 84, 58), rgb(248, 206, 68));
     mb.addShadowDisc(2.5 * ts, 0, 12.5 * ts, 8.5, 8.5, 0.3);
     mb.addBeveledBox(2.5 * ts, 0.5, 12.5 * ts, 14.5, 5.2, 14.5, 0.9, rgb(236, 178, 52), TexId.FABRIC, 0.65);
-    mb.addBeveledBox(2.1 * ts, 5.2, 12.5 * ts, 4.2, 5.8, 14.5, 0.8, rgb(214, 156, 38), TexId.FABRIC, 0.65);
+    mb.addBeveledBox(2.1 * ts, 5.2, 12.5 * ts, 4.2, 7.3, 14.5, 0.8, rgb(214, 156, 38), TexId.FABRIC, 0.65);
     mb.addShadowDisc(7.5 * ts, 0, 13.5 * ts, 8.5, 8.5, 0.3);
     mb.addBeveledBox(7.5 * ts, 0.5, 13.5 * ts, 14.5, 5.2, 14.5, 0.9, rgb(68, 156, 124), TexId.FABRIC, 0.65);
-    mb.addBeveledBox(7.9 * ts, 5.2, 13.5 * ts, 4.2, 5.8, 14.5, 0.8, rgb(52, 134, 104), TexId.FABRIC, 0.65);
+    mb.addBeveledBox(7.9 * ts, 5.2, 13.5 * ts, 4.2, 7.3, 14.5, 0.8, rgb(52, 134, 104), TexId.FABRIC, 0.65);
     {
       const tx = 3 * ts;
       const tz = 15.5 * ts;

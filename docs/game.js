@@ -4080,9 +4080,18 @@
       __publicField(this, "currentTrack", "peaceful_xmas");
       __publicField(this, "musicStep", 0);
       __publicField(this, "musicStepAccum", 0);
+      __publicField(this, "primedHardware", false);
+      __publicField(this, "silentHtmlAudio", null);
     }
     unlock() {
       if (typeof window === "undefined") return;
+      try {
+        const nav = window.navigator;
+        if (nav?.audioSession && nav.audioSession.type !== "playback") {
+          nav.audioSession.type = "playback";
+        }
+      } catch {
+      }
       if (!this.ctx) {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (!AudioCtx) return;
@@ -4093,9 +4102,44 @@
           this.ctx = null;
         }
       }
-      if (this.ctx && this.ctx.state === "suspended") {
-        this.ctx.resume().catch(() => {
-        });
+      if (!this.ctx) return;
+      if (this.ctx.state !== "running") {
+        try {
+          this.ctx.resume().catch(() => {
+          });
+        } catch {
+        }
+      }
+      if (!this.primedHardware || this.ctx.state !== "running") {
+        try {
+          const silentBuf = this.ctx.createBuffer(1, 1, 22050);
+          const src = this.ctx.createBufferSource();
+          src.buffer = silentBuf;
+          src.connect(this.ctx.destination);
+          src.start(0);
+          if (this.ctx.state === "running") {
+            this.primedHardware = true;
+          }
+        } catch {
+        }
+      }
+      if (!this.silentHtmlAudio && typeof Audio !== "undefined") {
+        try {
+          const a = new Audio(
+            "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"
+          );
+          a.volume = 0.01;
+          a.setAttribute("playsinline", "true");
+          this.silentHtmlAudio = a;
+          const p = a.play();
+          if (p && typeof p.catch === "function") {
+            p.catch(() => {
+              this.silentHtmlAudio = null;
+            });
+          }
+        } catch {
+          this.silentHtmlAudio = null;
+        }
       }
     }
     setupMasterChain() {
@@ -4175,7 +4219,15 @@
       }
     }
     triggerMusicStep(step, stepDur) {
-      if (!this.ctx || !this.masterGain || this.ctx.state !== "running") {
+      if (!this.ctx || !this.masterGain) {
+        return;
+      }
+      if (this.ctx.state !== "running") {
+        try {
+          this.ctx.resume().catch(() => {
+          });
+        } catch {
+        }
         return;
       }
       if (this.currentTrack === "peaceful_xmas") {
@@ -4651,9 +4703,23 @@
     const unlock = () => {
       soundManager.unlock();
     };
-    target.addEventListener("pointerdown", unlock, { passive: true });
-    target.addEventListener("keydown", unlock, { passive: true });
-    target.addEventListener("touchstart", unlock, { passive: true });
+    const opts = { capture: true, passive: true };
+    target.addEventListener("touchstart", unlock, opts);
+    target.addEventListener("touchend", unlock, opts);
+    target.addEventListener("pointerdown", unlock, opts);
+    target.addEventListener("pointerup", unlock, opts);
+    target.addEventListener("mousedown", unlock, opts);
+    target.addEventListener("click", unlock, opts);
+    target.addEventListener("keydown", unlock, opts);
+    target.addEventListener("pageshow", unlock);
+    target.addEventListener("focus", unlock);
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          soundManager.unlock();
+        }
+      });
+    }
   }
   var snapshots = /* @__PURE__ */ new WeakMap();
   function getOrCreateSnapshot(state) {
@@ -5153,7 +5219,8 @@
     return out;
   }
   function mat4LookAt(eye, target, up) {
-    const zAxis = normalize3(sub3(eye, target));
+    const diff = sub3(eye, target);
+    const zAxis = length3(diff) < 1e-5 ? { x: 0, y: 0, z: 1 } : normalize3(diff);
     let xAxis = cross3(up, zAxis);
     if (length3(xAxis) < 1e-5) {
       xAxis = { x: 1, y: 0, z: 0 };
@@ -5377,10 +5444,10 @@
     }
     let unobstructedDistance = 0;
     if (furthestValidIndex >= 0) {
-      const furthestPoint = lineOfSight.points(furthestValidIndex);
+      const furthestBox = lineOfSight.boxes[furthestValidIndex];
       const horizontalDist = Math.hypot(
-        furthestPoint.x - originX,
-        furthestPoint.y - originZ
+        furthestBox.x - originX,
+        furthestBox.y - originZ
       );
       const paddedHorizontalDist = furthestValidIndex < CAMERA_LOS_POINTS - 1 ? Math.max(0, horizontalDist - 4) : horizontalDist;
       unobstructedDistance = Math.min(
@@ -5552,13 +5619,22 @@
     const targetDistanceScale = wantsShoulderOffset ? 0.55 : 1;
     cam.equippedDistanceScale = (cam.equippedDistanceScale ?? 1) + (targetDistanceScale - (cam.equippedDistanceScale ?? 1)) * shoulderBlend;
     const scaledMaxDistance = maxCameraDistance * cam.equippedDistanceScale;
-    const maxSafeShoulder = state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01 ? cam.shoulderOffset : computeUnobstructedCameraDistance(
-      cam.target.x,
-      cam.target.z,
-      cam.yaw - Math.PI / 2,
-      0,
+    const unshiftedTargetX = cam.target.x;
+    const unshiftedTargetZ = cam.target.z;
+    const SHOULDER_WALL_MARGIN = 0.5;
+    const maxSafeShoulder = state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01 ? cam.shoulderOffset : Math.min(
       cam.shoulderOffset,
-      state.map
+      Math.max(
+        0,
+        computeUnobstructedCameraDistance(
+          unshiftedTargetX,
+          unshiftedTargetZ,
+          cam.yaw - Math.PI / 2,
+          0,
+          cam.shoulderOffset + SHOULDER_WALL_MARGIN,
+          state.map
+        ) - SHOULDER_WALL_MARGIN
+      )
     );
     if (maxSafeShoulder > 0.01) {
       const rightX = -Math.sin(cam.yaw);
@@ -5571,7 +5647,7 @@
       Math.min(1, (cam.shoulderOffset ?? 0) / 10.3125)
     );
     cam.target.y += 1.3 * equippedVerticalRatio;
-    const baseEffectiveDistance = state.isOnRoof || state.climbing ? scaledMaxDistance : computeUnobstructedCameraDistance(
+    let baseEffectiveDistance = state.isOnRoof || state.climbing ? scaledMaxDistance : computeUnobstructedCameraDistance(
       cam.target.x,
       cam.target.z,
       cam.yaw,
@@ -5579,6 +5655,21 @@
       scaledMaxDistance,
       state.map
     );
+    if (!state.isOnRoof && !state.climbing && maxSafeShoulder > 0.01 && baseEffectiveDistance < 6) {
+      const centerDistance = computeUnobstructedCameraDistance(
+        unshiftedTargetX,
+        unshiftedTargetZ,
+        cam.yaw,
+        cam.pitch,
+        scaledMaxDistance,
+        state.map
+      );
+      if (centerDistance > baseEffectiveDistance) {
+        baseEffectiveDistance = centerDistance;
+        cam.target.x = unshiftedTargetX;
+        cam.target.z = unshiftedTargetZ;
+      }
+    }
     const effectiveDistance = baseEffectiveDistance * (1 - 0.42 * zoomEase);
     cam.distance = effectiveDistance;
     let eyeX = cam.target.x + backX * effectiveDistance;
@@ -5591,6 +5682,14 @@
       }
     } else {
       eyeY = Math.min(eyeY, INDOOR_WALL_HEIGHT - 3.2);
+    }
+    const MIN_FORWARD_LOOK_DISTANCE = 8;
+    if (effectiveDistance < MIN_FORWARD_LOOK_DISTANCE) {
+      cam.target = {
+        x: eyeX - backX * MIN_FORWARD_LOOK_DISTANCE,
+        y: eyeY - backY * MIN_FORWARD_LOOK_DISTANCE,
+        z: eyeZ - backZ * MIN_FORWARD_LOOK_DISTANCE
+      };
     }
     cam.eye = { x: eyeX, y: eyeY, z: eyeZ };
     cam.viewMatrix = mat4LookAt(cam.eye, cam.target, cam.up);

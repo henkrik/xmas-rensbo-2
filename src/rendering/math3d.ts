@@ -128,7 +128,9 @@ export function mat4Perspective(
 }
 
 export function mat4LookAt(eye: Vec3, target: Vec3, up: Vec3): Mat4 {
-  const zAxis = normalize3(sub3(eye, target)); // points backward from target to eye
+  const diff = sub3(eye, target);
+  const zAxis =
+    length3(diff) < 1e-5 ? { x: 0, y: 0, z: 1 } : normalize3(diff); // points backward from target to eye
   let xAxis = cross3(up, zAxis);
   if (length3(xAxis) < 1e-5) {
     xAxis = { x: 1, y: 0, z: 0 };
@@ -491,10 +493,10 @@ export function computeUnobstructedCameraDistance(
 
   let unobstructedDistance = 0;
   if (furthestValidIndex >= 0) {
-    const furthestPoint = lineOfSight.points(furthestValidIndex);
+    const furthestBox = lineOfSight.boxes[furthestValidIndex];
     const horizontalDist = Math.hypot(
-      furthestPoint.x - originX,
-      furthestPoint.y - originZ
+      furthestBox.x - originX,
+      furthestBox.y - originZ
     );
     // Keep a small wall clearance buffer when an obstacle was hit so the camera near-plane never clips the wall
     const paddedHorizontalDist =
@@ -753,16 +755,25 @@ export function updateCamera3D(
     (cam.equippedDistanceScale ?? 1) +
     (targetDistanceScale - (cam.equippedDistanceScale ?? 1)) * shoulderBlend;
   const scaledMaxDistance = maxCameraDistance * cam.equippedDistanceScale;
+  const unshiftedTargetX = cam.target.x;
+  const unshiftedTargetZ = cam.target.z;
+  const SHOULDER_WALL_MARGIN = 0.5;
   const maxSafeShoulder =
     state.isOnRoof || state.climbing || cam.shoulderOffset <= 0.01
       ? cam.shoulderOffset
-      : computeUnobstructedCameraDistance(
-          cam.target.x,
-          cam.target.z,
-          cam.yaw - Math.PI / 2,
-          0,
+      : Math.min(
           cam.shoulderOffset,
-          state.map
+          Math.max(
+            0,
+            computeUnobstructedCameraDistance(
+              unshiftedTargetX,
+              unshiftedTargetZ,
+              cam.yaw - Math.PI / 2,
+              0,
+              cam.shoulderOffset + SHOULDER_WALL_MARGIN,
+              state.map
+            ) - SHOULDER_WALL_MARGIN
+          )
         );
   if (maxSafeShoulder > 0.01) {
     const rightX = -Math.sin(cam.yaw);
@@ -778,7 +789,7 @@ export function updateCamera3D(
 
   // Compute unobstructed camera distance in [0, scaledMaxDistance] using a temporary LineOfSight.
   // Skip when on the roof or climbing the ladder since roof/house tiles beneath Santa are solid in the 2D map.
-  const baseEffectiveDistance =
+  let baseEffectiveDistance =
     state.isOnRoof || state.climbing
       ? scaledMaxDistance
       : computeUnobstructedCameraDistance(
@@ -789,6 +800,28 @@ export function updateCamera3D(
           scaledMaxDistance,
           state.map
         );
+  // If the right-shoulder offset pushed the ray origin into a nearby wall/corner while Santa's center
+  // has clear room behind him, fall back to the unshifted center so the camera doesn't collapse into Santa.
+  if (
+    !state.isOnRoof &&
+    !state.climbing &&
+    maxSafeShoulder > 0.01 &&
+    baseEffectiveDistance < 6.0
+  ) {
+    const centerDistance = computeUnobstructedCameraDistance(
+      unshiftedTargetX,
+      unshiftedTargetZ,
+      cam.yaw,
+      cam.pitch,
+      scaledMaxDistance,
+      state.map
+    );
+    if (centerDistance > baseEffectiveDistance) {
+      baseEffectiveDistance = centerDistance;
+      cam.target.x = unshiftedTargetX;
+      cam.target.z = unshiftedTargetZ;
+    }
+  }
   const effectiveDistance = baseEffectiveDistance * (1 - 0.42 * zoomEase);
   cam.distance = effectiveDistance;
 
@@ -804,6 +837,17 @@ export function updateCamera3D(
     }
   } else {
     eyeY = Math.min(eyeY, INDOOR_WALL_HEIGHT - 3.2);
+  }
+
+  // If a wall forces the camera very close to (or inside) Santa, project the look target forward
+  // from the camera eye along the expected forward viewing direction so it never looks down at the ground.
+  const MIN_FORWARD_LOOK_DISTANCE = 8.0;
+  if (effectiveDistance < MIN_FORWARD_LOOK_DISTANCE) {
+    cam.target = {
+      x: eyeX - backX * MIN_FORWARD_LOOK_DISTANCE,
+      y: eyeY - backY * MIN_FORWARD_LOOK_DISTANCE,
+      z: eyeZ - backZ * MIN_FORWARD_LOOK_DISTANCE,
+    };
   }
 
   cam.eye = { x: eyeX, y: eyeY, z: eyeZ };

@@ -156,9 +156,26 @@ class SoundManager {
   private currentTrack: MusicTrackId = 'peaceful_xmas';
   private musicStep = 0;
   private musicStepAccum = 0;
+  private primedHardware = false;
+  private silentHtmlAudio: HTMLAudioElement | null = null;
 
   public unlock(): void {
     if (typeof window === 'undefined') return;
+
+    // 1. Switch iOS Safari 16.4+/17+ audio session from 'ambient' (muted by hardware Silent switch)
+    // to 'playback' so volume buttons always produce audio even if the iPhone ringer switch is on Silent.
+    try {
+      const nav = window.navigator as Navigator & {
+        audioSession?: { type?: string };
+      };
+      if (nav?.audioSession && nav.audioSession.type !== 'playback') {
+        nav.audioSession.type = 'playback';
+      }
+    } catch {
+      // Ignore on browsers that don't support navigator.audioSession
+    }
+
+    // 2. Create AudioContext on first user gesture
     if (!this.ctx) {
       const AudioCtx =
         window.AudioContext ||
@@ -172,8 +189,53 @@ class SoundManager {
         this.ctx = null;
       }
     }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
+    if (!this.ctx) return;
+
+    // 3. Resume from both 'suspended' and iOS Safari's non-standard 'interrupted' state
+    if ((this.ctx.state as string) !== 'running') {
+      try {
+        this.ctx.resume().catch(() => {});
+      } catch {
+        // Ignore resume errors outside gesture
+      }
+    }
+
+    // 4. Synchronously start a 1-sample silent AudioBufferSourceNode inside the user gesture
+    // to wake up iOS WebKit's hardware audio output pipeline.
+    if (!this.primedHardware || (this.ctx.state as string) !== 'running') {
+      try {
+        const silentBuf = this.ctx.createBuffer(1, 1, 22050);
+        const src = this.ctx.createBufferSource();
+        src.buffer = silentBuf;
+        src.connect(this.ctx.destination);
+        src.start(0);
+        if ((this.ctx.state as string) === 'running') {
+          this.primedHardware = true;
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    // 5. Fallback for iOS versions without navigator.audioSession: play a tiny silent HTML5 <audio>
+    // WAV clip once during a user gesture to promote WebKit's AVAudioSession category to media playback.
+    if (!this.silentHtmlAudio && typeof Audio !== 'undefined') {
+      try {
+        const a = new Audio(
+          'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
+        );
+        a.volume = 0.01;
+        a.setAttribute('playsinline', 'true');
+        this.silentHtmlAudio = a;
+        const p = a.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => {
+            this.silentHtmlAudio = null;
+          });
+        }
+      } catch {
+        this.silentHtmlAudio = null;
+      }
     }
   }
 
@@ -274,7 +336,15 @@ class SoundManager {
   }
 
   private triggerMusicStep(step: number, stepDur: number): void {
-    if (!this.ctx || !this.masterGain || this.ctx.state !== 'running') {
+    if (!this.ctx || !this.masterGain) {
+      return;
+    }
+    if ((this.ctx.state as string) !== 'running') {
+      try {
+        this.ctx.resume().catch(() => {});
+      } catch {
+        // Ignore
+      }
       return;
     }
 
@@ -825,9 +895,25 @@ export function attachAudioUnlockListeners(target: Window): void {
   const unlock = () => {
     soundManager.unlock();
   };
-  target.addEventListener('pointerdown', unlock, { passive: true });
-  target.addEventListener('keydown', unlock, { passive: true });
-  target.addEventListener('touchstart', unlock, { passive: true });
+  // Use capture: true so stopPropagation() on mobile buttons/joysticks never prevents audio unlock,
+  // and listen to touchend/click/pointerup as well since iOS Safari often requires gesture completion.
+  const opts = { capture: true, passive: true } as const;
+  target.addEventListener('touchstart', unlock, opts);
+  target.addEventListener('touchend', unlock, opts);
+  target.addEventListener('pointerdown', unlock, opts);
+  target.addEventListener('pointerup', unlock, opts);
+  target.addEventListener('mousedown', unlock, opts);
+  target.addEventListener('click', unlock, opts);
+  target.addEventListener('keydown', unlock, opts);
+  target.addEventListener('pageshow', unlock);
+  target.addEventListener('focus', unlock);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        soundManager.unlock();
+      }
+    });
+  }
 }
 
 interface AudioObserverSnapshot {

@@ -2466,6 +2466,29 @@ Tanja -> Alex
     input.cameraYaw = -Math.PI / 2;
     updateCamera3D(cam, state, input, 0.016, 256 / 224);
     expect(cam.distance).toBeCloseTo(52, 0);
+
+    // Even when backed directly against a wall so effectiveDistance is 0, camera still aims forward (not down at the ground)
+    state.player.x = 10 * TILE_SIZE;
+    state.player.y = 10 * TILE_SIZE + 1; // Flush against main house south wall
+    input.cameraYaw = Math.PI / 2; // Looking South, wall immediately behind
+    input.cameraPitch = 0.42;
+    updateCamera3D(cam, state, input, 0.016, 256 / 224);
+    const lookDx = cam.target.x - cam.eye.x;
+    const lookDy = cam.target.y - cam.eye.y;
+    const lookDz = cam.target.z - cam.eye.z;
+    const lookLen = Math.hypot(lookDx, lookDy, lookDz);
+    expect(lookLen).toBeGreaterThan(1);
+    // Looking South (+Z): horizontal forward component (lookDz / lookLen) must be strongly positive (~cos(0.42) = 0.91)
+    expect(lookDz / lookLen).toBeCloseTo(Math.cos(0.42), 2);
+    expect(lookDy / lookLen).toBeCloseTo(-Math.sin(0.42), 2);
+
+    // Standing with a wall ~11px to the right while holding a weapon does not collapse camera distance to 0
+    state.player.equippedItem = 'uzi';
+    state.player.x = 10 * TILE_SIZE;
+    state.player.y = 10 * TILE_SIZE + 5; // Wall is to the North (-Z), 11px from player center
+    input.cameraYaw = Math.PI; // Facing West (-X) -> right shoulder is North (-Z) toward the house wall, behind is East (+X, open)
+    updateCamera3D(cam, state, input, 1.0, 256 / 224);
+    expect(cam.distance).toBeGreaterThan(15);
   });
 
   it('builds 2-tile-high indoor walls with ceilings and keeps indoor camera under the ceiling', () => {

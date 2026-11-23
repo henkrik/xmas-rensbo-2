@@ -5242,11 +5242,13 @@ describe('Hostile armored headcrab cat', () => {
     sfxState.player.yaw = 0;
 
     selectPlayerEquipmentSlot(sfxState.player, 3);
+    sfxState.player.uziAmmo = 1;
     applyKeyEvent(sfxInput, 'Space', true);
     updateGameState(sfxState, sfxInput, 0.02);
     applyKeyEvent(sfxInput, 'Space', false);
     expect(soundManager.getRecentEvents()).toContain('weapon_switch');
     expect(soundManager.getRecentEvents()).toContain('uzi_fire');
+    expect(soundManager.getRecentEvents()).toContain('uzi_reload');
 
     selectPlayerEquipmentSlot(sfxState.player, 4);
     applyKeyEvent(sfxInput, 'Space', true);

@@ -5641,9 +5641,17 @@
           this.playNoise({ duration: 0.05, gain: 0.18, filterType: "bandpass", freq: 1900, freqEnd: 750, q: 1.1 });
           break;
         case "uzi_reload":
-          this.playTone({ type: "square", freq: 920, freqEnd: 480, duration: 0.03, gain: 0.12 });
-          this.playTone({ type: "square", freq: 540, freqEnd: 1120, duration: 0.035, gain: 0.13, delaySeconds: 0.22 });
-          this.playNoise({ duration: 0.055, gain: 0.12, filterType: "bandpass", freq: 2400, q: 2, delaySeconds: 0.42 });
+          this.playTone({ type: "square", freq: 1680, freqEnd: 720, duration: 0.045, gain: 0.2, delaySeconds: 0.08 });
+          this.playTone({ type: "sawtooth", freq: 580, freqEnd: 210, duration: 0.14, gain: 0.18, filterFreq: 1600, delaySeconds: 0.11 });
+          this.playNoise({ duration: 0.13, gain: 0.18, filterType: "bandpass", freq: 1900, freqEnd: 850, q: 1.8, delaySeconds: 0.11 });
+          this.playTone({ type: "triangle", freq: 155, freqEnd: 58, duration: 0.085, gain: 0.26, delaySeconds: 0.52 });
+          this.playTone({ type: "square", freq: 880, freqEnd: 1980, duration: 0.06, gain: 0.22, delaySeconds: 0.57, sendEcho: true });
+          this.playNoise({ duration: 0.07, gain: 0.2, filterType: "bandpass", freq: 2400, q: 2.2, delaySeconds: 0.57 });
+          this.playNoise({ duration: 0.11, gain: 0.22, filterType: "bandpass", freq: 1500, freqEnd: 2800, q: 1.6, delaySeconds: 0.96 });
+          this.playTone({ type: "sawtooth", freq: 620, freqEnd: 1280, duration: 0.095, gain: 0.18, filterFreq: 2600, delaySeconds: 0.96 });
+          this.playNoise({ duration: 0.1, gain: 0.25, filterType: "bandpass", freq: 2900, freqEnd: 1100, q: 1.5, delaySeconds: 1.12, sendEcho: true });
+          this.playTone({ type: "square", freq: 1420, freqEnd: 340, duration: 0.08, gain: 0.24, delaySeconds: 1.12 });
+          this.playN64BellNote(1760, 0.14, 0.15, 1.38);
           break;
         case "no_ammo":
           this.playTone({ type: "square", freq: 2400, freqEnd: 1100, duration: 0.02, gain: 0.11 });
@@ -8502,6 +8510,7 @@
     player.uziAmmo = Math.max(0, player.uziAmmo - 1);
     if (player.uziAmmo <= 0) {
       player.uziReloadTimer = PLAYER_UZI_RELOAD_SECONDS;
+      playSound("uzi_reload", 0.01);
       debugLog("Reloading Uzi...");
     }
   }

@@ -2260,6 +2260,7 @@ function fireUziProjectile(state: GameState): void {
 
   if (player.uziAmmo <= 0) {
     player.uziReloadTimer = PLAYER_UZI_RELOAD_SECONDS;
+    playSound('uzi_reload', 0.01);
     debugLog('Reloading Uzi...');
   }
 }

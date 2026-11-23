@@ -1244,6 +1244,24 @@ describe('Player walking & 2x Rensbo map layout', () => {
       applyKeyEvent(input, 'Space', true);
       updateGameState(state, input, 0.01);
       applyKeyEvent(input, 'Space', false);
+      if (doorId === 'upstairs-shower-door') {
+        // Opening a door puts weapons on a 0.25s cooldown
+        state.player.unlockedUzi = true;
+        state.player.equippedItem = 'uzi';
+        state.player.uziAmmo = 30;
+        state.player.uziFireCooldown = 0;
+        state.projectiles = [];
+        applyKeyEvent(input, 'Space', true);
+        updateGameState(state, input, 0.2);
+        applyKeyEvent(input, 'Space', false);
+        expect(state.projectiles.length).toBe(0);
+        updateGameState(state, input, 0.06);
+        applyKeyEvent(input, 'Space', true);
+        updateGameState(state, input, 0.02);
+        applyKeyEvent(input, 'Space', false);
+        expect(state.projectiles.length).toBe(1);
+        state.projectiles = [];
+      }
       // Dismiss Anne-Marie's first-time hostile dialogue if triggered when opening bedroom door
       while (state.activeDialogue) {
         advanceDialogue(state, input);
@@ -4240,33 +4258,100 @@ Tanja -> Alex
     expect(state.medkits.some((m) => m.id === 'olexa-drop-medkit')).toBe(true);
     expect(buildDynamicSceneMeshes(state, 40).opaque.vertexCount).toBeGreaterThan(0);
 
-    // Player hit by NPC flamethrower flame temporarily turns charred black & takes 4x bullet damage
+    // Player hit by NPC flamethrower flame: 10 HP on ignition (non-burning -> burning),
+    // 5 HP/sec for 3s, 4x Uzi spread while burnt, and re-hitting resets timer without extra instant damage
     expect(state.playerCharredTimer).toBe(0);
+    basement.arjanCombat.mode = 'dead';
+    basement.hanneloesCombat.mode = 'dead';
     state.medkits = [];
     state.projectiles = [];
     state.player.health = MAX_PLAYER_HEALTH;
     const hpBeforeFlame = state.player.health;
-    state.projectiles.push({
-      kind: 'fireball',
-      owner: 'npc',
-      sourceNpcKey: 'upstairs:Tanja',
-      x: state.player.x + state.player.width * 0.5,
-      y: state.player.y + state.player.height * 0.5,
-      z: 9.5,
-      vx: 0,
-      vy: 0,
-      vz: 0,
-      yaw: 0,
-      distanceTraveled: 0,
-    });
+    const spawnNpcFlameOnPlayer = () => {
+      state.projectiles.push({
+        kind: 'fireball',
+        owner: 'npc',
+        sourceNpcKey: 'upstairs:Tanja',
+        x: state.player.x + state.player.width * 0.5,
+        y: state.player.y + state.player.height * 0.5,
+        z: 9.5,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        yaw: 0,
+        distanceTraveled: 0,
+      });
+    };
+    spawnNpcFlameOnPlayer();
     updateGameState(state, input, 0.02);
-    expect(state.playerCharredTimer).toBeGreaterThan(0);
-    expect(hpBeforeFlame - state.player.health).toBe(
-      NPC_UZI_BULLET_DAMAGE * 2 * PLAYER_DAMAGE_MULTIPLIER
+    expect(state.playerCharredTimer).toBeCloseTo(3.0, 2);
+    expect(hpBeforeFlame - state.player.health).toBeCloseTo(
+      10 * PLAYER_DAMAGE_MULTIPLIER,
+      4
     );
     expect(buildDynamicSceneMeshes(state, 40).opaque.vertexCount).toBeGreaterThan(0);
-    updateGameState(state, input, 2.1);
+
+    // While burnt, Uzi bullet spread is 4x (+40 deg at Math.random() = 1)
+    const origRandomBurn = Math.random;
+    try {
+      Math.random = () => 1;
+      state.projectiles = [];
+      state.player.unlockedUzi = true;
+      state.player.equippedItem = 'uzi';
+      state.player.uziAmmo = 30;
+      state.player.uziFireCooldown = 0;
+      state.player.yaw = 0;
+      applyKeyEvent(input, 'Space', true);
+      updateGameState(state, input, 0.02);
+      applyKeyEvent(input, 'Space', false);
+      const burntBullet = state.projectiles.find((p) => p.kind === 'bullet');
+      expect(burntBullet).toBeDefined();
+      expect(burntBullet!.yaw).toBeCloseTo((40 * Math.PI) / 180, 4);
+      state.projectiles = [];
+    } finally {
+      Math.random = origRandomBurn;
+    }
+
+    // Wait 1.0s (takes 5 HP/sec * 1.0s * PLAYER_DAMAGE_MULTIPLIER), then hit again -> no extra instant damage, resets timer to 3.0s
+    const hpBeforeSecondHit = state.player.health;
+    updateGameState(state, input, 1.0);
+    expect(hpBeforeSecondHit - state.player.health).toBeCloseTo(
+      5 * 1.0 * PLAYER_DAMAGE_MULTIPLIER,
+      4
+    );
+    const hpRightBeforeReignite = state.player.health;
+    spawnNpcFlameOnPlayer();
+    updateGameState(state, input, 0.02);
+    expect(state.playerCharredTimer).toBeCloseTo(3.0, 2);
+    // Only 0.02s of burn DoT applied (no extra 10 HP ignition damage)
+    expect(hpRightBeforeReignite - state.player.health).toBeCloseTo(
+      5 * 0.02 * PLAYER_DAMAGE_MULTIPLIER,
+      4
+    );
+
+    // Let full 3.0s burn finish -> takes remaining 5 * 3.0 * PLAYER_DAMAGE_MULTIPLIER and returns spread to normal
+    const hpBeforeFullBurn = state.player.health;
+    updateGameState(state, input, 3.1);
     expect(state.playerCharredTimer).toBe(0);
+    expect(hpBeforeFullBurn - state.player.health).toBeCloseTo(
+      5 * 3.0 * PLAYER_DAMAGE_MULTIPLIER,
+      4
+    );
+    try {
+      Math.random = () => 1;
+      state.projectiles = [];
+      state.player.uziFireCooldown = 0;
+      state.player.yaw = 0;
+      applyKeyEvent(input, 'Space', true);
+      updateGameState(state, input, 0.02);
+      applyKeyEvent(input, 'Space', false);
+      const unburntBullet = state.projectiles.find((p) => p.kind === 'bullet');
+      expect(unburntBullet).toBeDefined();
+      expect(unburntBullet!.yaw).toBeCloseTo((10 * Math.PI) / 180, 4);
+      state.projectiles = [];
+    } finally {
+      Math.random = origRandomBurn;
+    }
 
     // 3. Defeating Anne-Marie (500 HP) upstairs drops her katana sword which the player picks up (slot 5) and can swing
     const upState = createGameState({

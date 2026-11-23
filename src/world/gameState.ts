@@ -315,6 +315,7 @@ export interface GameState {
   damageFlashTimer: number;
   fireFlashTimer: number;
   playerCharredTimer: number;
+  weaponInteractionCooldown: number;
   houseExploding: boolean;
   houseExplosionTimer: number;
   houseExplosionSpawnAccum: number;
@@ -647,6 +648,7 @@ export function createGameState(
     damageFlashTimer: 0,
     fireFlashTimer: 0,
     playerCharredTimer: 0,
+    weaponInteractionCooldown: 0,
     houseExploding: false,
     houseExplosionTimer: 0,
     houseExplosionSpawnAccum: 0,
@@ -694,10 +696,12 @@ export function restartFromBasementCheckpoint(state: GameState): void {
 
 export const DAMAGE_FLASH_DURATION_SECONDS = 0.3;
 export const FIRE_FLASH_DURATION_SECONDS = 0.08;
-export const PLAYER_CHARRED_DURATION_SECONDS = 2.0;
+export const PLAYER_CHARRED_DURATION_SECONDS = 3.0;
 export const DIALOGUE_ADVANCE_LOCK_SECONDS = 0.5;
+export const INTERACTION_WEAPON_COOLDOWN_SECONDS = 0.25;
 export const BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 40;
-export const NPC_FLAMETHROWER_PLAYER_DAMAGE = NPC_UZI_BULLET_DAMAGE * 2;
+export const NPC_FLAMETHROWER_PLAYER_DAMAGE = 10;
+export const PLAYER_BURN_DAMAGE_PER_SECOND = 5;
 
 export function damagePlayer(state: GameState, amount: number): void {
   applyPlayerDamage(state.player, amount);
@@ -1925,8 +1929,11 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
           if (isRocket) {
             detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, 'npc');
           } else if (isFireball) {
+            const wasBurning = state.playerCharredTimer > 0;
             state.playerCharredTimer = PLAYER_CHARRED_DURATION_SECONDS;
-            damagePlayer(state, NPC_FLAMETHROWER_PLAYER_DAMAGE);
+            if (!wasBurning) {
+              damagePlayer(state, NPC_FLAMETHROWER_PLAYER_DAMAGE);
+            }
           } else {
             damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
           }
@@ -2267,7 +2274,8 @@ function fireUziProjectile(state: GameState): void {
   const isCatLatched =
     state.currentLevelId === 'level-upstairs' &&
     state.levels['level-upstairs'].cat.mode === 'latched';
-  const spreadMult = isCatLatched ? 4 : 1;
+  const isPlayerBurnt = state.playerCharredTimer > 0;
+  const spreadMult = isCatLatched || isPlayerBurnt ? 4 : 1;
   const yawSpread =
     (Math.random() * 2 - 1) * ((10 * Math.PI) / 180) * spreadMult;
   const shotYaw = aimYaw + yawSpread;
@@ -2420,9 +2428,19 @@ function updateGameStateCore(
     state.fireFlashTimer = Math.max(0, state.fireFlashTimer - dtSeconds);
   }
   if (state.playerCharredTimer > 0) {
+    const burnDt = Math.min(dtSeconds, state.playerCharredTimer);
     state.playerCharredTimer = Math.max(
       0,
       state.playerCharredTimer - dtSeconds
+    );
+    if (!state.activeDialogue && !state.gameOver && burnDt > 0) {
+      damagePlayer(state, PLAYER_BURN_DAMAGE_PER_SECOND * burnDt);
+    }
+  }
+  if (state.weaponInteractionCooldown > 0) {
+    state.weaponInteractionCooldown = Math.max(
+      0,
+      state.weaponInteractionCooldown - dtSeconds
     );
   }
   if (
@@ -2948,6 +2966,7 @@ function updateGameStateCore(
         state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
         state.player.uziFireCooldown = 0;
         state.player.punchTimer = 0;
+        state.weaponInteractionCooldown = INTERACTION_WEAPON_COOLDOWN_SECONDS;
         debugLog(
           `Swapped Uzi on floor (${prevPlayerAmmo} <-> ${floorAmmo} rounds)`
         );
@@ -2958,6 +2977,7 @@ function updateGameStateCore(
 
   if (actionPressed && state.nearbyInteractable) {
     const target = state.nearbyInteractable;
+    state.weaponInteractionCooldown = INTERACTION_WEAPON_COOLDOWN_SECONDS;
     if (state.currentLevelId === 'level-outside') {
       syncOutsideToLevel(state);
     }
@@ -2991,11 +3011,14 @@ function updateGameStateCore(
   // Mobile-only auto-aim toward closest hostile NPC in field of view when right joystick is idle
   applyMobileAutoAim(state, input, dtSeconds);
 
+  const weaponsReady = state.weaponInteractionCooldown <= 1e-6;
   if (state.player.equippedItem === 'empty') {
     if (actionPressed && !state.nearbyInteractable) {
       // No interactable Action available while empty-handed: Space triggers a 3D half-tile jump animation
       triggerPlayerJump(state.player);
     }
+  } else if (!weaponsReady) {
+    // Weapons are on 0.25s cooldown after opening doors or interacting with things
   } else if (state.player.equippedItem === 'unarmed') {
     if (attackPressed || (!state.nearbyInteractable && actionPressed)) {
       if (triggerPlayerPunch(state.player)) {

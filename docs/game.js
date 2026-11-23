@@ -7266,6 +7266,7 @@
       damageFlashTimer: 0,
       fireFlashTimer: 0,
       playerCharredTimer: 0,
+      weaponInteractionCooldown: 0,
       houseExploding: false,
       houseExplosionTimer: 0,
       houseExplosionSpawnAccum: 0,
@@ -7309,10 +7310,12 @@
   }
   var DAMAGE_FLASH_DURATION_SECONDS = 0.3;
   var FIRE_FLASH_DURATION_SECONDS = 0.08;
-  var PLAYER_CHARRED_DURATION_SECONDS = 2;
+  var PLAYER_CHARRED_DURATION_SECONDS = 3;
   var DIALOGUE_ADVANCE_LOCK_SECONDS = 0.5;
+  var INTERACTION_WEAPON_COOLDOWN_SECONDS = 0.25;
   var BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 40;
-  var NPC_FLAMETHROWER_PLAYER_DAMAGE = NPC_UZI_BULLET_DAMAGE * 2;
+  var NPC_FLAMETHROWER_PLAYER_DAMAGE = 10;
+  var PLAYER_BURN_DAMAGE_PER_SECOND = 5;
   function damagePlayer(state, amount) {
     applyPlayerDamage(state.player, amount);
     if (amount > 0) {
@@ -8307,8 +8310,11 @@
             if (isRocket) {
               detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, "npc");
             } else if (isFireball) {
+              const wasBurning = state.playerCharredTimer > 0;
               state.playerCharredTimer = PLAYER_CHARRED_DURATION_SECONDS;
-              damagePlayer(state, NPC_FLAMETHROWER_PLAYER_DAMAGE);
+              if (!wasBurning) {
+                damagePlayer(state, NPC_FLAMETHROWER_PLAYER_DAMAGE);
+              }
             } else {
               damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
             }
@@ -8561,7 +8567,8 @@
     const onRoof = state.currentLevelId === "level-outside" && state.isOnRoof;
     const groundZ = onRoof ? getMainHouseRoofElevation(cx, cy) : getTerrainHeight(cx, cy, state.currentLevelId);
     const isCatLatched = state.currentLevelId === "level-upstairs" && state.levels["level-upstairs"].cat.mode === "latched";
-    const spreadMult = isCatLatched ? 4 : 1;
+    const isPlayerBurnt = state.playerCharredTimer > 0;
+    const spreadMult = isCatLatched || isPlayerBurnt ? 4 : 1;
     const yawSpread = (Math.random() * 2 - 1) * (10 * Math.PI / 180) * spreadMult;
     const shotYaw = aimYaw + yawSpread;
     const pitchSpread = (Math.random() * 2 - 1) * (5 * Math.PI / 180) * spreadMult;
@@ -8676,9 +8683,19 @@
       state.fireFlashTimer = Math.max(0, state.fireFlashTimer - dtSeconds);
     }
     if (state.playerCharredTimer > 0) {
+      const burnDt = Math.min(dtSeconds, state.playerCharredTimer);
       state.playerCharredTimer = Math.max(
         0,
         state.playerCharredTimer - dtSeconds
+      );
+      if (!state.activeDialogue && !state.gameOver && burnDt > 0) {
+        damagePlayer(state, PLAYER_BURN_DAMAGE_PER_SECOND * burnDt);
+      }
+    }
+    if (state.weaponInteractionCooldown > 0) {
+      state.weaponInteractionCooldown = Math.max(
+        0,
+        state.weaponInteractionCooldown - dtSeconds
       );
     }
     if (state.cheatMode && state.player.uziDepleted && state.player.uziCheatRefillTimer > 0) {
@@ -9102,6 +9119,7 @@
           state.player.uziEquipTimer = UZI_EQUIP_DURATION_SECONDS;
           state.player.uziFireCooldown = 0;
           state.player.punchTimer = 0;
+          state.weaponInteractionCooldown = INTERACTION_WEAPON_COOLDOWN_SECONDS;
           debugLog(
             `Swapped Uzi on floor (${prevPlayerAmmo} <-> ${floorAmmo} rounds)`
           );
@@ -9111,6 +9129,7 @@
     }
     if (actionPressed && state.nearbyInteractable) {
       const target = state.nearbyInteractable;
+      state.weaponInteractionCooldown = INTERACTION_WEAPON_COOLDOWN_SECONDS;
       if (state.currentLevelId === "level-outside") {
         syncOutsideToLevel(state);
       }
@@ -9136,10 +9155,12 @@
       return;
     }
     applyMobileAutoAim(state, input, dtSeconds);
+    const weaponsReady = state.weaponInteractionCooldown <= 1e-6;
     if (state.player.equippedItem === "empty") {
       if (actionPressed && !state.nearbyInteractable) {
         triggerPlayerJump(state.player);
       }
+    } else if (!weaponsReady) {
     } else if (state.player.equippedItem === "unarmed") {
       if (attackPressed || !state.nearbyInteractable && actionPressed) {
         if (triggerPlayerPunch(state.player)) {

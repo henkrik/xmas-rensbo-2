@@ -494,8 +494,11 @@ class SoundManager {
         this.playNoise({ duration: 0.03, gain: 0.09, filterType: 'highpass', freq: 2200, delaySeconds: 0.025 });
         break;
       case 'uzi_fire':
-        this.playTone({ type: 'sawtooth', freq: 210, freqEnd: 58, duration: 0.055, gain: 0.2, filterFreq: 1800 });
-        this.playNoise({ duration: 0.05, gain: 0.18, filterType: 'bandpass', freq: 1900, freqEnd: 750, q: 1.1 });
+        // Punchy, aggressive N64 SMG bark: muzzle crack + heavy mid punch + sub kick + chamber snap
+        this.playNoise({ duration: 0.026, gain: 0.34, filterType: 'highpass', freq: 3200, q: 0.9 });
+        this.playTone({ type: 'sawtooth', freq: 280, freqEnd: 44, duration: 0.072, gain: 0.34, filterFreq: 2600 });
+        this.playTone({ type: 'sine', freq: 125, freqEnd: 38, duration: 0.06, gain: 0.28 });
+        this.playNoise({ duration: 0.075, gain: 0.28, filterType: 'bandpass', freq: 2400, freqEnd: 620, q: 1.0, sendEcho: true });
         break;
       case 'uzi_reload':
         // Distinct 4-stage N64 SMG reload sequence across the 1.5s reload animation:
@@ -519,33 +522,44 @@ class SoundManager {
         this.playTone({ type: 'square', freq: 2400, freqEnd: 1100, duration: 0.02, gain: 0.11 });
         break;
       case 'flamethrower_fire':
-        this.playNoise({ duration: 0.16, gain: 0.16, filterType: 'bandpass', freq: 680, freqEnd: 260, q: 0.9 });
-        this.playTone({ type: 'sawtooth', freq: 115, freqEnd: 65, duration: 0.14, gain: 0.09, filterFreq: 360 });
+        // Pressurized jet-inferno roar: wide flame whoosh + fierce nozzle hiss + deep burner rumble
+        this.playNoise({ duration: 0.22, gain: 0.3, filterType: 'bandpass', freq: 980, freqEnd: 240, q: 0.65, sendEcho: true });
+        this.playNoise({ duration: 0.16, gain: 0.2, filterType: 'highpass', freq: 2600, freqEnd: 1400, q: 0.8 });
+        this.playTone({ type: 'sawtooth', freq: 140, freqEnd: 52, duration: 0.2, gain: 0.22, filterFreq: 520 });
         break;
       case 'fire_ember':
         this.playNoise({ duration: 0.14, gain: 0.055, filterType: 'bandpass', freq: 420, q: 1.2 });
         this.playNoise({ duration: 0.022, gain: 0.09, filterType: 'highpass', freq: 3600, delaySeconds: 0.03 });
         break;
       case 'katana_swing':
-        this.playNoise({ duration: 0.15, gain: 0.18, filterType: 'bandpass', freq: 2400, freqEnd: 450, q: 1.8 });
-        this.playTone({ type: 'sine', freq: 3400, freqEnd: 1400, duration: 0.09, gain: 0.06, sendEcho: true });
+        // Razor-sharp high-velocity steel cleave + wind-whip body + metallic blade ring
+        this.playNoise({ duration: 0.17, gain: 0.32, filterType: 'bandpass', freq: 3400, freqEnd: 360, q: 1.4, sendEcho: true });
+        this.playTone({ type: 'triangle', freq: 220, freqEnd: 68, duration: 0.11, gain: 0.22 });
+        this.playTone({ type: 'sawtooth', freq: 3800, freqEnd: 1500, duration: 0.13, gain: 0.14, filterFreq: 4800, sendEcho: true });
         break;
       case 'punch_swing':
-        this.playNoise({ duration: 0.09, gain: 0.13, filterType: 'bandpass', freq: 520, freqEnd: 180, q: 1.4 });
-        this.playTone({ type: 'triangle', freq: 160, freqEnd: 62, duration: 0.07, gain: 0.14 });
+        // Heavy haymaker air-whoosh + meaty thud + crisp snap
+        this.playNoise({ duration: 0.12, gain: 0.26, filterType: 'bandpass', freq: 780, freqEnd: 160, q: 1.1 });
+        this.playTone({ type: 'triangle', freq: 195, freqEnd: 48, duration: 0.095, gain: 0.28 });
+        this.playTone({ type: 'square', freq: 420, freqEnd: 110, duration: 0.04, gain: 0.16, filterFreq: 1400 });
         break;
       case 'bazooka_fire':
-        this.playTone({ type: 'sawtooth', freq: 145, freqEnd: 38, duration: 0.24, gain: 0.24, filterFreq: 720, sendEcho: true });
-        this.playNoise({ duration: 0.22, gain: 0.2, filterType: 'bandpass', freq: 820, freqEnd: 240, q: 0.9 });
+        // Thunderous shoulder-cannon launch: sub-bass thump + ignition roar + explosive backblast
+        this.playTone({ type: 'sine', freq: 130, freqEnd: 24, duration: 0.34, gain: 0.42 });
+        this.playTone({ type: 'sawtooth', freq: 175, freqEnd: 34, duration: 0.3, gain: 0.34, filterFreq: 1100, sendEcho: true });
+        this.playNoise({ duration: 0.32, gain: 0.36, filterType: 'lowpass', freq: 3200, freqEnd: 180, q: 0.7, sendEcho: true });
+        this.playNoise({ duration: 0.14, gain: 0.22, filterType: 'highpass', freq: 2200, q: 0.8 });
         break;
       case 'rocket_flight':
-        this.playNoise({ duration: 0.11, gain: 0.075, filterType: 'bandpass', freq: 1250, freqEnd: 980, q: 2.4 });
-        this.playTone({ type: 'sawtooth', freq: 240, freqEnd: 215, duration: 0.1, gain: 0.04, filterFreq: 600 });
+        this.playNoise({ duration: 0.12, gain: 0.13, filterType: 'bandpass', freq: 1450, freqEnd: 980, q: 2.0 });
+        this.playTone({ type: 'sawtooth', freq: 260, freqEnd: 215, duration: 0.11, gain: 0.08, filterFreq: 800 });
         break;
       case 'explosion':
-        this.playTone({ type: 'sine', freq: 98, freqEnd: 22, duration: 0.52, gain: 0.32 });
-        this.playTone({ type: 'sawtooth', freq: 135, freqEnd: 28, duration: 0.38, gain: 0.22, filterFreq: 380 });
-        this.playNoise({ duration: 0.58, gain: 0.28, filterType: 'lowpass', freq: 2400, freqEnd: 130, q: 0.8, sendEcho: true });
+        // Chest-rattling shockwave crack + deep sub detonation + roaring blast tail
+        this.playNoise({ duration: 0.045, gain: 0.36, filterType: 'highpass', freq: 2400 });
+        this.playTone({ type: 'sine', freq: 110, freqEnd: 20, duration: 0.6, gain: 0.44 });
+        this.playTone({ type: 'sawtooth', freq: 155, freqEnd: 26, duration: 0.44, gain: 0.3, filterFreq: 520 });
+        this.playNoise({ duration: 0.66, gain: 0.38, filterType: 'lowpass', freq: 3000, freqEnd: 110, q: 0.75, sendEcho: true });
         break;
       case 'mine_beep':
         this.playTone({ type: 'square', freq: 2450, duration: 0.045, gain: 0.12, filterFreq: 4000 });

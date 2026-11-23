@@ -530,10 +530,10 @@ async function startGame(): Promise<void> {
       }
     }
 
-    // Sync top-right "Toggle weapon" button visibility with equipment HUD
+    // Sync top-right "Toggle weapon" button visibility with equipment HUD (mobile-only)
     if (toggleWeaponBtn) {
       toggleWeaponBtn.style.display =
-        shouldShowEquipmentHud(state) && !state.worldFadedToBlack
+        isJoystickShown && shouldShowEquipmentHud(state) && !state.worldFadedToBlack
           ? 'block'
           : 'none';
     }

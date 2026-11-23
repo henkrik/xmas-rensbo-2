@@ -190,7 +190,7 @@ export interface BloodPool {
 }
 
 export const PLAYER_DROPPED_UZI_DURATION_SECONDS = 3.0;
-export const MEDKIT_HEAL_AMOUNT = 25;
+export const MEDKIT_HEAL_AMOUNT = 50;
 
 export interface DroppedUzi {
   levelId: LevelId;
@@ -696,7 +696,8 @@ export const DAMAGE_FLASH_DURATION_SECONDS = 0.3;
 export const FIRE_FLASH_DURATION_SECONDS = 0.08;
 export const PLAYER_CHARRED_DURATION_SECONDS = 2.0;
 export const DIALOGUE_ADVANCE_LOCK_SECONDS = 0.5;
-export const BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 20;
+export const BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 40;
+export const NPC_FLAMETHROWER_PLAYER_DAMAGE = NPC_UZI_BULLET_DAMAGE * 2;
 
 export function damagePlayer(state: GameState, amount: number): void {
   applyPlayerDamage(state.player, amount);
@@ -1729,7 +1730,11 @@ function checkPunchNpcHit(state: GameState): void {
       cat.mode !== 'dead' &&
       (cat.mode === 'latched' || rectsIntersect(punchRect, cat))
     ) {
-      damageUpstairsCat(state, PLAYER_PUNCH_NPC_DAMAGE);
+      const punchDamage =
+        cat.mode === 'latched'
+          ? PLAYER_PUNCH_NPC_DAMAGE * 5
+          : PLAYER_PUNCH_NPC_DAMAGE;
+      damageUpstairsCat(state, punchDamage);
     }
   }
 }
@@ -1919,10 +1924,10 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         if (rectsIntersect(projRect, state.player)) {
           if (isRocket) {
             detonateRocket(state, p.x, p.y, false, p.sourceNpcKey, 'npc');
+          } else if (isFireball) {
+            state.playerCharredTimer = PLAYER_CHARRED_DURATION_SECONDS;
+            damagePlayer(state, NPC_FLAMETHROWER_PLAYER_DAMAGE);
           } else {
-            if (isFireball) {
-              state.playerCharredTimer = PLAYER_CHARRED_DURATION_SECONDS;
-            }
             damagePlayer(state, NPC_UZI_BULLET_DAMAGE);
           }
           removed = true;

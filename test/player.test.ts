@@ -4240,8 +4240,12 @@ Tanja -> Alex
     expect(state.medkits.some((m) => m.id === 'olexa-drop-medkit')).toBe(true);
     expect(buildDynamicSceneMeshes(state, 40).opaque.vertexCount).toBeGreaterThan(0);
 
-    // Player hit by NPC flamethrower flame temporarily turns charred black, then returns to normal
+    // Player hit by NPC flamethrower flame temporarily turns charred black & takes 4x bullet damage
     expect(state.playerCharredTimer).toBe(0);
+    state.medkits = [];
+    state.projectiles = [];
+    state.player.health = MAX_PLAYER_HEALTH;
+    const hpBeforeFlame = state.player.health;
     state.projectiles.push({
       kind: 'fireball',
       owner: 'npc',
@@ -4257,6 +4261,9 @@ Tanja -> Alex
     });
     updateGameState(state, input, 0.02);
     expect(state.playerCharredTimer).toBeGreaterThan(0);
+    expect(hpBeforeFlame - state.player.health).toBe(
+      NPC_UZI_BULLET_DAMAGE * 2 * PLAYER_DAMAGE_MULTIPLIER
+    );
     expect(buildDynamicSceneMeshes(state, 40).opaque.vertexCount).toBeGreaterThan(0);
     updateGameState(state, input, 2.1);
     expect(state.playerCharredTimer).toBe(0);
@@ -4473,7 +4480,7 @@ Tanja -> Alex
     for (let i = 0; i < 30 && bossState.player.health === MAX_PLAYER_HEALTH; i++) {
       updateGameState(bossState, input, 0.05);
     }
-    expect(bossState.player.health).toBe(100 - 20 * PLAYER_DAMAGE_MULTIPLIER);
+    expect(bossState.player.health).toBe(100 - 40 * PLAYER_DAMAGE_MULTIPLIER);
     expect(bossState.explosions.length).toBeGreaterThan(0);
     const meshWithExplosion = buildDynamicSceneMeshes(bossState, 40);
     expect(meshWithExplosion.translucent.vertexCount).toBeGreaterThan(0);
@@ -4831,12 +4838,15 @@ describe('Hostile armored headcrab cat', () => {
       Math.random = origRandom;
     }
 
-    // While latched, punching with 'unarmed' damages the cat
+    // While latched, punching with 'unarmed' deals 5x damage to the cat
     state.player.equippedItem = 'unarmed';
     applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.02);
     applyKeyEvent(input, 'Space', false);
-    expect(cat.health).toBeCloseTo(catHpBeforeShot - PLAYER_PUNCH_NPC_DAMAGE, 4);
+    expect(cat.health).toBeCloseTo(
+      catHpBeforeShot - PLAYER_PUNCH_NPC_DAMAGE * 5,
+      4
+    );
 
     // Stay latched for the remaining latch duration -> takes 5 HP per second = 50 HP total
     const healthBeforeLatch = state.player.health;
@@ -4909,10 +4919,10 @@ describe('Hostile armored headcrab cat', () => {
     const input = createEmptyInput();
     state.player.states.set(KITCHEN_ROSANNA_STATE_KEY, true);
 
-    // 1. Kitchen medkit exists & heals +25 HP on touch; taking damage triggers red flash timer (all damage halved)
+    // 1. Kitchen medkit exists & heals +50 HP on touch; taking damage triggers red flash timer (all damage halved)
     expect(state.medkits.some((m) => m.id === 'upstairs-kitchen-medkit')).toBe(true);
-    damagePlayer(state, 80); // 80 * 0.5 = 40 actual damage -> 60 HP
-    expect(state.player.health).toBe(60);
+    damagePlayer(state, 120); // 120 * 0.5 = 60 actual damage -> 40 HP
+    expect(state.player.health).toBe(40);
     expect(state.damageFlashTimer).toBeGreaterThan(0);
     updateGameState(state, input, 0.35);
     expect(state.damageFlashTimer).toBe(0);
@@ -4920,7 +4930,7 @@ describe('Hostile armored headcrab cat', () => {
     state.player.x = UPSTAIRS_KITCHEN_MEDKIT_POS.x - 4;
     state.player.y = UPSTAIRS_KITCHEN_MEDKIT_POS.y - 4;
     updateGameState(state, input, 0.05);
-    expect(state.player.health).toBe(85);
+    expect(state.player.health).toBe(90);
     expect(state.medkits.some((m) => m.id === 'upstairs-kitchen-medkit')).toBe(false);
 
     // 2. Military-grade body armor in upstairs bathroom increases max HP to 200 & restores to 200

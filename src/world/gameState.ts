@@ -37,6 +37,7 @@ import {
   FLAMETHROWER_MAX_DISTANCE,
   FLAMETHROWER_PROJECTILE_SPEED,
   Footprint,
+  MAX_PLAYER_HEALTH,
   MAX_UZI_AMMO,
   Player,
   PLAYER_UZI_RELOAD_SECONDS,
@@ -2677,7 +2678,7 @@ function updateGameStateCore(
     }
   }
 
-  // Pick up medkit on touch (+25 HP)
+  // Pick up medkit on touch (heals life up to MAX_PLAYER_HEALTH; never heals body armor)
   for (let i = state.medkits.length - 1; i >= 0; i--) {
     const medkit = state.medkits[i];
     if (medkit.levelId !== state.currentLevelId) continue;
@@ -2687,7 +2688,7 @@ function updateGameStateCore(
     ) {
       continue;
     }
-    if (state.player.health >= state.player.maxHealth) continue;
+    if (state.player.health >= MAX_PLAYER_HEALTH) continue;
     const medkitRect: Rect = {
       x: medkit.x - 7,
       y: medkit.y - 7,
@@ -2696,7 +2697,10 @@ function updateGameStateCore(
     };
     if (rectsIntersect(state.player, medkitRect)) {
       state.medkits.splice(i, 1);
-      setPlayerHealth(state.player, state.player.health + MEDKIT_HEAL_AMOUNT);
+      setPlayerHealth(
+        state.player,
+        Math.min(MAX_PLAYER_HEALTH, state.player.health + MEDKIT_HEAL_AMOUNT)
+      );
       debugLog(`Picked up Medkit (+${MEDKIT_HEAL_AMOUNT} HP)`);
       break;
     }

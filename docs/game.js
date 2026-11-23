@@ -9000,7 +9000,7 @@
       if (medkit.id === "basement-spa-medkit" && state.levels["level-basement"].spaDoorClosed) {
         continue;
       }
-      if (state.player.health >= state.player.maxHealth) continue;
+      if (state.player.health >= MAX_PLAYER_HEALTH) continue;
       const medkitRect = {
         x: medkit.x - 7,
         y: medkit.y - 7,
@@ -9009,7 +9009,10 @@
       };
       if (rectsIntersect(state.player, medkitRect)) {
         state.medkits.splice(i, 1);
-        setPlayerHealth(state.player, state.player.health + MEDKIT_HEAL_AMOUNT);
+        setPlayerHealth(
+          state.player,
+          Math.min(MAX_PLAYER_HEALTH, state.player.health + MEDKIT_HEAL_AMOUNT)
+        );
         debugLog(`Picked up Medkit (+${MEDKIT_HEAL_AMOUNT} HP)`);
         break;
       }

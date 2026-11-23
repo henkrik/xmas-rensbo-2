@@ -5082,8 +5082,24 @@ describe('Hostile armored headcrab cat', () => {
     // Damage drains armor (200 -> 140) before touching base 0..100 HP (damage halved: 120 * 0.5 = 60)
     damagePlayer(state, 120);
     expect(state.player.health).toBe(140);
+    // Above 100 HP (armor active): medkits cannot be picked up
+    state.medkits.push({
+      id: 'armor-cap-test-medkit',
+      levelId: 'level-upstairs',
+      x: state.player.x + 4,
+      y: state.player.y + 4,
+      z: 0,
+    });
+    updateGameState(state, input, 0.02);
+    expect(state.player.health).toBe(140);
+    expect(state.medkits.some((m) => m.id === 'armor-cap-test-medkit')).toBe(true);
+
+    // Drop below 100 HP (140 -> 80): picking up medkit (+50) caps at 100 HP without healing armor
     damagePlayer(state, 120);
     expect(state.player.health).toBe(80);
+    updateGameState(state, input, 0.02);
+    expect(state.player.health).toBe(MAX_PLAYER_HEALTH);
+    expect(state.medkits.some((m) => m.id === 'armor-cap-test-medkit')).toBe(false);
 
     // 3. Blowing up a wall around Anne-Marie's bedroom makes her hostile & triggers her Rudolph confession dialogue
     state.player.unlockedBazooka = true;

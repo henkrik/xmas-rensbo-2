@@ -794,15 +794,13 @@ export class LevelUpstairs implements GameLevel {
       });
     }
 
-    // Christmas Tree interactable (Place C4 once retrieved from Arjan's office)
-    if (
-      player?.states.get(C4_TAKEN_STATE_KEY) &&
-      !player?.states.get(C4_PLACED_STATE_KEY)
-    ) {
+    // Christmas Tree interactable (Inspect before C4; Place C4 once retrieved from Arjan's office)
+    if (!player?.states.get(C4_PLACED_STATE_KEY)) {
+      const hasC4 = Boolean(player?.states.get(C4_TAKEN_STATE_KEY));
       list.push({
         id: 'upstairs-xmas-tree',
         bounds: { ...UPSTAIRS_XMAS_TREE_BOUNDS },
-        promptText: 'Place C4',
+        promptText: hasC4 ? 'Place C4' : 'Inspect',
         dialogueLines: [],
       });
     }
@@ -861,7 +859,10 @@ export class LevelUpstairs implements GameLevel {
 
     if (interactableId === 'upstairs-xmas-tree') {
       if (!player.states.get(C4_TAKEN_STATE_KEY)) {
-        return false;
+        ctx.openDialogue([
+          'I must find something more powerful than a bazooka to blow up this tree with.',
+        ]);
+        return true;
       }
       const remainingNpcs = ctx.getRemainingNaughtyListNames
         ? ctx.getRemainingNaughtyListNames()

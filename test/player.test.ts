@@ -2136,13 +2136,21 @@ Tanja -> Alex
     expect(state.worldFadedToBlack).toBe(false);
     expect(state.houseExploding).toBe(false);
 
-    // Without C4 yet, standing next to the Christmas tree does NOT allow placing C4
+    // Without C4 yet, standing next to the Christmas tree allows "Inspect" with a hint dialogue
+    const input = createEmptyInput();
     state.player.x = 4 * TILE_SIZE; // x: 64
     state.player.y = 15 * TILE_SIZE; // y: 240
     refreshInteractables(state);
-    expect(findNearbyInteractable(state.player, state.interactables)?.id).not.toBe(
-      'upstairs-xmas-tree'
-    );
+    const preC4Tree = findNearbyInteractable(state.player, state.interactables);
+    expect(preC4Tree?.id).toBe('upstairs-xmas-tree');
+    expect(preC4Tree?.promptText).toBe('Inspect');
+    input.actionJustPressed = true;
+    updateGameState(state, input, 0.016);
+    expect(state.activeDialogue?.lines).toEqual([
+      'I must find something more powerful than a bazooka to blow up this tree with.',
+    ]);
+    advanceDialogue(state, input);
+    expect(state.activeDialogue).toBeNull();
 
     // Pick up C4 inside Arjan's office
     state.player.x = UPSTAIRS_C4_BOUNDS.x;
@@ -2152,7 +2160,6 @@ Tanja -> Alex
     expect(nearbyC4?.id).toBe('upstairs-office-c4');
     expect(nearbyC4?.promptText).toBe('Pick up C4');
 
-    const input = createEmptyInput();
     input.actionJustPressed = true;
     input.action = true;
     updateGameState(state, input, 0.016);

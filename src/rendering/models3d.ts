@@ -3425,6 +3425,15 @@ function addDog3D(
   const chestColor = rgb(238, 196, 138);
   const earColor = rgb(128, 76, 34);
 
+  if (dog.mode === 'dead') {
+    // Fallen-over dog in a crimson pool of blood
+    mb.addCylinder(cx, baseY + 0.08, cz, 7.2, 7.2, 0.16, 14, rgb(138, 12, 18), TexId.SOLID, 0);
+    mb.addOrientedBox(cx, baseY + 1.1, cz, 7.4, 1.8, 4.2, yaw, 0, bodyColor, TexId.FABRIC, 0.55);
+    mb.addSphere(cx + fx * 3.8, baseY + 1.5, cz + fz * 3.8, 2.5, 1.7, 2.4, 8, 10, bodyColor, TexId.FABRIC, 0.55);
+    mb.addSphere(cx + fx * 3.2 + rx * 1.4, baseY + 1.1, cz + fz * 3.2 + rz * 1.4, 1.2, 0.6, 1.6, 6, 8, earColor, TexId.FABRIC, 0.4);
+    return;
+  }
+
   // 4 Articulated Legs & Rounded Paws
   for (const [fSign, rSign] of [
     [1, 1],
@@ -4021,42 +4030,68 @@ export function buildDynamicSceneMeshes(
     // Dog & floating hearts
     addDog3D(opaque, translucent, state.dog, t);
 
-    // Alex practicing golf swings in the southwest lawn
+    // Alex practicing golf swings in the southwest lawn (or armed with Uzi when hostile)
     if (outside.alexNpc) {
       const ax = outside.alexNpc.x + outside.alexNpc.width * 0.5;
       const az = outside.alexNpc.y + outside.alexNpc.height * 0.5;
       const ay = getTerrainHeight(ax, az, 'level-outside');
+      const alexCombat = outside.alexCombat;
+      const alexHostile = alexCombat.mode === 'hostile' || alexCombat.mode === 'burning';
       addHumanoid3D(
         opaque,
         ax,
         ay,
         az,
-        directionToYaw(outside.alexNpc.facing),
+        alexHostile || alexCombat.mode === 'dead'
+          ? alexCombat.aimYaw
+          : directionToYaw(outside.alexNpc.facing),
         t,
-        false,
+        alexCombat.isMoving,
         {
           coat: rgb(156, 56, 50),
           trim: rgb(238, 238, 244),
           pants: rgb(52, 58, 72),
           skin: rgb(248, 206, 174),
           hair: rgb(168, 176, 160),
-          holdingClub: true,
+          holdingClub: alexCombat.mode === 'passive',
+          equippedItem: alexHostile ? 'uzi' : 'empty',
+          uziReloadTimer: alexCombat.reloadTimer,
+          uziReloadDuration: NPC_UZI_RELOAD_SECONDS,
+          weaponVibrationTimer: alexCombat.weaponVibrationTimer,
+          isCharred: alexCombat.mode === 'burning' || alexCombat.charred,
+          elapsedTime: t,
+          deadFallProgress:
+            alexCombat.mode === 'dead'
+              ? Math.max(0.05, alexCombat.deadFallProgress)
+              : 0,
         },
         false,
         false,
         translucent
       );
       maybeBurnNpc('outside:Alex', ax, ay, az);
+      if (
+        alexCombat.mode === 'hostile' &&
+        alexCombat.hostileAlertTimer > 0 &&
+        Math.floor(alexCombat.hostileAlertTimer * 10) % 2 === 0
+      ) {
+        addExclamationBadge3D(opaque, ax, ay + 21.5, az);
+      }
     }
 
-    // Snowball throwers (Sylvester & Annelotte)
+    // Snowball throwers (Sylvester & Annelotte; draw Uzis when hostile)
     state.throwers.forEach((th: SnowballThrower, idx: number) => {
       const tx = th.x + th.width * 0.5;
       const tz = th.y + th.height * 0.5;
       const ty = getTerrainHeight(tx, tz, 'level-outside');
-      const throwYaw = directionToYaw(th.facing);
-      const isThrowing = th.throwTimer < 0.25 || th.throwTimer > th.throwInterval - 0.35;
-      const style: CharacterColors3D =
+      const combat = idx === 0 ? outside.sylvesterCombat : outside.annelotteCombat;
+      const isHostile = combat.mode === 'hostile' || combat.mode === 'burning';
+      const npcYaw =
+        isHostile || combat.mode === 'dead' ? combat.aimYaw : directionToYaw(th.facing);
+      const isThrowing =
+        combat.mode === 'passive' &&
+        (th.throwTimer < 0.25 || th.throwTimer > th.throwInterval - 0.35);
+      const baseStyle: CharacterColors3D =
         idx === 0
           ? {
               coat: rgb(176, 88, 50),
@@ -4074,8 +4109,38 @@ export function buildDynamicSceneMeshes(
               hair: rgb(176, 104, 48),
               hat: rgb(128, 64, 112),
             };
-      addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style, false, false, translucent);
+      const style: CharacterColors3D = {
+        ...baseStyle,
+        equippedItem: isHostile ? 'uzi' : 'empty',
+        uziReloadTimer: combat.reloadTimer,
+        uziReloadDuration: NPC_UZI_RELOAD_SECONDS,
+        weaponVibrationTimer: combat.weaponVibrationTimer,
+        isCharred: combat.mode === 'burning' || combat.charred,
+        elapsedTime: t,
+        deadFallProgress:
+          combat.mode === 'dead' ? Math.max(0.05, combat.deadFallProgress) : 0,
+      };
+      addHumanoid3D(
+        opaque,
+        tx,
+        ty,
+        tz,
+        npcYaw,
+        isThrowing ? t * 2 : t,
+        isThrowing || combat.isMoving,
+        style,
+        false,
+        false,
+        translucent
+      );
       maybeBurnNpc(idx === 0 ? 'outside:Sylvester' : 'outside:Annelotte', tx, ty, tz);
+      if (
+        combat.mode === 'hostile' &&
+        combat.hostileAlertTimer > 0 &&
+        Math.floor(combat.hostileAlertTimer * 10) % 2 === 0
+      ) {
+        addExclamationBadge3D(opaque, tx, ty + 21.5, tz);
+      }
     });
 
     // Flying Snowballs + ground shadow

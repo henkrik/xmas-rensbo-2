@@ -1008,6 +1008,7 @@ function getOrCreateSnapshot(state: GameState): AudioObserverSnapshot {
       snap.seenProjectiles.add(p);
     }
     const allNpcs = [
+      ...state.levels['level-outside'].getArmedNpcs(),
       ...state.levels['level-basement'].getArmedNpcs(),
       ...state.levels['level-upstairs'].getArmedNpcs(),
     ];
@@ -1337,11 +1338,13 @@ export function updateGameAudio(
 
   // 13. NPC alert ("!"), NPC reload, NPC katana swing, NPC hit & death
   const activeNpcs =
-    state.currentLevelId === 'level-basement'
-      ? basement.getArmedNpcs()
-      : state.currentLevelId === 'level-upstairs'
-        ? upstairs.getArmedNpcs()
-        : [];
+    state.currentLevelId === 'level-outside'
+      ? state.levels['level-outside'].getArmedNpcs()
+      : state.currentLevelId === 'level-basement'
+        ? basement.getArmedNpcs()
+        : state.currentLevelId === 'level-upstairs'
+          ? upstairs.getArmedNpcs()
+          : [];
   for (const { state: npc } of activeNpcs) {
     const prev = snap.npcHealthMap.get(npc.key);
     const isAlerting = npc.hostileAlertTimer > 0;

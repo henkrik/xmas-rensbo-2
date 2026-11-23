@@ -51,6 +51,7 @@ import {
 import {
   Camera3D,
   createCamera3D,
+  getTerrainHeight,
   projectWorldToScreen,
 } from './math3d';
 import {
@@ -460,7 +461,9 @@ function drawNpcBillboards3D(
   assets: GameAssets
 ): void {
   let entries: Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> = [];
-  if (state.currentLevelId === 'level-basement') {
+  if (state.currentLevelId === 'level-outside') {
+    entries = state.levels['level-outside'].getArmedNpcs();
+  } else if (state.currentLevelId === 'level-basement') {
     entries = state.levels['level-basement'].getArmedNpcs();
   } else if (state.currentLevelId === 'level-upstairs') {
     entries = state.levels['level-upstairs'].getArmedNpcs();
@@ -521,14 +524,20 @@ function drawNpcBillboards3D(
 
   for (const entry of entries) {
     if (!entry.visible || !isNpcBillboardVisible(entry.state)) continue;
+    const ex = entry.bounds.x + entry.bounds.width * 0.5;
+    const ez = entry.bounds.y + entry.bounds.height * 0.5;
+    const baseGroundY =
+      state.currentLevelId === 'level-outside'
+        ? getTerrainHeight(ex, ez, 'level-outside')
+        : 0;
     pushBillboard(
       entry.state.name,
       entry.state.health,
       entry.state.delayedHealth,
       entry.state.maxHealth || MAX_NPC_HEALTH,
-      entry.bounds.x + entry.bounds.width * 0.5,
-      20.5,
-      entry.bounds.y + entry.bounds.height * 0.5
+      ex,
+      baseGroundY + 20.5,
+      ez
     );
   }
 

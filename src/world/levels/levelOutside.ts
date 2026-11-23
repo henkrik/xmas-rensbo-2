@@ -1,5 +1,14 @@
 import { createDog, Dog } from '../../entities/dog';
 import {
+  ArmedNpcState,
+  createArmedNpcState,
+  enterHostileMode,
+  stepBurningNpc,
+  stepHostileNpcAlongPath,
+  tryFireHostileNpcUzi,
+  updateNpcHealthAndTimers,
+} from '../../entities/npcCombat';
+import {
   Player,
   Rect,
   selectPlayerEquipmentSlot,
@@ -63,6 +72,9 @@ export class LevelOutside implements GameLevel {
   public throwers: SnowballThrower[];
   public snowballs: Snowball[];
   public readonly alexNpc = { ...OUTSIDE_ALEX_NPC };
+  public sylvesterCombat: ArmedNpcState;
+  public annelotteCombat: ArmedNpcState;
+  public alexCombat: ArmedNpcState;
   public hasLadder: boolean = false;
   public ladderPlaced: boolean = false;
   public isOnRoof: boolean = false;
@@ -75,6 +87,79 @@ export class LevelOutside implements GameLevel {
     this.motorcycle = createMotorcycle();
     this.throwers = createDrivewayThrowers();
     this.snowballs = [];
+    this.sylvesterCombat = createArmedNpcState('outside:Sylvester', 'Sylvester', 0, 'uzi');
+    this.annelotteCombat = createArmedNpcState('outside:Annelotte', 'Annelotte', Math.PI, 'uzi');
+    this.alexCombat = createArmedNpcState('outside:Alex', 'Alex', Math.PI, 'uzi');
+  }
+
+  public getArmedNpcs(): Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> {
+    const entries: Array<{ state: ArmedNpcState; bounds: Rect; visible: boolean }> = [];
+    if (this.throwers[0]) {
+      entries.push({ state: this.sylvesterCombat, bounds: this.throwers[0], visible: true });
+    }
+    if (this.throwers[1]) {
+      entries.push({ state: this.annelotteCombat, bounds: this.throwers[1], visible: true });
+    }
+    entries.push({ state: this.alexCombat, bounds: this.alexNpc, visible: true });
+    return entries;
+  }
+
+  public getArmedNpcByKey(key: string): ArmedNpcState | undefined {
+    for (const entry of this.getArmedNpcs()) {
+      if (entry.state.key === key) {
+        return entry.state;
+      }
+    }
+    return undefined;
+  }
+
+  /** Turns every living outside NPC hostile with Uzis drawn whenever any outside NPC is damaged. */
+  public alertAllOutsideNpcs(): void {
+    for (const entry of this.getArmedNpcs()) {
+      if (entry.state.mode !== 'dead' && entry.state.mode !== 'burning') {
+        enterHostileMode(entry.state);
+      }
+    }
+  }
+
+  public updateNpcCombat(
+    player: Player,
+    dtSeconds: number,
+    ctx: LevelTransitionContext
+  ): void {
+    const playerCx = player.x + player.width * 0.5;
+    const playerCy = player.y + player.height * 0.5;
+    const solidObstacles = this.getSolidObstacles();
+
+    for (const { state: combat, bounds } of this.getArmedNpcs()) {
+      updateNpcHealthAndTimers(combat, dtSeconds);
+      if (combat.mode === 'dead') continue;
+      if (combat.mode === 'burning') {
+        stepBurningNpc(
+          combat,
+          bounds,
+          player,
+          this.map,
+          solidObstacles,
+          dtSeconds,
+          ctx.fireNpcUzi
+        );
+      } else if (combat.mode === 'hostile') {
+        stepHostileNpcAlongPath(
+          combat,
+          bounds,
+          player,
+          this.map,
+          solidObstacles,
+          dtSeconds
+        );
+        const originX = bounds.x + bounds.width * 0.5;
+        const originY = bounds.y + bounds.height * 0.5;
+        const aimYaw = Math.atan2(playerCy - originY, playerCx - originX);
+        combat.aimYaw = aimYaw;
+        tryFireHostileNpcUzi(combat, originX, originY, aimYaw, ctx.fireNpcUzi);
+      }
+    }
   }
 
   public enter(player: Player): void {
@@ -90,16 +175,33 @@ export class LevelOutside implements GameLevel {
   }
 
   public getSolidObstacles(): readonly Rect[] {
-    return [...this.throwers, this.motorcycle, this.alexNpc];
+    const obs: Rect[] = [this.motorcycle];
+    if (this.throwers[0] && this.sylvesterCombat.mode !== 'dead') {
+      obs.push(this.throwers[0]);
+    }
+    if (this.throwers[1] && this.annelotteCombat.mode !== 'dead') {
+      obs.push(this.throwers[1]);
+    }
+    if (this.alexCombat.mode !== 'dead') {
+      obs.push(this.alexNpc);
+    }
+    return obs;
   }
 
   public getInteractables(): Interactable[] {
-    return buildInteractables(this.throwers, {
+    const passiveThrowers: SnowballThrower[] = [];
+    if (this.throwers[0] && this.sylvesterCombat.mode === 'passive') {
+      passiveThrowers.push(this.throwers[0]);
+    }
+    if (this.throwers[1] && this.annelotteCombat.mode === 'passive') {
+      passiveThrowers.push(this.throwers[1]);
+    }
+    return buildInteractables(passiveThrowers, {
       hasLadder: this.hasLadder,
       ladderPlaced: this.ladderPlaced,
       isOnRoof: this.isOnRoof,
       motorcycleStatus: this.motorcycle.status,
-      alexNpc: this.alexNpc,
+      alexNpc: this.alexCombat.mode === 'passive' ? this.alexNpc : undefined,
     });
   }
 

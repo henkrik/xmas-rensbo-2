@@ -835,7 +835,8 @@ function updateRoofMovement(
 function updateOutsideLevel(
   state: GameState,
   input: InputState,
-  dtSeconds: number
+  dtSeconds: number,
+  transitionCtx: LevelTransitionContext
 ): boolean {
   // If Santa is currently being electrocuted on the sparking wire
   if (state.electrocutionTimer > 0) {
@@ -931,7 +932,8 @@ function updateOutsideLevel(
     return false;
   }
 
-  const solidObstacles: Rect[] = [...state.throwers, state.motorcycle];
+  const outside = state.levels['level-outside'];
+  const solidObstacles: Rect[] = [...outside.getSolidObstacles()];
 
   // Move player on the ground
   updatePlayer(state.player, input, dtSeconds, state.map, solidObstacles);
@@ -962,9 +964,16 @@ function updateOutsideLevel(
     return true;
   }
 
-  // Update snowball fight on the driveway
+  // Update snowball fight on the driveway (only passive throwers throw snowballs)
+  const passiveThrowers: SnowballThrower[] = [];
+  if (state.throwers[0] && outside.sylvesterCombat.mode === 'passive') {
+    passiveThrowers.push(state.throwers[0]);
+  }
+  if (state.throwers[1] && outside.annelotteCombat.mode === 'passive') {
+    passiveThrowers.push(state.throwers[1]);
+  }
   const hitBySnowball = updateSnowballFight(
-    state.throwers,
+    passiveThrowers,
     state.snowballs,
     state.player,
     dtSeconds
@@ -973,6 +982,9 @@ function updateOutsideLevel(
     resetAfterSnowballHit(state);
     return true;
   }
+
+  // Update outside armed NPCs (if any was damaged, all turn hostile and shoot Uzis)
+  outside.updateNpcCombat(state.player, dtSeconds, transitionCtx);
 
   return false;
 }
@@ -996,9 +1008,16 @@ function getLevelNpcTargets(state: GameState): NpcTarget[] {
   };
 
   if (state.currentLevelId === 'level-outside') {
-    if (state.throwers[0]) addTarget('outside:Sylvester', state.throwers[0]);
-    if (state.throwers[1]) addTarget('outside:Annelotte', state.throwers[1]);
-    addTarget('outside:Alex', state.levels['level-outside'].alexNpc);
+    const outside = state.levels['level-outside'];
+    if (state.throwers[0] && outside.sylvesterCombat.mode !== 'dead') {
+      addTarget('outside:Sylvester', state.throwers[0]);
+    }
+    if (state.throwers[1] && outside.annelotteCombat.mode !== 'dead') {
+      addTarget('outside:Annelotte', state.throwers[1]);
+    }
+    if (outside.alexCombat.mode !== 'dead') {
+      addTarget('outside:Alex', outside.alexNpc);
+    }
   } else if (state.currentLevelId === 'level-basement') {
     const basement = state.levels['level-basement'];
     if (basement.arjanCombat.mode !== 'dead') {
@@ -1064,6 +1083,9 @@ function spawnNpcBlood(
 }
 
 function getArmedNpcByKey(state: GameState, key: string): ArmedNpcState | undefined {
+  if (state.currentLevelId === 'level-outside') {
+    return state.levels['level-outside'].getArmedNpcByKey(key);
+  }
   if (state.currentLevelId === 'level-basement') {
     return state.levels['level-basement'].getArmedNpcByKey(key);
   }
@@ -1094,7 +1116,9 @@ function damageArmedNpc(
         ? damage * ANNE_MARIE_DAMAGE_MULTIPLIER
         : damage;
   const died = applyNpcDamage(npc, effectiveDamage);
-  if (wasPassive && (npc.mode as string) === 'hostile') {
+  if (state.currentLevelId === 'level-outside') {
+    state.levels['level-outside'].alertAllOutsideNpcs();
+  } else if (wasPassive && (npc.mode as string) === 'hostile') {
     if (state.currentLevelId === 'level-basement') {
       propagateHostileAlert(state.levels['level-basement'].getArmedNpcs(), key);
     } else if (state.currentLevelId === 'level-upstairs') {
@@ -2020,6 +2044,46 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
         }
       }
 
+      // Shooting the outside dog kills it instantly
+      if (
+        p.owner !== 'npc' &&
+        !p.cutsceneShot &&
+        state.currentLevelId === 'level-outside' &&
+        state.dog.mode !== 'dead' &&
+        rectsIntersect(projRect, state.dog)
+      ) {
+        const dcx = state.dog.x + state.dog.width * 0.5;
+        const dcy = state.dog.y + state.dog.height * 0.5;
+        const dogGroundZ = getTerrainHeight(dcx, dcy, 'level-outside');
+        state.dog.mode = 'dead';
+        state.dog.vx = 0;
+        state.dog.vy = 0;
+        state.dog.hearts = [];
+        state.levels['level-outside'].dog = state.dog;
+        spawnNpcBlood(state, dcx, dcy, dogGroundZ);
+        state.bloodPools.push({
+          levelId: 'level-outside',
+          x: dcx,
+          y: dcy,
+          z: dogGroundZ,
+          age: 0,
+          maxAge: 999999,
+        });
+        playSound('npc_death', 0.05);
+        if (isRocket) {
+          detonateRocket(
+            state,
+            p.x,
+            p.y,
+            false,
+            p.sourceNpcKey,
+            p.owner ?? 'player'
+          );
+        }
+        removed = true;
+        break;
+      }
+
       if (p.fromRoof) {
         const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
         const hitTallTreeOrEdge = isRectCollidingWithMap(
@@ -2098,7 +2162,7 @@ function updateProjectiles(state: GameState, dtSeconds: number): void {
           });
       const hitOutsideDynamic =
         state.currentLevelId === 'level-outside' &&
-        (rectsIntersect(projRect, state.dog) ||
+        ((state.dog.mode !== 'dead' && rectsIntersect(projRect, state.dog)) ||
           rectsIntersect(projRect, state.motorcycle));
 
       if (hitMap || hitObstacle || hitOutsideDynamic) {
@@ -2153,7 +2217,17 @@ function applyMobileAutoAim(
   }
 
   const candidates: Array<{ bounds: Rect }> = [];
-  if (state.currentLevelId === 'level-basement') {
+  if (state.currentLevelId === 'level-outside') {
+    const outside = state.levels['level-outside'];
+    for (const entry of outside.getArmedNpcs()) {
+      if (
+        entry.visible &&
+        (entry.state.mode === 'hostile' || entry.state.mode === 'burning')
+      ) {
+        candidates.push({ bounds: entry.bounds });
+      }
+    }
+  } else if (state.currentLevelId === 'level-basement') {
     const basement = state.levels['level-basement'];
     if (basement.toiletCutscene?.active) return false;
     for (const entry of basement.getArmedNpcs()) {
@@ -2802,7 +2876,7 @@ function updateGameStateCore(
   };
 
   if (state.currentLevelId === 'level-outside') {
-    const handledEarly = updateOutsideLevel(state, input, dtSeconds);
+    const handledEarly = updateOutsideLevel(state, input, dtSeconds, transitionCtx);
     if (handledEarly) {
       return;
     }

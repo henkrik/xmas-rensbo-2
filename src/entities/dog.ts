@@ -1,7 +1,7 @@
 import { Player, Rect, rectsIntersect } from './player';
 import { isRectCollidingWithMap, TILE_SIZE, TileMap } from '../world/tilemap';
 
-export type DogMode = 'waiting' | 'chasing';
+export type DogMode = 'waiting' | 'chasing' | 'dead';
 
 export interface DogHeart {
   x: number;
@@ -80,6 +80,13 @@ export function updateDog(
   solidObstacles: readonly Rect[] = [],
   speedMultiplier: number = 1.0
 ): boolean {
+  if (dog.mode === 'dead') {
+    dog.vx = 0;
+    dog.vy = 0;
+    dog.hearts = [];
+    return false;
+  }
+
   const dogCenterX = dog.x + dog.width / 2;
   const dogCenterY = dog.y + dog.height / 2;
   const playerCenterX = player.x + player.width / 2;

@@ -4770,6 +4770,7 @@
         snap.seenProjectiles.add(p);
       }
       const allNpcs = [
+        ...state.levels["level-outside"].getArmedNpcs(),
         ...state.levels["level-basement"].getArmedNpcs(),
         ...state.levels["level-upstairs"].getArmedNpcs()
       ];
@@ -4998,7 +4999,7 @@
       playSound("window_break", 0.01);
     }
     snap.rosannaPhase = rosannaPhase;
-    const activeNpcs = state.currentLevelId === "level-basement" ? basement.getArmedNpcs() : state.currentLevelId === "level-upstairs" ? upstairs.getArmedNpcs() : [];
+    const activeNpcs = state.currentLevelId === "level-outside" ? state.levels["level-outside"].getArmedNpcs() : state.currentLevelId === "level-basement" ? basement.getArmedNpcs() : state.currentLevelId === "level-upstairs" ? upstairs.getArmedNpcs() : [];
     for (const { state: npc } of activeNpcs) {
       const prev = snap.npcHealthMap.get(npc.key);
       const isAlerting = npc.hostileAlertTimer > 0;
@@ -5725,6 +5726,12 @@
     };
   }
   function updateDog(dog, player, dtSeconds, map, solidObstacles = [], speedMultiplier = 1) {
+    if (dog.mode === "dead") {
+      dog.vx = 0;
+      dog.vy = 0;
+      dog.hearts = [];
+      return false;
+    }
     const dogCenterX = dog.x + dog.width / 2;
     const dogCenterY = dog.y + dog.height / 2;
     const playerCenterX = player.x + player.width / 2;
@@ -6867,6 +6874,9 @@
       __publicField(this, "throwers");
       __publicField(this, "snowballs");
       __publicField(this, "alexNpc", { ...OUTSIDE_ALEX_NPC });
+      __publicField(this, "sylvesterCombat");
+      __publicField(this, "annelotteCombat");
+      __publicField(this, "alexCombat");
       __publicField(this, "hasLadder", false);
       __publicField(this, "ladderPlaced", false);
       __publicField(this, "isOnRoof", false);
@@ -6877,6 +6887,70 @@
       this.motorcycle = createMotorcycle();
       this.throwers = createDrivewayThrowers();
       this.snowballs = [];
+      this.sylvesterCombat = createArmedNpcState("outside:Sylvester", "Sylvester", 0, "uzi");
+      this.annelotteCombat = createArmedNpcState("outside:Annelotte", "Annelotte", Math.PI, "uzi");
+      this.alexCombat = createArmedNpcState("outside:Alex", "Alex", Math.PI, "uzi");
+    }
+    getArmedNpcs() {
+      const entries = [];
+      if (this.throwers[0]) {
+        entries.push({ state: this.sylvesterCombat, bounds: this.throwers[0], visible: true });
+      }
+      if (this.throwers[1]) {
+        entries.push({ state: this.annelotteCombat, bounds: this.throwers[1], visible: true });
+      }
+      entries.push({ state: this.alexCombat, bounds: this.alexNpc, visible: true });
+      return entries;
+    }
+    getArmedNpcByKey(key) {
+      for (const entry of this.getArmedNpcs()) {
+        if (entry.state.key === key) {
+          return entry.state;
+        }
+      }
+      return void 0;
+    }
+    /** Turns every living outside NPC hostile with Uzis drawn whenever any outside NPC is damaged. */
+    alertAllOutsideNpcs() {
+      for (const entry of this.getArmedNpcs()) {
+        if (entry.state.mode !== "dead" && entry.state.mode !== "burning") {
+          enterHostileMode(entry.state);
+        }
+      }
+    }
+    updateNpcCombat(player, dtSeconds, ctx) {
+      const playerCx = player.x + player.width * 0.5;
+      const playerCy = player.y + player.height * 0.5;
+      const solidObstacles = this.getSolidObstacles();
+      for (const { state: combat, bounds } of this.getArmedNpcs()) {
+        updateNpcHealthAndTimers(combat, dtSeconds);
+        if (combat.mode === "dead") continue;
+        if (combat.mode === "burning") {
+          stepBurningNpc(
+            combat,
+            bounds,
+            player,
+            this.map,
+            solidObstacles,
+            dtSeconds,
+            ctx.fireNpcUzi
+          );
+        } else if (combat.mode === "hostile") {
+          stepHostileNpcAlongPath(
+            combat,
+            bounds,
+            player,
+            this.map,
+            solidObstacles,
+            dtSeconds
+          );
+          const originX = bounds.x + bounds.width * 0.5;
+          const originY = bounds.y + bounds.height * 0.5;
+          const aimYaw = Math.atan2(playerCy - originY, playerCx - originX);
+          combat.aimYaw = aimYaw;
+          tryFireHostileNpcUzi(combat, originX, originY, aimYaw, ctx.fireNpcUzi);
+        }
+      }
     }
     enter(player) {
       player.x = PLAYER_START_X;
@@ -6890,15 +6964,32 @@
       player.walkTimer = 0;
     }
     getSolidObstacles() {
-      return [...this.throwers, this.motorcycle, this.alexNpc];
+      const obs = [this.motorcycle];
+      if (this.throwers[0] && this.sylvesterCombat.mode !== "dead") {
+        obs.push(this.throwers[0]);
+      }
+      if (this.throwers[1] && this.annelotteCombat.mode !== "dead") {
+        obs.push(this.throwers[1]);
+      }
+      if (this.alexCombat.mode !== "dead") {
+        obs.push(this.alexNpc);
+      }
+      return obs;
     }
     getInteractables() {
-      return buildInteractables(this.throwers, {
+      const passiveThrowers = [];
+      if (this.throwers[0] && this.sylvesterCombat.mode === "passive") {
+        passiveThrowers.push(this.throwers[0]);
+      }
+      if (this.throwers[1] && this.annelotteCombat.mode === "passive") {
+        passiveThrowers.push(this.throwers[1]);
+      }
+      return buildInteractables(passiveThrowers, {
         hasLadder: this.hasLadder,
         ladderPlaced: this.ladderPlaced,
         isOnRoof: this.isOnRoof,
         motorcycleStatus: this.motorcycle.status,
-        alexNpc: this.alexNpc
+        alexNpc: this.alexCombat.mode === "passive" ? this.alexNpc : void 0
       });
     }
     handleInteraction(interactableId, player, ctx) {
@@ -7519,7 +7610,7 @@
       player.jumpVelocity = 0;
     }
   }
-  function updateOutsideLevel(state, input, dtSeconds) {
+  function updateOutsideLevel(state, input, dtSeconds, transitionCtx) {
     if (state.electrocutionTimer > 0) {
       state.player.isMoving = false;
       state.player.walkTimer = 0;
@@ -7602,7 +7693,8 @@
       syncOutsideToLevel(state);
       return false;
     }
-    const solidObstacles = [...state.throwers, state.motorcycle];
+    const outside = state.levels["level-outside"];
+    const solidObstacles = [...outside.getSolidObstacles()];
     updatePlayer(state.player, input, dtSeconds, state.map, solidObstacles);
     updateFootprints(state.footprints, state.player, state.map, dtSeconds);
     if (rectsIntersect(state.player, DAMAGED_WIRE_HAZARD)) {
@@ -7624,8 +7716,15 @@
       resetAfterSnowballHit(state);
       return true;
     }
+    const passiveThrowers = [];
+    if (state.throwers[0] && outside.sylvesterCombat.mode === "passive") {
+      passiveThrowers.push(state.throwers[0]);
+    }
+    if (state.throwers[1] && outside.annelotteCombat.mode === "passive") {
+      passiveThrowers.push(state.throwers[1]);
+    }
     const hitBySnowball = updateSnowballFight(
-      state.throwers,
+      passiveThrowers,
       state.snowballs,
       state.player,
       dtSeconds
@@ -7634,6 +7733,7 @@
       resetAfterSnowballHit(state);
       return true;
     }
+    outside.updateNpcCombat(state.player, dtSeconds, transitionCtx);
     return false;
   }
   function getLevelNpcTargets(state) {
@@ -7648,9 +7748,16 @@
       });
     };
     if (state.currentLevelId === "level-outside") {
-      if (state.throwers[0]) addTarget("outside:Sylvester", state.throwers[0]);
-      if (state.throwers[1]) addTarget("outside:Annelotte", state.throwers[1]);
-      addTarget("outside:Alex", state.levels["level-outside"].alexNpc);
+      const outside = state.levels["level-outside"];
+      if (state.throwers[0] && outside.sylvesterCombat.mode !== "dead") {
+        addTarget("outside:Sylvester", state.throwers[0]);
+      }
+      if (state.throwers[1] && outside.annelotteCombat.mode !== "dead") {
+        addTarget("outside:Annelotte", state.throwers[1]);
+      }
+      if (outside.alexCombat.mode !== "dead") {
+        addTarget("outside:Alex", outside.alexNpc);
+      }
     } else if (state.currentLevelId === "level-basement") {
       const basement = state.levels["level-basement"];
       if (basement.arjanCombat.mode !== "dead") {
@@ -7709,6 +7816,9 @@
     }
   }
   function getArmedNpcByKey(state, key) {
+    if (state.currentLevelId === "level-outside") {
+      return state.levels["level-outside"].getArmedNpcByKey(key);
+    }
     if (state.currentLevelId === "level-basement") {
       return state.levels["level-basement"].getArmedNpcByKey(key);
     }
@@ -7725,7 +7835,9 @@
     const wasPassive = npc.mode === "passive";
     const effectiveDamage = key === "upstairs:Rosanna" ? damage * ROSANNA_DAMAGE_MULTIPLIER : key === "upstairs:Anne-Marie" ? damage * ANNE_MARIE_DAMAGE_MULTIPLIER : damage;
     const died = applyNpcDamage(npc, effectiveDamage);
-    if (wasPassive && npc.mode === "hostile") {
+    if (state.currentLevelId === "level-outside") {
+      state.levels["level-outside"].alertAllOutsideNpcs();
+    } else if (wasPassive && npc.mode === "hostile") {
       if (state.currentLevelId === "level-basement") {
         propagateHostileAlert(state.levels["level-basement"].getArmedNpcs(), key);
       } else if (state.currentLevelId === "level-upstairs") {
@@ -8485,6 +8597,38 @@
             break;
           }
         }
+        if (p.owner !== "npc" && !p.cutsceneShot && state.currentLevelId === "level-outside" && state.dog.mode !== "dead" && rectsIntersect(projRect, state.dog)) {
+          const dcx = state.dog.x + state.dog.width * 0.5;
+          const dcy = state.dog.y + state.dog.height * 0.5;
+          const dogGroundZ = getTerrainHeight(dcx, dcy, "level-outside");
+          state.dog.mode = "dead";
+          state.dog.vx = 0;
+          state.dog.vy = 0;
+          state.dog.hearts = [];
+          state.levels["level-outside"].dog = state.dog;
+          spawnNpcBlood(state, dcx, dcy, dogGroundZ);
+          state.bloodPools.push({
+            levelId: "level-outside",
+            x: dcx,
+            y: dcy,
+            z: dogGroundZ,
+            age: 0,
+            maxAge: 999999
+          });
+          playSound("npc_death", 0.05);
+          if (isRocket) {
+            detonateRocket(
+              state,
+              p.x,
+              p.y,
+              false,
+              p.sourceNpcKey,
+              p.owner ?? "player"
+            );
+          }
+          removed = true;
+          break;
+        }
         if (p.fromRoof) {
           const hitChimney = rectsIntersect(projRect, ROOF_CHIMNEY_BOUNDS);
           const hitTallTreeOrEdge = isRectCollidingWithMap(
@@ -8542,7 +8686,7 @@
           }
           return rectsIntersect(projRect, obs);
         });
-        const hitOutsideDynamic = state.currentLevelId === "level-outside" && (rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle));
+        const hitOutsideDynamic = state.currentLevelId === "level-outside" && (state.dog.mode !== "dead" && rectsIntersect(projRect, state.dog) || rectsIntersect(projRect, state.motorcycle));
         if (hitMap || hitObstacle || hitOutsideDynamic) {
           if (isRocket) {
             detonateRocket(
@@ -8581,7 +8725,14 @@
       return false;
     }
     const candidates = [];
-    if (state.currentLevelId === "level-basement") {
+    if (state.currentLevelId === "level-outside") {
+      const outside = state.levels["level-outside"];
+      for (const entry of outside.getArmedNpcs()) {
+        if (entry.visible && (entry.state.mode === "hostile" || entry.state.mode === "burning")) {
+          candidates.push({ bounds: entry.bounds });
+        }
+      }
+    } else if (state.currentLevelId === "level-basement") {
       const basement = state.levels["level-basement"];
       if (basement.toiletCutscene?.active) return false;
       for (const entry of basement.getArmedNpcs()) {
@@ -9085,7 +9236,7 @@
       isMobile: state.joystickActive
     };
     if (state.currentLevelId === "level-outside") {
-      const handledEarly = updateOutsideLevel(state, input, dtSeconds);
+      const handledEarly = updateOutsideLevel(state, input, dtSeconds, transitionCtx);
       if (handledEarly) {
         return;
       }
@@ -12289,6 +12440,13 @@
     const bodyColor = rgb(206, 142, 74);
     const chestColor = rgb(238, 196, 138);
     const earColor = rgb(128, 76, 34);
+    if (dog.mode === "dead") {
+      mb.addCylinder(cx, baseY + 0.08, cz, 7.2, 7.2, 0.16, 14, rgb(138, 12, 18), TexId.SOLID, 0);
+      mb.addOrientedBox(cx, baseY + 1.1, cz, 7.4, 1.8, 4.2, yaw, 0, bodyColor, TexId.FABRIC, 0.55);
+      mb.addSphere(cx + fx * 3.8, baseY + 1.5, cz + fz * 3.8, 2.5, 1.7, 2.4, 8, 10, bodyColor, TexId.FABRIC, 0.55);
+      mb.addSphere(cx + fx * 3.2 + rx * 1.4, baseY + 1.1, cz + fz * 3.2 + rz * 1.4, 1.2, 0.6, 1.6, 6, 8, earColor, TexId.FABRIC, 0.4);
+      return;
+    }
     for (const [fSign, rSign] of [
       [1, 1],
       [1, -1],
@@ -12742,35 +12900,49 @@
         const ax = outside.alexNpc.x + outside.alexNpc.width * 0.5;
         const az = outside.alexNpc.y + outside.alexNpc.height * 0.5;
         const ay = getTerrainHeight(ax, az, "level-outside");
+        const alexCombat = outside.alexCombat;
+        const alexHostile = alexCombat.mode === "hostile" || alexCombat.mode === "burning";
         addHumanoid3D(
           opaque,
           ax,
           ay,
           az,
-          directionToYaw(outside.alexNpc.facing),
+          alexHostile || alexCombat.mode === "dead" ? alexCombat.aimYaw : directionToYaw(outside.alexNpc.facing),
           t,
-          false,
+          alexCombat.isMoving,
           {
             coat: rgb(156, 56, 50),
             trim: rgb(238, 238, 244),
             pants: rgb(52, 58, 72),
             skin: rgb(248, 206, 174),
             hair: rgb(168, 176, 160),
-            holdingClub: true
+            holdingClub: alexCombat.mode === "passive",
+            equippedItem: alexHostile ? "uzi" : "empty",
+            uziReloadTimer: alexCombat.reloadTimer,
+            uziReloadDuration: NPC_UZI_RELOAD_SECONDS,
+            weaponVibrationTimer: alexCombat.weaponVibrationTimer,
+            isCharred: alexCombat.mode === "burning" || alexCombat.charred,
+            elapsedTime: t,
+            deadFallProgress: alexCombat.mode === "dead" ? Math.max(0.05, alexCombat.deadFallProgress) : 0
           },
           false,
           false,
           translucent
         );
         maybeBurnNpc("outside:Alex", ax, ay, az);
+        if (alexCombat.mode === "hostile" && alexCombat.hostileAlertTimer > 0 && Math.floor(alexCombat.hostileAlertTimer * 10) % 2 === 0) {
+          addExclamationBadge3D(opaque, ax, ay + 21.5, az);
+        }
       }
       state.throwers.forEach((th, idx) => {
         const tx = th.x + th.width * 0.5;
         const tz = th.y + th.height * 0.5;
         const ty = getTerrainHeight(tx, tz, "level-outside");
-        const throwYaw = directionToYaw(th.facing);
-        const isThrowing = th.throwTimer < 0.25 || th.throwTimer > th.throwInterval - 0.35;
-        const style = idx === 0 ? {
+        const combat = idx === 0 ? outside.sylvesterCombat : outside.annelotteCombat;
+        const isHostile = combat.mode === "hostile" || combat.mode === "burning";
+        const npcYaw = isHostile || combat.mode === "dead" ? combat.aimYaw : directionToYaw(th.facing);
+        const isThrowing = combat.mode === "passive" && (th.throwTimer < 0.25 || th.throwTimer > th.throwInterval - 0.35);
+        const baseStyle = idx === 0 ? {
           coat: rgb(176, 88, 50),
           trim: rgb(242, 248, 255),
           pants: rgb(44, 54, 72),
@@ -12785,8 +12957,33 @@
           hair: rgb(176, 104, 48),
           hat: rgb(128, 64, 112)
         };
-        addHumanoid3D(opaque, tx, ty, tz, throwYaw, isThrowing ? t * 2 : 0, isThrowing, style, false, false, translucent);
+        const style = {
+          ...baseStyle,
+          equippedItem: isHostile ? "uzi" : "empty",
+          uziReloadTimer: combat.reloadTimer,
+          uziReloadDuration: NPC_UZI_RELOAD_SECONDS,
+          weaponVibrationTimer: combat.weaponVibrationTimer,
+          isCharred: combat.mode === "burning" || combat.charred,
+          elapsedTime: t,
+          deadFallProgress: combat.mode === "dead" ? Math.max(0.05, combat.deadFallProgress) : 0
+        };
+        addHumanoid3D(
+          opaque,
+          tx,
+          ty,
+          tz,
+          npcYaw,
+          isThrowing ? t * 2 : t,
+          isThrowing || combat.isMoving,
+          style,
+          false,
+          false,
+          translucent
+        );
         maybeBurnNpc(idx === 0 ? "outside:Sylvester" : "outside:Annelotte", tx, ty, tz);
+        if (combat.mode === "hostile" && combat.hostileAlertTimer > 0 && Math.floor(combat.hostileAlertTimer * 10) % 2 === 0) {
+          addExclamationBadge3D(opaque, tx, ty + 21.5, tz);
+        }
       });
       for (const sb of state.snowballs) {
         const sx = sb.x + sb.width * 0.5;
@@ -14286,7 +14483,9 @@
   }
   function drawNpcBillboards3D(ctx, state, cam, assets) {
     let entries = [];
-    if (state.currentLevelId === "level-basement") {
+    if (state.currentLevelId === "level-outside") {
+      entries = state.levels["level-outside"].getArmedNpcs();
+    } else if (state.currentLevelId === "level-basement") {
       entries = state.levels["level-basement"].getArmedNpcs();
     } else if (state.currentLevelId === "level-upstairs") {
       entries = state.levels["level-upstairs"].getArmedNpcs();
@@ -14325,14 +14524,17 @@
     };
     for (const entry of entries) {
       if (!entry.visible || !isNpcBillboardVisible(entry.state)) continue;
+      const ex = entry.bounds.x + entry.bounds.width * 0.5;
+      const ez = entry.bounds.y + entry.bounds.height * 0.5;
+      const baseGroundY = state.currentLevelId === "level-outside" ? getTerrainHeight(ex, ez, "level-outside") : 0;
       pushBillboard(
         entry.state.name,
         entry.state.health,
         entry.state.delayedHealth,
         entry.state.maxHealth || MAX_NPC_HEALTH,
-        entry.bounds.x + entry.bounds.width * 0.5,
-        20.5,
-        entry.bounds.y + entry.bounds.height * 0.5
+        ex,
+        baseGroundY + 20.5,
+        ez
       );
     }
     if (state.currentLevelId === "level-upstairs") {

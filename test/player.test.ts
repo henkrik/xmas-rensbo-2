@@ -3632,11 +3632,15 @@ Tanja -> Alex
     expect(state.bloodPools.length).toBe(0);
 
     // Unarmed punch reaching Alex NPC also spawns blood splatter & pools
+    state.gameOver = false;
+    state.activeDialogue = null;
+    state.player.health = MAX_PLAYER_HEALTH;
+    const liveAlex = state.levels['level-outside'].alexNpc;
     applyKeyEvent(input, 'Digit2', true);
     applyKeyEvent(input, 'Digit2', false);
     updateGameState(state, input, 0.01);
-    state.player.x = OUTSIDE_ALEX_NPC.x - state.player.width - 2;
-    state.player.y = OUTSIDE_ALEX_NPC.y;
+    state.player.x = liveAlex.x - state.player.width - 2;
+    state.player.y = liveAlex.y;
     state.player.yaw = 0; // facing east toward Alex
     applyKeyEvent(input, 'KeyF', true);
     updateGameState(state, input, 0.016);
@@ -5512,5 +5516,97 @@ describe('Hostile armored headcrab cat', () => {
       updateGameState(sfxState, sfxInput, 0.05);
     }
     expect(soundManager.getRecentEvents()).toContain('explosion');
+  });
+
+  it('turns all outside NPCs hostile with Uzis when any outside NPC is damaged, and kills the dog instantly when shot', () => {
+    // 1. Punching Alex outside turns Alex, Sylvester, and Annelotte hostile with Uzis
+    const punchState = createGameState({
+      initialLevelId: 'level-outside',
+      showIntroDialogue: false,
+    });
+    const input = createEmptyInput();
+    const punchOut = punchState.levels['level-outside'];
+    expect(punchOut.alexCombat.mode).toBe('passive');
+    expect(punchOut.sylvesterCombat.mode).toBe('passive');
+    expect(punchOut.annelotteCombat.mode).toBe('passive');
+
+    punchState.player.equippedItem = 'unarmed';
+    punchState.player.x = punchOut.alexNpc.x + 12;
+    punchState.player.y = punchOut.alexNpc.y;
+    punchState.player.yaw = Math.PI; // facing left toward Alex
+    applyKeyEvent(input, 'KeyF', true);
+    updateGameState(punchState, input, 0.02);
+    applyKeyEvent(input, 'KeyF', false);
+
+    expect(punchOut.alexCombat.health).toBeLessThan(MAX_NPC_HEALTH);
+    expect(punchOut.alexCombat.mode).toBe('hostile');
+    expect(punchOut.sylvesterCombat.mode).toBe('hostile');
+    expect(punchOut.annelotteCombat.mode).toBe('hostile');
+    expect(punchOut.alexCombat.weapon).toBe('uzi');
+    expect(punchOut.sylvesterCombat.weapon).toBe('uzi');
+    expect(punchOut.annelotteCombat.weapon).toBe('uzi');
+
+    // After 0.5s alert, hostile outside NPCs fire Uzi bullets at Santa and build 3D meshes cleanly
+    updateGameState(punchState, input, 0.6);
+    expect(
+      punchState.projectiles.some((p) => p.owner === 'npc' && p.kind === 'bullet')
+    ).toBe(true);
+    expect(buildDynamicSceneMeshes(punchState, 40).opaque.vertexCount).toBeGreaterThan(0);
+
+    // 2. Shooting Sylvester with the Uzi also alerts all outside NPCs, and shooting the dog kills it instantly
+    const shootState = createGameState({
+      initialLevelId: 'level-outside',
+      showIntroDialogue: false,
+    });
+    const shootOut = shootState.levels['level-outside'];
+    shootState.player.unlockedUzi = true;
+    shootState.player.equippedItem = 'uzi';
+    shootState.player.uziAmmo = 30;
+    shootState.player.uziFireCooldown = 0;
+
+    // Shoot Sylvester directly
+    shootState.projectiles.push({
+      kind: 'bullet',
+      owner: 'player',
+      x: shootState.throwers[0].x + 6,
+      y: shootState.throwers[0].y + 6,
+      z: 10,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      yaw: 0,
+      distanceTraveled: 0,
+    });
+    updateGameState(shootState, input, 0.02);
+    expect(shootOut.sylvesterCombat.health).toBeLessThan(MAX_NPC_HEALTH);
+    expect(shootOut.sylvesterCombat.mode).toBe('hostile');
+    expect(shootOut.annelotteCombat.mode).toBe('hostile');
+    expect(shootOut.alexCombat.mode).toBe('hostile');
+
+    // Shoot the dog -> instant death + blood pool + no longer catches Santa
+    expect(shootState.dog.mode).not.toBe('dead');
+    shootState.projectiles.push({
+      kind: 'bullet',
+      owner: 'player',
+      x: shootState.dog.x + 6,
+      y: shootState.dog.y + 6,
+      z: 10,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      yaw: 0,
+      distanceTraveled: 0,
+    });
+    updateGameState(shootState, input, 0.02);
+    expect(shootState.dog.mode).toBe('dead');
+    expect(shootState.bloodPools.length).toBeGreaterThan(0);
+    expect(buildDynamicSceneMeshes(shootState, 40).opaque.vertexCount).toBeGreaterThan(0);
+
+    // Walking right over the dead dog does not trigger dog reset/damage
+    const hpBeforeDeadDog = shootState.player.health;
+    shootState.player.x = shootState.dog.x;
+    shootState.player.y = shootState.dog.y;
+    updateGameState(shootState, input, 0.05);
+    expect(shootState.player.health).toBe(hpBeforeDeadDog);
   });
 });

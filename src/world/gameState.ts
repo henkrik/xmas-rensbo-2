@@ -699,9 +699,9 @@ export const FIRE_FLASH_DURATION_SECONDS = 0.08;
 export const PLAYER_CHARRED_DURATION_SECONDS = 3.0;
 export const DIALOGUE_ADVANCE_LOCK_SECONDS = 0.5;
 export const INTERACTION_WEAPON_COOLDOWN_SECONDS = 0.25;
-export const BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 40;
-export const NPC_FLAMETHROWER_PLAYER_DAMAGE = 10;
-export const PLAYER_BURN_DAMAGE_PER_SECOND = 5;
+export const BAZOOKA_PLAYER_EXPLOSION_DAMAGE = 80;
+export const NPC_FLAMETHROWER_PLAYER_DAMAGE = 30;
+export const PLAYER_BURN_DAMAGE_PER_SECOND = 10;
 
 export function damagePlayer(state: GameState, amount: number): void {
   applyPlayerDamage(state.player, amount);

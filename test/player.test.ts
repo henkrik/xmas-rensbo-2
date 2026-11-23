@@ -4281,8 +4281,8 @@ Tanja -> Alex
     expect(state.medkits.some((m) => m.id === 'olexa-drop-medkit')).toBe(true);
     expect(buildDynamicSceneMeshes(state, 40).opaque.vertexCount).toBeGreaterThan(0);
 
-    // Player hit by NPC flamethrower flame: 10 HP on ignition (non-burning -> burning),
-    // 5 HP/sec for 3s, 4x Uzi spread while burnt, and re-hitting resets timer without extra instant damage
+    // Player hit by NPC flamethrower flame: 30 HP on ignition (non-burning -> burning),
+    // 10 HP/sec for 3s, 4x Uzi spread while burnt, and re-hitting resets timer without extra instant damage
     expect(state.playerCharredTimer).toBe(0);
     basement.arjanCombat.mode = 'dead';
     basement.hanneloesCombat.mode = 'dead';
@@ -4309,7 +4309,7 @@ Tanja -> Alex
     updateGameState(state, input, 0.02);
     expect(state.playerCharredTimer).toBeCloseTo(3.0, 2);
     expect(hpBeforeFlame - state.player.health).toBeCloseTo(
-      10 * PLAYER_DAMAGE_MULTIPLIER,
+      30 * PLAYER_DAMAGE_MULTIPLIER,
       4
     );
     expect(buildDynamicSceneMeshes(state, 40).opaque.vertexCount).toBeGreaterThan(0);
@@ -4335,29 +4335,29 @@ Tanja -> Alex
       Math.random = origRandomBurn;
     }
 
-    // Wait 1.0s (takes 5 HP/sec * 1.0s * PLAYER_DAMAGE_MULTIPLIER), then hit again -> no extra instant damage, resets timer to 3.0s
+    // Wait 1.0s (takes 10 HP/sec * 1.0s * PLAYER_DAMAGE_MULTIPLIER), then hit again -> no extra instant damage, resets timer to 3.0s
     const hpBeforeSecondHit = state.player.health;
     updateGameState(state, input, 1.0);
     expect(hpBeforeSecondHit - state.player.health).toBeCloseTo(
-      5 * 1.0 * PLAYER_DAMAGE_MULTIPLIER,
+      10 * 1.0 * PLAYER_DAMAGE_MULTIPLIER,
       4
     );
     const hpRightBeforeReignite = state.player.health;
     spawnNpcFlameOnPlayer();
     updateGameState(state, input, 0.02);
     expect(state.playerCharredTimer).toBeCloseTo(3.0, 2);
-    // Only 0.02s of burn DoT applied (no extra 10 HP ignition damage)
+    // Only 0.02s of burn DoT applied (no extra 30 HP ignition damage)
     expect(hpRightBeforeReignite - state.player.health).toBeCloseTo(
-      5 * 0.02 * PLAYER_DAMAGE_MULTIPLIER,
+      10 * 0.02 * PLAYER_DAMAGE_MULTIPLIER,
       4
     );
 
-    // Let full 3.0s burn finish -> takes remaining 5 * 3.0 * PLAYER_DAMAGE_MULTIPLIER and returns spread to normal
+    // Let full 3.0s burn finish -> takes remaining 10 * 3.0 * PLAYER_DAMAGE_MULTIPLIER and returns spread to normal
     const hpBeforeFullBurn = state.player.health;
     updateGameState(state, input, 3.1);
     expect(state.playerCharredTimer).toBe(0);
     expect(hpBeforeFullBurn - state.player.health).toBeCloseTo(
-      5 * 3.0 * PLAYER_DAMAGE_MULTIPLIER,
+      10 * 3.0 * PLAYER_DAMAGE_MULTIPLIER,
       4
     );
     try {
@@ -4588,7 +4588,7 @@ Tanja -> Alex
     for (let i = 0; i < 30 && bossState.player.health === MAX_PLAYER_HEALTH; i++) {
       updateGameState(bossState, input, 0.05);
     }
-    expect(bossState.player.health).toBe(100 - 40 * PLAYER_DAMAGE_MULTIPLIER);
+    expect(bossState.player.health).toBe(100 - 80 * PLAYER_DAMAGE_MULTIPLIER);
     expect(bossState.explosions.length).toBeGreaterThan(0);
     const meshWithExplosion = buildDynamicSceneMeshes(bossState, 40);
     expect(meshWithExplosion.translucent.vertexCount).toBeGreaterThan(0);

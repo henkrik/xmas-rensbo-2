@@ -2555,6 +2555,15 @@ Tanja -> Alex
     }
     expect(maxJumpOffset).toBeCloseTo(PLAYER_JUMP_HEIGHT, 0);
     expect(state.player.jumpOffset).toBe(0);
+
+    // On mobile, tapping the screen (attackJustPressed) while 'empty' also triggers jump
+    state.joystickActive = true;
+    state.player.equippedItem = 'empty';
+    input.attackJustPressed = true;
+    input.attack = true;
+    updateGameState(state, input, 0.016);
+    input.attack = false;
+    expect(state.player.jumpOffset).toBeGreaterThan(0);
   });
 
   it('supports free 2D roof walking with pitched height and falling off the roof edge', () => {
@@ -3327,7 +3336,13 @@ Tanja -> Alex
     updateGameState(state, input, 0.01);
     expect(state.player.equippedItem).toBe('empty');
 
-    // Switch to slot 2 (unarmed) and press F -> triggers punch animation
+    // KeyF does NOT jump or attack on desktop
+    applyKeyEvent(input, 'KeyF', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'KeyF', false);
+    expect(state.player.jumpOffset ?? 0).toBe(0);
+
+    // Switch to slot 2 (unarmed) and press Space -> triggers punch animation (KeyF does not)
     applyKeyEvent(input, 'Digit2', true);
     applyKeyEvent(input, 'Digit2', false);
     updateGameState(state, input, 0.01);
@@ -3336,6 +3351,11 @@ Tanja -> Alex
     applyKeyEvent(input, 'KeyF', true);
     updateGameState(state, input, 0.01);
     applyKeyEvent(input, 'KeyF', false);
+    expect(state.player.punchTimer).toBe(0);
+
+    applyKeyEvent(input, 'Space', true);
+    updateGameState(state, input, 0.01);
+    applyKeyEvent(input, 'Space', false);
     expect(state.player.punchTimer).toBeCloseTo(PUNCH_DURATION_SECONDS, 4);
     expect(state.projectiles.length).toBe(0);
 
@@ -3460,9 +3480,9 @@ Tanja -> Alex
     wallTestState.player.y = 10 * TILE_SIZE + 8;
     wallTestState.player.yaw = -Math.PI / 2;
     const shootInput = createEmptyInput();
-    applyKeyEvent(shootInput, 'KeyF', true);
+    applyKeyEvent(shootInput, 'Space', true);
     updateGameState(wallTestState, shootInput, 0.016);
-    applyKeyEvent(shootInput, 'KeyF', false);
+    applyKeyEvent(shootInput, 'Space', false);
     expect(wallTestState.projectiles.length).toBe(1);
 
     // Advance 0.1s (~25.6px travel north) -> collides with house wall at row 9 and spawns a bullet hole
@@ -3646,12 +3666,12 @@ Tanja -> Alex
     applyKeyEvent(input, 'Digit2', true);
     applyKeyEvent(input, 'Digit2', false);
     updateGameState(state, input, 0.01);
-    state.player.x = liveAlex.x - state.player.width - 2;
+    state.player.x = liveAlex.x - state.player.width - 11;
     state.player.y = liveAlex.y;
     state.player.yaw = 0; // facing east toward Alex
-    applyKeyEvent(input, 'KeyF', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(state, input, 0.016);
-    applyKeyEvent(input, 'KeyF', false);
+    applyKeyEvent(input, 'Space', false);
     expect(state.bloodParticles.length).toBeGreaterThan(0);
   });
 
@@ -5538,12 +5558,12 @@ describe('Hostile armored headcrab cat', () => {
     expect(punchOut.annelotteCombat.mode).toBe('passive');
 
     punchState.player.equippedItem = 'unarmed';
-    punchState.player.x = punchOut.alexNpc.x + 12;
+    punchState.player.x = punchOut.alexNpc.x + punchOut.alexNpc.width + 11;
     punchState.player.y = punchOut.alexNpc.y;
     punchState.player.yaw = Math.PI; // facing left toward Alex
-    applyKeyEvent(input, 'KeyF', true);
+    applyKeyEvent(input, 'Space', true);
     updateGameState(punchState, input, 0.02);
-    applyKeyEvent(input, 'KeyF', false);
+    applyKeyEvent(input, 'Space', false);
 
     expect(punchOut.alexCombat.health).toBeLessThan(MAX_NPC_HEALTH);
     expect(punchOut.alexCombat.mode).toBe('hostile');

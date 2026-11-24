@@ -102,14 +102,6 @@ export function applyKeyEvent(
     return true;
   }
 
-  if (codeOrKey === 'KeyF' || codeOrKey === 'f' || codeOrKey === 'F') {
-    if (isPressed && !state.attack) {
-      state.attackJustPressed = true;
-    }
-    state.attack = isPressed;
-    return true;
-  }
-
   let slotDigit: number | null = null;
   if (codeOrKey.length === 6 && codeOrKey.startsWith('Digit')) {
     const n = Number(codeOrKey.slice(5));

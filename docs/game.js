@@ -156,13 +156,6 @@
       options?.onToggleJoystick?.();
       return true;
     }
-    if (codeOrKey === "KeyF" || codeOrKey === "f" || codeOrKey === "F") {
-      if (isPressed && !state.attack) {
-        state.attackJustPressed = true;
-      }
-      state.attack = isPressed;
-      return true;
-    }
     let slotDigit = null;
     if (codeOrKey.length === 6 && codeOrKey.startsWith("Digit")) {
       const n = Number(codeOrKey.slice(5));
@@ -9414,7 +9407,7 @@
     applyMobileAutoAim(state, input, dtSeconds);
     const weaponsReady = state.weaponInteractionCooldown <= 1e-6;
     if (state.player.equippedItem === "empty") {
-      if (actionPressed && !state.nearbyInteractable) {
+      if (attackPressed || actionPressed && !state.nearbyInteractable) {
         triggerPlayerJump(state.player);
       }
     } else if (!weaponsReady) {

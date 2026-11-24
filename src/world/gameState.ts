@@ -3091,8 +3091,8 @@ function updateGameStateCore(
 
   const weaponsReady = state.weaponInteractionCooldown <= 1e-6;
   if (state.player.equippedItem === 'empty') {
-    if (actionPressed && !state.nearbyInteractable) {
-      // No interactable Action available while empty-handed: Space triggers a 3D half-tile jump animation
+    if (attackPressed || (actionPressed && !state.nearbyInteractable)) {
+      // No interactable Action available while empty-handed (or mobile screen tap): triggers a 3D half-tile jump animation
       triggerPlayerJump(state.player);
     }
   } else if (!weaponsReady) {
